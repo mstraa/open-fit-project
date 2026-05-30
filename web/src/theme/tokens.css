@@ -19,6 +19,8 @@
 
   /* Color — brand & status */
   --color-accent: #2f6df6;
+  --color-accent-strong: #1f5be0;
+  --color-accent-weak: rgba(47, 109, 246, 0.1);
   --color-accent-contrast: #ffffff;
   --color-success: #1a9c5b;
   --color-warning: #c98a00;
@@ -44,27 +46,34 @@
   --font-weight-bold: 600;
   --line-height-base: 1.5;
 
-  /* Radius & misc */
-  --radius-sm: 6px;
-  --radius-md: 10px;
+  /* Radius & misc — tight/flat (dense WebUI feel) */
+  --radius-sm: 4px;
+  --radius-md: 6px;
   --shadow-1: 0 1px 2px rgba(16, 19, 25, 0.06), 0 2px 8px rgba(16, 19, 25, 0.06);
 }
 
 [data-theme="dark"] {
-  --color-bg: #0f1115;
-  --color-surface: #171a21;
-  --color-surface-alt: #1f232c;
-  --color-border: #2b313c;
-  --color-text: #e8eaee;
-  --color-text-muted: #9aa2b1;
+  /* qBittorrent-WebUI-inspired: near-black layered surfaces, thin #2a2a2a
+   * borders, warm-neutral text — but with a blue accent instead of orange.
+   * Layering: bg (darkest page) < surface (cards) < surface-alt (rows/inputs). */
+  --color-bg: #0a0a0a;
+  --color-surface: #121213;
+  --color-surface-alt: #18181a;
+  --color-border: #2a2a2a;
+  --color-text: #e7e6e3;
+  --color-text-muted: #8c8c8c;
 
-  --color-accent: #5b8dff;
-  --color-accent-contrast: #0f1115;
-  --color-success: #36c07f;
-  --color-warning: #e0a83a;
-  --color-danger: #f06363;
+  /* Blue accent family */
+  --color-accent: #3d8bfd;
+  --color-accent-strong: #5b9dff;
+  --color-accent-weak: rgba(61, 139, 253, 0.12);
+  --color-accent-contrast: #ffffff;
+  --color-success: #65d17f;
+  --color-warning: #f0b24d;
+  --color-danger: #ff6b5f;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.4);
+  /* Flat: lean on borders, not shadows (qbit aesthetic). */
+  --shadow-1: none;
 }
 
 /* Base element styling derived from tokens. */
@@ -85,6 +94,46 @@ body {
   font-size: var(--font-size-base);
   line-height: var(--line-height-base);
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-accent-weak);
+}
+
+/* Interactive polish keyed to the accent (works with the inline-styled
+ * primitives: we only add transitions, hover border, and focus rings). */
+button,
+a {
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+button:not(:disabled):hover {
+  border-color: var(--color-accent) !important;
+}
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--color-accent-strong);
+}
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Dense, accent-aware list rows (opt-in via .ofit-row). */
+.ofit-row {
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+.ofit-row:hover {
+  background: var(--color-surface-alt);
+  border-color: var(--color-accent) !important;
 }
 
 @keyframes ofit-spin {

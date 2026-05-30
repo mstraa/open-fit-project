@@ -83,6 +83,7 @@ export function ActivitiesList({
               <li key={a.id}>
                 <button
                   type="button"
+                  className="ofit-row"
                   onClick={() => onOpen(a.id)}
                   style={{
                     width: "100%",
