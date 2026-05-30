@@ -250,3 +250,38 @@ pub struct WellnessQuery {
     /// Inclusive upper bound (RFC3339), optional.
     pub to: Option<String>,
 }
+
+/// One incoming wellness reading on the ingest path (`POST /api/wellness`).
+/// A relay/device streams these (batched) — the continuous, streaming-first feed.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct WellnessIngest {
+    /// Metric kind.
+    pub kind: WellnessKind,
+    /// Scalar value (categorical kinds use a stable code).
+    pub value: f64,
+    /// Timestamp (RFC3339). Defaults to now when omitted (live feed).
+    pub ts: Option<String>,
+    /// Source that produced it; defaults to the shared "Live stream" source.
+    pub source_id: Option<Uuid>,
+}
+
+/// Response of `POST /api/wellness`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct WellnessIngestResponse {
+    /// Number of samples persisted.
+    pub ingested: usize,
+}
+
+/// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a
+/// JSON text frame — the real-time fan-out of the ingest path to the dashboard.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct LiveWellness {
+    /// Metric kind.
+    pub kind: WellnessKind,
+    /// Value at `ts`.
+    pub value: f64,
+    /// Wall-clock timestamp (UTC).
+    pub ts: DateTime<Utc>,
+    /// Source that produced it.
+    pub source_id: Uuid,
+}

@@ -7,13 +7,17 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Multipart, Path, Query, State,
+    },
     http::StatusCode,
+    response::Response,
     Json,
 };
 use ofit_core::{
-    resolve_activity_view, MetricSourcePreference, PreferenceScope, Sample, Source, Stream,
-    StreamKind,
+    resolve_activity_view, MetricSourcePreference, PreferenceScope, Sample, Source, SourceKind,
+    Stream, StreamKind, WellnessSample,
 };
 
 use crate::dto::*;
@@ -413,6 +417,84 @@ pub async fn wellness(
         kind: q.kind,
         points,
     }))
+}
+
+/// `POST /api/wellness` — batch-ingest continuous wellness samples (the
+/// streaming/relay write path). Persists them and fans each out live to the
+/// `/api/wellness/live` subscribers.
+#[utoipa::path(
+    post, path = "/api/wellness",
+    request_body = Vec<WellnessIngest>,
+    responses((status = 200, body = WellnessIngestResponse))
+)]
+pub async fn ingest_wellness(
+    State(state): State<AppState>,
+    Json(items): Json<Vec<WellnessIngest>>,
+) -> Result<Json<WellnessIngestResponse>, ApiError> {
+    if items.is_empty() {
+        return Ok(Json(WellnessIngestResponse { ingested: 0 }));
+    }
+    // Samples without an explicit source are attributed to a shared stream source.
+    let default_source = state
+        .db
+        .ensure_source(SourceKind::Gadgetbridge, "Live stream")
+        .await
+        .map_err(internal)?;
+
+    let mut samples = Vec::with_capacity(items.len());
+    for it in items {
+        let ts = it
+            .ts
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let source_id = it.source_id.unwrap_or(default_source);
+        samples.push(WellnessSample::scalar(source_id, it.kind, it.value, ts));
+    }
+    state
+        .db
+        .insert_wellness_samples(&samples)
+        .await
+        .map_err(internal)?;
+
+    // Fan out live (best-effort; no-op when there are no subscribers).
+    for s in &samples {
+        let _ = state.wellness_tx.send(LiveWellness {
+            kind: s.kind,
+            value: s.value,
+            ts: s.ts,
+            source_id: s.source_id,
+        });
+    }
+    Ok(Json(WellnessIngestResponse {
+        ingested: samples.len(),
+    }))
+}
+
+/// `GET /api/wellness/live` — WebSocket pushing live wellness samples as JSON
+/// text frames (the real-time fan-out of the ingest path to the dashboard).
+pub async fn wellness_live(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    let rx = state.wellness_tx.subscribe();
+    ws.on_upgrade(move |socket| live_socket(socket, rx))
+}
+
+async fn live_socket(
+    mut socket: WebSocket,
+    mut rx: tokio::sync::broadcast::Receiver<LiveWellness>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                let txt = serde_json::to_string(&msg).unwrap_or_default();
+                if socket.send(Message::Text(txt)).await.is_err() {
+                    break; // client gone
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
 }
 
 // ---- small mappers ----

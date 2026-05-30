@@ -39,6 +39,8 @@ pub(crate) struct AppState {
     /// Bearer token required on `/api/*` when set. `None` = auth disabled
     /// (first-run / local dev). Real multi-credential auth is a later phase.
     pub token: Option<Arc<str>>,
+    /// Live wellness fan-out: ingest publishes, `/api/wellness/live` subscribes.
+    pub wellness_tx: tokio::sync::broadcast::Sender<dto::LiveWellness>,
 }
 
 /// Liveness payload. Reports the DB backend in use so the simple/full tier is
@@ -76,6 +78,7 @@ struct Version {
         handlers::list_preferences,
         handlers::set_preference,
         handlers::wellness,
+        handlers::ingest_wellness,
     ),
     components(schemas(
         Health,
@@ -95,6 +98,9 @@ struct Version {
         dto::SetPreferenceRequest,
         dto::WellnessResponse,
         dto::WellnessPoint,
+        dto::WellnessIngest,
+        dto::WellnessIngestResponse,
+        dto::LiveWellness,
         auth::SetupStatus,
         auth::Credentials,
         auth::Me,
@@ -133,9 +139,13 @@ async fn main() -> anyhow::Result<()> {
     db.apply_timescale().await?; // no-op unless Postgres + TimescaleDB
     tracing::info!(backend = ?db.backend(), "database ready, migrations applied");
 
+    // Live wellness fan-out channel (lagging slow subscribers are dropped).
+    let (wellness_tx, _) = tokio::sync::broadcast::channel(512);
+
     let state = AppState {
         db,
         token: token.map(Arc::from),
+        wellness_tx,
     };
 
     // Auth routes are always reachable (login/setup/status); the rest sit behind
@@ -166,7 +176,11 @@ async fn main() -> anyhow::Result<()> {
             "/preferences",
             get(handlers::list_preferences).put(handlers::set_preference),
         )
-        .route("/wellness", get(handlers::wellness))
+        .route(
+            "/wellness",
+            get(handlers::wellness).post(handlers::ingest_wellness),
+        )
+        .route("/wellness/live", get(handlers::wellness_live))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     let api = public_api.merge(protected_api);

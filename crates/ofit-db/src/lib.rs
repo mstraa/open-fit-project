@@ -309,6 +309,45 @@ impl Db {
         Ok(())
     }
 
+    /// Batch-insert wellness samples (the streaming/relay write path). One
+    /// transaction so a burst of HR samples commits together.
+    pub async fn insert_wellness_samples(&self, samples: &[WellnessSample]) -> Result<()> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for w in samples {
+            sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
+                 VALUES (?, ?, ?, ?, ?)"))
+                .bind(w.id.to_string())
+                .bind(w.source_id.to_string())
+                .bind(serde_plain(&w.kind))
+                .bind(w.value)
+                .bind(w.ts.to_rfc3339())
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Get-or-create a [`Source`] by `(kind, name)`, returning its id. Used by the
+    /// wellness ingest path to attribute streamed samples to a stable source.
+    pub async fn ensure_source(&self, kind: SourceKind, name: &str) -> Result<Uuid> {
+        let existing: Option<AnyRow> =
+            sqlx::query(&self.p("SELECT id FROM sources WHERE kind = ? AND name = ?"))
+                .bind(serde_plain(&kind))
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?;
+        if let Some(r) = existing {
+            return parse_uuid(&r.get::<String, _>("id"));
+        }
+        let src = Source::new(kind, name, 50);
+        self.insert_source(&src).await?;
+        Ok(src.id)
+    }
+
     /// Count wellness samples (smoke-test helper / trend cardinality).
     pub async fn count_wellness_samples(&self) -> Result<i64> {
         let row: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM wellness_samples"))
