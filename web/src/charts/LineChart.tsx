@@ -74,7 +74,7 @@ function LineChartImpl({
     // Tooltip showing the value at the cursor, on top of the cursor line.
     const tip = document.createElement("div");
     tip.style.cssText =
-      "position:absolute;top:2px;transform:translateX(-50%);display:none;" +
+      "position:absolute;top:-15px;transform:translateX(-50%);display:none;" +
       "padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;" +
       "font:600 11px var(--font-mono,monospace);z-index:10;" +
       "background:var(--surface-2);border:1px solid var(--border);";
@@ -83,6 +83,8 @@ function LineChartImpl({
     const cursorPlugin: uPlot.Plugin = {
       hooks: {
         init: (u) => {
+          // Let the value pill sit above the plot area instead of being clipped.
+          u.over.style.overflow = "visible";
           u.over.appendChild(tip);
         },
         setCursor: (u) => {
@@ -121,7 +123,7 @@ function LineChartImpl({
         y: {
           range: (_u, dataMin, dataMax) => {
             const pad = dataMax - dataMin || 1;
-            return [dataMin - pad * 0.08, dataMax + pad * 0.32];
+            return [dataMin - pad * 0.08, dataMax + pad * 0.16];
           },
         },
       },
@@ -167,7 +169,8 @@ function LineChartImpl({
     };
   }, [samples, stroke, unit, label, height, theme, syncKey]);
 
-  return <div ref={containerRef} style={{ width: "100%", position: "relative" }} />;
+  // Top margin reserves a strip for the value pill that floats above the plot.
+  return <div ref={containerRef} style={{ width: "100%", position: "relative", marginTop: 16 }} />;
 }
 
 // Memoized so per-frame cursor state in the parent doesn't rebuild every chart.
