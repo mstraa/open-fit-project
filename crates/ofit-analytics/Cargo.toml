@@ -6,6 +6,5 @@ license.workspace = true
 
 [dependencies]
 ofit-core.workspace = true
-ofit-db.workspace = true
-ofit-plugins.workspace = true
-anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true

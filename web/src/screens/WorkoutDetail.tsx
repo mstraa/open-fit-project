@@ -16,10 +16,12 @@ import { Link, useParams } from "react-router-dom";
 import { AppShell } from "../app/AppShell";
 import {
   getActivity,
+  getDerived,
   listSources,
   putPreference,
   removeRecording,
 } from "../api/endpoints";
+import type { DerivedMetricDto } from "../api/schema";
 import type {
   ActivityDetail,
   ScalarSample,
@@ -211,6 +213,7 @@ export function WorkoutDetail() {
   const { id = "" } = useParams();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [sources, setSources] = useState<Source[]>([]);
+  const [derived, setDerived] = useState<DerivedMetricDto[]>([]);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -228,6 +231,20 @@ export function WorkoutDetail() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Per-activity derived metrics (TSS, etc.) from the analytics engine. Best-
+  // effort: an empty result (or unreachable API) just leaves the Analysis card
+  // in its on-brand empty state.
+  useEffect(() => {
+    if (!id) return;
+    let alive = true;
+    getDerived(`activity:${id}`)
+      .then((res) => alive && setDerived(res.metrics))
+      .catch(() => alive && setDerived([]));
+    return () => {
+      alive = false;
+    };
+  }, [id]);
 
   const detail = state.kind === "ok" ? state.detail : undefined;
 
@@ -332,6 +349,7 @@ export function WorkoutDetail() {
       {state.kind === "ok" && (
         <DetailBody
           detail={state.detail}
+          derived={derived}
           showFusion={showFusion}
           candidatesByMetric={candidatesByMetric}
           sourceName={sourceName}
@@ -348,6 +366,7 @@ export function WorkoutDetail() {
 
 function DetailBody({
   detail,
+  derived,
   showFusion,
   candidatesByMetric,
   sourceName,
@@ -356,6 +375,7 @@ function DetailBody({
   onRemoveRecording,
 }: {
   detail: ActivityDetail;
+  derived: DerivedMetricDto[];
   showFusion: boolean;
   candidatesByMetric: Map<StreamKind, Source[]>;
   sourceName: (id: string | undefined) => string;
@@ -746,19 +766,34 @@ function DetailBody({
             />
           </div>
 
-          {/* Derived metrics — algorithm plugins */}
+          {/* Derived metrics — algorithm plugins (TSS, etc.) — REAL DATA */}
           <div className="card">
             <div className="card__head">
               <div className="card__title">
-                Derived<span className="sub">algorithm plugins</span>
+                Analysis<span className="sub">algorithm outputs</span>
               </div>
+              {derived.length > 0 ? (
+                <div className="card__tools">
+                  <Link to="/algorithms" className="pill">
+                    Algorithms →
+                  </Link>
+                </div>
+              ) : null}
             </div>
-            <EmptyState
-              label="No data yet"
-              phase="Phase 4"
-              hint="Training Effect, VO₂ contribution and other plugin outputs render here once the algorithm engine ships."
-              compact
-            />
+            {derived.length === 0 ? (
+              <EmptyState
+                label="No data yet"
+                phase="Phase 3"
+                hint="TSS and other per-activity algorithm outputs render here. Recompute on the Algorithms screen to populate them."
+                compact
+              />
+            ) : (
+              <div className="grid grid--stats" style={{ gap: 10 }}>
+                {derived.map((m) => (
+                  <DerivedTile key={`${m.plugin_id}:${m.name}`} metric={m} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -767,6 +802,43 @@ function DetailBody({
 }
 
 /* --------------------------------------------------------------- subviews */
+
+/** A friendly label + value for one derived metric (e.g. tss → "TSS · 126"). */
+function derivedLabel(name: string): string {
+  const known: Record<string, string> = {
+    tss: "TSS",
+    hrv_rmssd: "HRV (RMSSD)",
+    hrv_baseline: "HRV baseline",
+    readiness: "Readiness",
+    readiness_available: "Readiness ready",
+    resting_hr_anomaly: "Resting-HR anomaly",
+  };
+  return known[name] ?? name.replace(/_/g, " ");
+}
+
+function derivedValue(name: string, value: number): string {
+  if (name === "readiness_available" || name === "resting_hr_anomaly") {
+    return value >= 0.5 ? "yes" : "no";
+  }
+  // Most outputs are sensible at 0–1 decimals.
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function DerivedTile({ metric }: { metric: DerivedMetricDto }) {
+  return (
+    <div className="card stat" style={{ padding: 14 }}>
+      <div className="stat__label">{derivedLabel(metric.name)}</div>
+      <div className="stat__val num" style={{ fontSize: 20 }}>
+        {derivedValue(metric.name, metric.value)}
+      </div>
+      <div className="stat__delta flat">
+        <span className="tag" style={{ fontFamily: "var(--font-mono)" }}>
+          {metric.plugin_id} v{metric.version}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function SummaryTile({
   label,

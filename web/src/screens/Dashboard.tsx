@@ -15,8 +15,11 @@ import { ImportIcon, SearchIcon, ActivitiesIcon, WellnessIcon } from "../app/ico
 import { Seg } from "../ui/Seg";
 import { EmptyState } from "../ui/EmptyState";
 import { useActivities } from "../hooks/useActivities";
+import { useTrainingLoad, hasTrainingLoad } from "../hooks/useTrainingLoad";
 import { importFiles, listSources } from "../api/endpoints";
 import type { Source, Sport } from "../api/types";
+import type { TrainingLoadResponseDto } from "../api/schema";
+import { MultiLineChart, type MultiSeries } from "../charts/MultiLineChart";
 import { formatDuration, sportLabel } from "../ui/format";
 import "./Dashboard.css";
 
@@ -179,6 +182,9 @@ function shortDay(iso: string): string {
 export function Dashboard() {
   const [range, setRange] = useState<Range>("week");
   const { activities, reload } = useActivities();
+  const tl = useTrainingLoad();
+  const tlData = tl.kind === "ok" ? tl.data : null;
+  const tlReady = tlData ? hasTrainingLoad(tlData) : false;
 
   const recent = [...activities]
     .sort((a, b) => (a.started_at < b.started_at ? 1 : a.started_at > b.started_at ? -1 : 0))
@@ -198,27 +204,14 @@ export function Dashboard() {
         </>
       }
     >
-      {/* training status banner — no backend training-status model yet */}
-      <div className="banner" style={{ marginBottom: 24 }}>
-        <ActivitiesIcon />
-        <div>
-          <b>Training status</b>
-          <span className="muted">
-            {" "}
-            Fused training load, fitness/fatigue balance and form land with the
-            algorithms engine.
-          </span>
-        </div>
-        <span className="pill" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
-          Phase 4
-        </span>
-      </div>
+      {/* training status / readiness banner — bound to the analytics engine. */}
+      <ReadinessBanner data={tlData} ready={tlReady} />
 
       {/* stat tiles — training load / resting HR / HRV / body battery */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>
-        <StatTileEmpty tint="t-acc" label="Training load · 7d" phase="Phase 4" icon={<TrendsGlyph />} />
+        <TrainingLoadTile data={tlData} ready={tlReady} />
         <StatTileEmpty tint="t-hr" label="Resting HR" phase="Phase 3" icon={<WellnessIcon />} />
-        <StatTileEmpty tint="t-pow" label="HRV · overnight" phase="Phase 3" icon={<ArrowGlyph />} />
+        <HrvTile data={tlData} />
         <StatTileEmpty tint="t-elev" label="Body battery" phase="Phase 3" icon={<BatteryGlyph />} />
       </div>
 
@@ -249,11 +242,17 @@ export function Dashboard() {
                 </div>
               </div>
             </div>
-            <EmptyState
-              label="No data yet"
-              phase="Phase 4"
-              hint="CTL / ATL / TSB are computed from fused training load."
-            />
+            {tl.kind === "loading" ? (
+              <EmptyState label="Loading training load…" compact />
+            ) : tlReady && tlData ? (
+              <TrainingLoadChart data={tlData} />
+            ) : (
+              <EmptyState
+                label="No data yet"
+                phase="Phase 3"
+                hint="CTL / ATL / TSB are computed from fused training load. Import activities, then Recompute on the Algorithms screen."
+              />
+            )}
           </section>
 
           {/* weekly volume chart */}
@@ -360,6 +359,155 @@ export function Dashboard() {
       </div>
     </AppShell>
   );
+}
+
+/* ----------------------------------------------------- training load UI */
+// All bound to GET /api/analytics/training-load. Numbers are rounded for display
+// but never invented — when analytics haven't been computed the tiles fall back
+// to the on-brand empty state (a "—" value + "No data" tag).
+
+function latest<T>(arr: T[]): T | undefined {
+  return arr.length ? arr[arr.length - 1] : undefined;
+}
+
+/** Readiness banner: shows the 0–100 readiness score when available, else the
+ * on-brand "compute the analytics engine" prompt. */
+function ReadinessBanner({
+  data,
+  ready,
+}: {
+  data: TrainingLoadResponseDto | null;
+  ready: boolean;
+}) {
+  const hasReadiness =
+    data != null && data.readiness_available && data.readiness != null;
+
+  if (hasReadiness) {
+    const score = Math.round(data!.readiness as number);
+    const tone = score >= 66 ? "good" : score >= 40 ? "warn" : "bad";
+    const word = score >= 66 ? "Ready" : score >= 40 ? "Moderate" : "Take it easy";
+    return (
+      <div className="banner" style={{ marginBottom: 24 }}>
+        <ActivitiesIcon />
+        <div>
+          <b>Readiness · {word}</b>
+          <span className="muted">
+            {" "}
+            HRV + resting-HR trend vs your personal baseline.
+            {data!.hrv_rmssd != null
+              ? ` HRV ${Math.round(data!.hrv_rmssd)} ms.`
+              : ""}
+          </span>
+        </div>
+        <span
+          className={`pill pill--${tone}`}
+          style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}
+        >
+          {score}/100
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="banner" style={{ marginBottom: 24 }}>
+      <ActivitiesIcon />
+      <div>
+        <b>Training status</b>
+        <span className="muted">
+          {" "}
+          {ready
+            ? "Readiness needs overnight HRV + resting-HR; CTL/ATL/TSB are shown below."
+            : "Fused training load, fitness/fatigue balance and form land once the analytics engine has run."}
+        </span>
+      </div>
+      <Link
+        to="/algorithms"
+        className="pill"
+        style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}
+      >
+        Recompute →
+      </Link>
+    </div>
+  );
+}
+
+/** "Training load · 7d" tile = latest ATL (acute / fatigue, 7-day EWMA). */
+function TrainingLoadTile({
+  data,
+  ready,
+}: {
+  data: TrainingLoadResponseDto | null;
+  ready: boolean;
+}) {
+  if (!ready || !data) {
+    return (
+      <StatTileEmpty tint="t-acc" label="Training load · 7d" phase="Phase 3" icon={<TrendsGlyph />} />
+    );
+  }
+  const last = latest(data.series);
+  const atl = last ? last.atl : 0;
+  const tsb = last ? last.tsb : 0;
+  // Positive form (TSB) = fresh; negative = fatigued.
+  const fresh = tsb >= 0;
+  return (
+    <div className="card stat">
+      <div className="stat__ico t-acc">
+        <TrendsGlyph />
+      </div>
+      <div className="stat__label">Training load · 7d</div>
+      <div className="stat__val num" style={{ fontSize: 22 }}>
+        {Math.round(atl)}
+      </div>
+      <div className={`stat__delta ${fresh ? "up" : "down"}`}>
+        <span className="tag" style={{ fontFamily: "var(--font-mono)" }}>
+          form {tsb >= 0 ? "+" : ""}
+          {Math.round(tsb)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** "HRV · overnight" tile = latest HRV RMSSD vs baseline. */
+function HrvTile({ data }: { data: TrainingLoadResponseDto | null }) {
+  const rmssd = data?.hrv_rmssd ?? null;
+  if (rmssd == null) {
+    return <StatTileEmpty tint="t-pow" label="HRV · overnight" phase="Phase 3" icon={<ArrowGlyph />} />;
+  }
+  const baseline = data?.hrv_baseline ?? null;
+  const delta = baseline != null ? rmssd - baseline : null;
+  const up = delta == null || delta >= 0;
+  return (
+    <div className="card stat">
+      <div className="stat__ico t-pow">
+        <ArrowGlyph />
+      </div>
+      <div className="stat__label">HRV · overnight</div>
+      <div className="stat__val num" style={{ fontSize: 22 }}>
+        {Math.round(rmssd)}
+        <span style={{ fontSize: 12, color: "var(--muted)" }}> ms</span>
+      </div>
+      <div className={`stat__delta ${up ? "up" : "down"}`}>
+        <span className="tag" style={{ fontFamily: "var(--font-mono)" }}>
+          {baseline != null
+            ? `base ${Math.round(baseline)} ms`
+            : "baseline pending"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** CTL / ATL / TSB multi-series chart from the dated training-load series. */
+function TrainingLoadChart({ data }: { data: TrainingLoadResponseDto }) {
+  const x = data.series.map((p) => Date.parse(`${p.date}T00:00:00Z`) / 1000);
+  const series: MultiSeries[] = [
+    { label: "Fitness (CTL)", values: data.series.map((p) => p.ctl), stroke: "var(--accent)" },
+    { label: "Fatigue (ATL)", values: data.series.map((p) => p.atl), stroke: "var(--cal)" },
+    { label: "Form (TSB)", values: data.series.map((p) => p.tsb), stroke: "var(--elev)" },
+  ];
+  return <MultiLineChart x={x} series={series} height={220} />;
 }
 
 /* -------------------------------------------------------- stat tile empty */

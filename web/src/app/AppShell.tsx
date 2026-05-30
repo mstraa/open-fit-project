@@ -11,6 +11,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useHealth } from "../hooks/useHealth";
 import { useActivities } from "../hooks/useActivities";
+import { useAlgorithms } from "../hooks/useAlgorithms";
 import { useAuth } from "../auth/AuthProvider";
 import {
   ActivitiesIcon,
@@ -34,9 +35,6 @@ export interface TopbarProps {
 export interface AppShellProps extends TopbarProps {
   children: ReactNode;
 }
-
-/** The system-section algorithm count is static (no backend yet) — Phase 4+. */
-const ALGORITHM_COUNT = 7;
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -92,8 +90,10 @@ export function AppShell({ title, crumb, actions, children }: AppShellProps) {
 function Rail({ open }: { open: boolean }) {
   const health = useHealth();
   const { activities } = useActivities();
+  const { algorithms } = useAlgorithms();
   const { username, logout } = useAuth();
   const activityBadge = activities.length > 0 ? String(activities.length) : undefined;
+  const algorithmBadge = algorithms.length > 0 ? String(algorithms.length) : undefined;
 
   return (
     <aside className={open ? "rail is-open" : "rail"}>
@@ -117,7 +117,7 @@ function Rail({ open }: { open: boolean }) {
         <NavItem to="/trends" icon={<TrendsIcon />} label="Trends" />
         <div className="nav__label">System</div>
         <NavItem to="/devices" icon={<DevicesIcon />} label="Devices & sources" />
-        <NavItem to="/algorithms" icon={<AlgorithmsIcon />} label="Algorithms" badge={String(ALGORITHM_COUNT)} />
+        <NavItem to="/algorithms" icon={<AlgorithmsIcon />} label="Algorithms" badge={algorithmBadge} />
         <NavItem to="/settings" icon={<SettingsIcon />} label="Settings" />
       </nav>
 

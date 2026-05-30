@@ -72,6 +72,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/algorithms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/algorithms` — list available algorithms (built-in + loaded plugins). */
+        get: operations["list_algorithms"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/derived": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/analytics/derived?subject=activity:{id}|day:{date}` — derived
+         *     metrics/streams for a subject, chart-ready.
+         */
+        get: operations["derived"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/recompute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/analytics/recompute` — run all enabled algorithms over the user's
+         *     data and persist the derived metrics/streams (idempotent: replace by
+         *     subject+plugin+version).
+         */
+        post: operations["recompute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/training-load": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/analytics/training-load` — the CTL/ATL/TSB series + latest
+         *     readiness/HRV, dashboard-ready; empty when nothing is computed.
+         */
+        get: operations["training_load"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -245,7 +323,12 @@ export interface paths {
         /** `GET /api/wellness?kind=&from=&to=` — continuous wellness trend. */
         get: operations["wellness"];
         put?: never;
-        post?: never;
+        /**
+         * `POST /api/wellness` — batch-ingest continuous wellness samples (the
+         *     streaming/relay write path). Persists them and fans each out live to the
+         *     `/api/wellness/live` subscribers.
+         */
+        post: operations["ingest_wellness"];
         delete?: never;
         options?: never;
         head?: never;
@@ -336,9 +419,108 @@ export interface components {
              */
             started_at: string;
         };
+        /** @description One algorithm in the registry as exposed to the client. */
+        AlgorithmDto: {
+            /** @description Free-form hardware applicability tags. */
+            applicable_hardware: string[];
+            /** @description One-line description. */
+            description: string;
+            /**
+             * @description Whether the algorithm is currently enabled (always true today; the field
+             *     is here so the web can bind a future per-algorithm toggle).
+             */
+            enabled: boolean;
+            /** @description Stable id (e.g. `training_load`). */
+            id: string;
+            /**
+             * @description Required inputs (stream/wellness kinds), as `"stream:heart_rate"` /
+             *     `"wellness:hrv"` tags, chart-friendly for the picker UI.
+             */
+            inputs: string[];
+            /** @description `built_in` or `wasm`. */
+            kind: components["schemas"]["AlgorithmKind"];
+            /** @description Human-readable name. */
+            name: string;
+            /** @description Output names this algorithm emits (`tss`, `ctl`, `readiness`…). */
+            outputs: string[];
+            /** @description Semantic version (`x.y.z`). Bump = recompute. */
+            version: string;
+        };
+        /**
+         * @description Whether an algorithm is compiled into the server (pure Rust) or loaded as a
+         *     sandboxed WASM plugin from the community registry.
+         *
+         *     Built-ins are the concrete, always-available wins (training load, readiness…);
+         *     WASM plugins are third-party / community algorithms run under the sandbox
+         *     (`ofit-plugins`). The spec shape is identical so the registry, DB and API
+         *     treat both uniformly.
+         * @enum {string}
+         */
+        AlgorithmKind: "built_in" | "wasm";
         Credentials: {
             password: string;
             username: string;
+        };
+        /** @description A derived scalar metric for a subject (chart/tile ready). */
+        DerivedMetricDto: {
+            /**
+             * Format: date-time
+             * @description When it was computed (UTC, RFC3339).
+             */
+            computed_at: string;
+            /** @description Metric name (`tss`, `readiness`, `hrv_rmssd`…). */
+            name: string;
+            /** @description Producing algorithm id. */
+            plugin_id: string;
+            /**
+             * Format: double
+             * @description Computed value.
+             */
+            value: number;
+            /** @description Producing algorithm version. */
+            version: string;
+        };
+        /** @description One derived stream point. */
+        DerivedPoint: {
+            /**
+             * Format: int64
+             * @description Millisecond offset from the stream epoch (see the algorithm's docs; for
+             *     CTL/ATL/TSB the epoch is the first activity day at 00:00 UTC).
+             */
+            t_offset_ms: number;
+            /**
+             * Format: double
+             * @description Value at that offset.
+             */
+            value: number;
+        };
+        /** @description Response of `GET /api/analytics/derived`. */
+        DerivedResponse: {
+            /** @description Derived scalar metrics for the subject. */
+            metrics: components["schemas"]["DerivedMetricDto"][];
+            /** @description Derived time-series for the subject. */
+            streams: components["schemas"]["DerivedStreamDto"][];
+            /**
+             * @description The subject these derivations are attached to (`activity:{id}` or
+             *     `day:{date}`), echoed back as given.
+             */
+            subject: string;
+        };
+        /** @description A derived time-series for a subject (chart ready). */
+        DerivedStreamDto: {
+            /**
+             * Format: date-time
+             * @description When it was computed (UTC, RFC3339).
+             */
+            computed_at: string;
+            /** @description Stream name (`ctl`, `atl`, `tsb`…). */
+            name: string;
+            /** @description Producing algorithm id. */
+            plugin_id: string;
+            /** @description Samples as `(t_offset_ms, value)` chart points. */
+            points: components["schemas"]["DerivedPoint"][];
+            /** @description Producing algorithm version. */
+            version: string;
         };
         /**
          * @description Liveness payload. Reports the DB backend in use so the simple/full tier is
@@ -375,6 +557,29 @@ export interface components {
         ImportResponse: {
             /** @description Per-file outcomes, in upload order. */
             files: components["schemas"]["ImportFileResult"][];
+        };
+        /**
+         * @description A live wellness sample pushed over the `/api/wellness/live` WebSocket as a
+         *     JSON text frame — the real-time fan-out of the ingest path to the dashboard.
+         */
+        LiveWellness: {
+            /** @description Metric kind. */
+            kind: components["schemas"]["WellnessKind"];
+            /**
+             * Format: uuid
+             * @description Source that produced it.
+             */
+            source_id: string;
+            /**
+             * Format: date-time
+             * @description Wall-clock timestamp (UTC).
+             */
+            ts: string;
+            /**
+             * Format: double
+             * @description Value at `ts`.
+             */
+            value: number;
         };
         Me: {
             username: string;
@@ -413,6 +618,30 @@ export interface components {
          * @enum {string}
          */
         PreferenceScopeDto: "default" | "activity";
+        /** @description Per-algorithm summary line of a recompute run. */
+        RecomputeAlgorithmResult: {
+            /** @description Algorithm id. */
+            id: string;
+            /** @description Derived scalar metrics produced. */
+            metrics: number;
+            /** @description Derived time-series produced. */
+            streams: number;
+            /** @description Algorithm version. */
+            version: string;
+        };
+        /** @description Response of `POST /api/analytics/recompute`. */
+        RecomputeResponse: {
+            /** @description How many activities were fed into the run. */
+            activities: number;
+            /** @description Per-algorithm output counts. */
+            algorithms: components["schemas"]["RecomputeAlgorithmResult"][];
+            /** @description Total derived metrics persisted. */
+            total_metrics: number;
+            /** @description Total derived streams persisted. */
+            total_streams: number;
+            /** @description How many wellness points were fed into the run. */
+            wellness_points: number;
+        };
         /** @description A contributing recording within an activity detail view. */
         RecordingDto: {
             /** @description Metric kinds this recording provides. */
@@ -573,10 +802,86 @@ export interface components {
              */
             t_offset_ms: number;
         };
+        /**
+         * @description One CTL/ATL/TSB point with an **absolute date** (chart-ready for the
+         *     dashboard's PMC chart).
+         */
+        TrainingLoadPoint: {
+            /**
+             * Format: double
+             * @description Acute Training Load (fatigue, 7-day EWMA).
+             */
+            atl: number;
+            /**
+             * Format: double
+             * @description Chronic Training Load (fitness, 42-day EWMA).
+             */
+            ctl: number;
+            /** @description Calendar date (UTC, `YYYY-MM-DD`). */
+            date: string;
+            /**
+             * Format: double
+             * @description Training Stress Balance (form, CTL − ATL).
+             */
+            tsb: number;
+        };
+        /** @description Response of `GET /api/analytics/training-load`. */
+        TrainingLoadResponse: {
+            /**
+             * Format: double
+             * @description Latest HRV baseline, if computed.
+             */
+            hrv_baseline?: number | null;
+            /**
+             * Format: double
+             * @description Latest HRV RMSSD summary, if computed.
+             */
+            hrv_rmssd?: number | null;
+            /**
+             * Format: double
+             * @description Latest readiness score (0–100), if computed.
+             */
+            readiness?: number | null;
+            /**
+             * @description Whether readiness had enough data to be meaningful (the
+             *     `readiness_available` flag of the latest day).
+             */
+            readiness_available: boolean;
+            /**
+             * @description The daily CTL/ATL/TSB series with absolute dates (empty when not yet
+             *     computed).
+             */
+            series: components["schemas"]["TrainingLoadPoint"][];
+        };
         /** @description Build/version metadata. */
         Version: {
             name: string;
             version: string;
+        };
+        /**
+         * @description One incoming wellness reading on the ingest path (`POST /api/wellness`).
+         *     A relay/device streams these (batched) — the continuous, streaming-first feed.
+         */
+        WellnessIngest: {
+            /** @description Metric kind. */
+            kind: components["schemas"]["WellnessKind"];
+            /**
+             * Format: uuid
+             * @description Source that produced it; defaults to the shared "Live stream" source.
+             */
+            source_id?: string | null;
+            /** @description Timestamp (RFC3339). Defaults to now when omitted (live feed). */
+            ts?: string | null;
+            /**
+             * Format: double
+             * @description Scalar value (categorical kinds use a stable code).
+             */
+            value: number;
+        };
+        /** @description Response of `POST /api/wellness`. */
+        WellnessIngestResponse: {
+            /** @description Number of samples persisted. */
+            ingested: number;
         };
         /**
          * @description The kind of continuous wellness metric a sample carries.
@@ -703,6 +1008,91 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_algorithms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlgorithmDto"][];
+                };
+            };
+        };
+    };
+    derived: {
+        parameters: {
+            query: {
+                /** @description `activity:{uuid}` or `day:{YYYY-MM-DD}`. */
+                subject: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DerivedResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recompute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecomputeResponse"];
+                };
+            };
+        };
+    };
+    training_load: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingLoadResponse"];
+                };
             };
         };
     };
@@ -959,6 +1349,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WellnessResponse"];
+                };
+            };
+        };
+    };
+    ingest_wellness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WellnessIngest"][];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WellnessIngestResponse"];
                 };
             };
         };

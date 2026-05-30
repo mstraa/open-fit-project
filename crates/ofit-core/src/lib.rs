@@ -16,6 +16,7 @@
 //! [PLAN.md]: ../../../PLAN.md
 
 pub mod activity;
+pub mod analytics;
 pub mod dedup;
 pub mod derived;
 pub mod error;
@@ -26,6 +27,9 @@ pub mod stream;
 pub mod wellness;
 
 pub use activity::Activity;
+pub use analytics::{
+    Algorithm, AlgorithmInput, AlgorithmKind, AlgorithmOutput, AlgorithmSpec,
+};
 pub use dedup::{
     cluster_recordings, cluster_recordings_respecting, detach_recording, resolve_activity_view,
     DetachResult, ResolvedActivityView, ResolvedMetric, SelectionReason,

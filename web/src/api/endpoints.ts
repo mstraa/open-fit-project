@@ -5,7 +5,13 @@
 // field-name drift (the task's API contract is "indicative"): we normalize a
 // few likely aliases here, at the boundary, so the UI sees one stable shape.
 
-import { apiFetch, apiPostForm, apiSend } from "./client";
+import { apiFetch, apiPostForm, apiSend, ApiError } from "./client";
+import type {
+  AlgorithmDto,
+  RecomputeResponseDto,
+  TrainingLoadResponseDto,
+  DerivedResponseDto,
+} from "./schema";
 import type {
   ActivityDetail,
   ActivitySummary,
@@ -322,4 +328,78 @@ export async function getWellness(
     } satisfies WellnessSample;
   });
   return { kind, samples };
+}
+
+/* ------------------------------------------------------------ analytics */
+// These bind to the Phase-3 analytics REST surface. The shapes come straight
+// from the OpenAPI-generated schema (./schema.ts) so they can't drift; the
+// server returns them verbatim, so no field normalization is needed here.
+
+/**
+ * GET /api/algorithms — the registry of built-in + WASM-plugin algorithms.
+ * Each carries id/version/name/description, declared inputs (as `stream:<kind>`
+ * / `wellness:<kind>` tags), output names, applicable hardware, `kind`
+ * (`built_in` | `wasm`) and an `enabled` flag.
+ */
+export async function listAlgorithms(): Promise<AlgorithmDto[]> {
+  const raw = await apiFetch<unknown>("/api/algorithms");
+  return Array.isArray(raw) ? (raw as AlgorithmDto[]) : [];
+}
+
+/**
+ * POST /api/analytics/recompute — runs every enabled algorithm over all
+ * activities + wellness, persisting (idempotently, superseding by
+ * plugin+version+subject+name) the derived metrics/streams. Returns per-algorithm
+ * and total output counts.
+ */
+export async function recomputeAnalytics(): Promise<RecomputeResponseDto> {
+  return apiSend<RecomputeResponseDto>("/api/analytics/recompute", "POST");
+}
+
+const EMPTY_TRAINING_LOAD: TrainingLoadResponseDto = {
+  series: [],
+  readiness: null,
+  readiness_available: false,
+  hrv_rmssd: null,
+  hrv_baseline: null,
+};
+
+/**
+ * GET /api/analytics/training-load — the dated CTL/ATL/TSB series plus the
+ * latest readiness / HRV summary. Returns an EMPTY result (not a throw) when the
+ * API is unreachable or analytics haven't been computed, so the dashboard shows
+ * its on-brand "No data yet" empty state rather than an error.
+ */
+export async function getTrainingLoad(): Promise<TrainingLoadResponseDto> {
+  try {
+    const raw = await apiFetch<TrainingLoadResponseDto>("/api/analytics/training-load");
+    if (!raw || !Array.isArray(raw.series)) return EMPTY_TRAINING_LOAD;
+    return {
+      series: raw.series,
+      readiness: raw.readiness ?? null,
+      readiness_available: Boolean(raw.readiness_available),
+      hrv_rmssd: raw.hrv_rmssd ?? null,
+      hrv_baseline: raw.hrv_baseline ?? null,
+    };
+  } catch (e) {
+    if (e instanceof ApiError) return EMPTY_TRAINING_LOAD;
+    throw e;
+  }
+}
+
+/**
+ * GET /api/analytics/derived?subject=activity:{uuid} | day:{YYYY-MM-DD} —
+ * the chart-ready derived metrics + streams for one subject. 400 on a malformed
+ * subject (surfaces as a thrown ApiError).
+ */
+export async function getDerived(subject: string): Promise<DerivedResponseDto> {
+  const qs = new URLSearchParams({ subject });
+  const raw = await apiFetch<DerivedResponseDto>(
+    `/api/analytics/derived?${qs.toString()}`,
+  );
+  return {
+    subject: raw?.subject ?? subject,
+    metrics: Array.isArray(raw?.metrics) ? raw.metrics : [],
+    streams: Array.isArray(raw?.streams) ? raw.streams : [],
+  };
 }

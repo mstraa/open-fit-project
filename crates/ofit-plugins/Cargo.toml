@@ -6,7 +6,21 @@ license.workspace = true
 
 [dependencies]
 ofit-core.workspace = true
+ofit-analytics.workspace = true
 extism.workspace = true
+extism-manifest = "1"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+# manifests may be authored as TOML next to the .wasm (JSON also accepted).
+toml.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# Compile WAT text -> wasm bytes in-process (no toolchain) for sandbox-limit tests
+# on machines without the prebuilt fixture.
+wat.workspace = true

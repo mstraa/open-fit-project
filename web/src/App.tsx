@@ -10,6 +10,7 @@ import { Dashboard } from "./screens/Dashboard";
 import { Activities } from "./screens/Activities";
 import { Wellness } from "./screens/Wellness";
 import { Settings } from "./screens/Settings";
+import { Algorithms } from "./screens/Algorithms";
 import { ComingSoon } from "./screens/ComingSoon";
 import { Spinner } from "./ui/primitives";
 
@@ -36,6 +37,7 @@ export function App() {
       />
       <Route path="/wellness" element={<Wellness />} />
       <Route path="/settings" element={<Settings />} />
+      <Route path="/algorithms" element={<Algorithms />} />
 
       {/* Nav items without a module yet → generic empty-state screen. */}
       <Route
@@ -57,17 +59,6 @@ export function App() {
             crumb="Long-term fitness & wellness trends"
             phase="Phase 4"
             hint="Trend analysis builds on accumulated activity and wellness history."
-          />
-        }
-      />
-      <Route
-        path="/algorithms"
-        element={
-          <ComingSoon
-            title="Algorithms"
-            crumb="Sandboxed plugin algorithms"
-            phase="Phase 5"
-            hint="Recovery, HRV, sleep staging and training load run as versioned WASM plugins."
           />
         }
       />

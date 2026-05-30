@@ -28,6 +28,7 @@ use tower_http::{
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
+mod analytics;
 mod auth;
 mod dto;
 mod handlers;
@@ -41,6 +42,9 @@ pub(crate) struct AppState {
     pub token: Option<Arc<str>>,
     /// Live wellness fan-out: ingest publishes, `/api/wellness/live` subscribes.
     pub wellness_tx: tokio::sync::broadcast::Sender<dto::LiveWellness>,
+    /// Directory scanned for sandboxed WASM algorithm plugins (Phase 3). `None`
+    /// or a missing dir ⇒ built-ins only. Set via `OFIT_PLUGINS_DIR`.
+    pub plugins_dir: Option<Arc<std::path::Path>>,
 }
 
 /// Liveness payload. Reports the DB backend in use so the simple/full tier is
@@ -79,6 +83,10 @@ struct Version {
         handlers::set_preference,
         handlers::wellness,
         handlers::ingest_wellness,
+        analytics::list_algorithms,
+        analytics::recompute,
+        analytics::derived,
+        analytics::training_load,
     ),
     components(schemas(
         Health,
@@ -101,6 +109,16 @@ struct Version {
         dto::WellnessIngest,
         dto::WellnessIngestResponse,
         dto::LiveWellness,
+        analytics::AlgorithmDto,
+        analytics::RecomputeResponse,
+        analytics::RecomputeAlgorithmResult,
+        analytics::DerivedResponse,
+        analytics::DerivedMetricDto,
+        analytics::DerivedStreamDto,
+        analytics::DerivedPoint,
+        analytics::TrainingLoadResponse,
+        analytics::TrainingLoadPoint,
+        ofit_core::analytics::AlgorithmKind,
         auth::SetupStatus,
         auth::Credentials,
         auth::Me,
@@ -131,6 +149,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("OFIT_TOKEN unset — /api auth is DISABLED (first-run/dev mode)");
     }
     let bind = std::env::var("OFIT_BIND").unwrap_or_else(|_| "0.0.0.0:8087".to_string());
+    // Optional sandboxed-plugins directory (Phase 3). Absent ⇒ built-ins only.
+    let plugins_dir: Option<Arc<std::path::Path>> = std::env::var("OFIT_PLUGINS_DIR")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(|p| Arc::from(std::path::PathBuf::from(p).as_path()));
+    if let Some(dir) = &plugins_dir {
+        tracing::info!(dir = %dir.display(), "WASM plugins dir configured");
+    }
 
     // ---- connect db + migrate on startup ----
     tracing::info!("connecting to database…");
@@ -146,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         token: token.map(Arc::from),
         wellness_tx,
+        plugins_dir,
     };
 
     // Auth routes are always reachable (login/setup/status); the rest sit behind
@@ -181,6 +208,10 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::wellness).post(handlers::ingest_wellness),
         )
         .route("/wellness/live", get(handlers::wellness_live))
+        .route("/algorithms", get(analytics::list_algorithms))
+        .route("/analytics/recompute", post(analytics::recompute))
+        .route("/analytics/derived", get(analytics::derived))
+        .route("/analytics/training-load", get(analytics::training_load))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     let api = public_api.merge(protected_api);

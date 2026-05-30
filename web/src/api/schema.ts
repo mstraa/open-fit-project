@@ -34,3 +34,15 @@ export type ImportFileResultDto = S["ImportFileResult"];
 export type WellnessResponseDto = S["WellnessResponse"];
 export type HealthDto = S["Health"];
 export type VersionDto = S["Version"];
+
+/* ---- analytics (Phase 3) ---- */
+export type AlgorithmKind = S["AlgorithmKind"];
+export type AlgorithmDto = S["AlgorithmDto"];
+export type RecomputeResponseDto = S["RecomputeResponse"];
+export type RecomputeAlgorithmResultDto = S["RecomputeAlgorithmResult"];
+export type TrainingLoadResponseDto = S["TrainingLoadResponse"];
+export type TrainingLoadPointDto = S["TrainingLoadPoint"];
+export type DerivedResponseDto = S["DerivedResponse"];
+export type DerivedMetricDto = S["DerivedMetricDto"];
+export type DerivedStreamDto = S["DerivedStreamDto"];
+export type DerivedPointDto = S["DerivedPoint"];

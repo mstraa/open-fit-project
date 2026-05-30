@@ -735,6 +735,187 @@ impl Db {
         rows.into_iter().map(row_to_preference).collect()
     }
 
+    // ---- Phase 3: derived analytics persistence (metrics + streams) ----
+    //
+    // Both tables are keyed for **idempotent recompute**: the supersede key is
+    // `(plugin_id, plugin_version, subject_kind, subject_id, name)`. Re-running an
+    // algorithm version replaces its prior outputs for the same subject+name in
+    // place (delete-then-insert in one tx) so recompute never accumulates dupes.
+
+    /// Persist one batch of [`DerivedMetric`]/[`DerivedStream`] outputs,
+    /// **superseding** any prior rows from the same `(plugin_id, version,
+    /// subject, name)` (idempotent recompute). One transaction.
+    pub async fn persist_derived(
+        &self,
+        metrics: &[ofit_core::DerivedMetric],
+        streams: &[ofit_core::DerivedStream],
+    ) -> Result<()> {
+        if metrics.is_empty() && streams.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for m in metrics {
+            let (sk, sid) = subject_parts(&m.subject);
+            sqlx::query(&self.p(
+                "DELETE FROM derived_metrics \
+                 WHERE plugin_id = ? AND plugin_version = ? \
+                   AND subject_kind = ? AND subject_id = ? AND name = ?",
+            ))
+            .bind(&m.plugin.plugin_id)
+            .bind(&m.plugin.version)
+            .bind(&sk)
+            .bind(&sid)
+            .bind(&m.name)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(&self.p(
+                "INSERT INTO derived_metrics \
+                 (id, plugin_id, plugin_version, subject_kind, subject_id, name, value, computed_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ))
+            .bind(m.id.to_string())
+            .bind(&m.plugin.plugin_id)
+            .bind(&m.plugin.version)
+            .bind(&sk)
+            .bind(&sid)
+            .bind(&m.name)
+            .bind(m.value)
+            .bind(m.computed_at.to_rfc3339())
+            .execute(&mut *tx)
+            .await?;
+        }
+        for s in streams {
+            let (sk, sid) = subject_parts(&s.subject);
+            let samples_json = serde_json::to_string(&s.samples)
+                .map_err(|e| DbError::Config(format!("encode derived stream samples: {e}")))?;
+            sqlx::query(&self.p(
+                "DELETE FROM derived_streams \
+                 WHERE plugin_id = ? AND plugin_version = ? \
+                   AND subject_kind = ? AND subject_id = ? AND name = ?",
+            ))
+            .bind(&s.plugin.plugin_id)
+            .bind(&s.plugin.version)
+            .bind(&sk)
+            .bind(&sid)
+            .bind(&s.name)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(&self.p(
+                "INSERT INTO derived_streams \
+                 (id, plugin_id, plugin_version, subject_kind, subject_id, name, sample_count, samples, computed_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ))
+            .bind(s.id.to_string())
+            .bind(&s.plugin.plugin_id)
+            .bind(&s.plugin.version)
+            .bind(&sk)
+            .bind(&sid)
+            .bind(&s.name)
+            .bind(s.samples.len() as i64)
+            .bind(samples_json)
+            .bind(s.computed_at.to_rfc3339())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// All derived **metrics** for one subject (an activity id or a day id),
+    /// ordered by plugin then name.
+    pub async fn derived_metrics_for_subject(
+        &self,
+        subject: ofit_core::DerivedSubject,
+    ) -> Result<Vec<ofit_core::DerivedMetric>> {
+        let (sk, sid) = subject_parts(&subject);
+        let rows = sqlx::query(&self.p(
+            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, value, computed_at \
+             FROM derived_metrics WHERE subject_kind = ? AND subject_id = ? \
+             ORDER BY plugin_id, plugin_version, name",
+        ))
+        .bind(&sk)
+        .bind(&sid)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_derived_metric).collect()
+    }
+
+    /// All derived **streams** for one subject, ordered by plugin then name.
+    pub async fn derived_streams_for_subject(
+        &self,
+        subject: ofit_core::DerivedSubject,
+    ) -> Result<Vec<ofit_core::DerivedStream>> {
+        let (sk, sid) = subject_parts(&subject);
+        let rows = sqlx::query(&self.p(
+            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, samples, computed_at \
+             FROM derived_streams WHERE subject_kind = ? AND subject_id = ? \
+             ORDER BY plugin_id, plugin_version, name",
+        ))
+        .bind(&sk)
+        .bind(&sid)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_derived_stream).collect()
+    }
+
+    /// Every derived metric produced by one algorithm (plugin id + version),
+    /// across all subjects. Used by the training-load convenience view to gather
+    /// the latest readiness/HRV without knowing the day id ahead of time.
+    pub async fn derived_metrics_for_plugin(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        name: Option<&str>,
+    ) -> Result<Vec<ofit_core::DerivedMetric>> {
+        let rows = sqlx::query(&self.p(
+            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, value, computed_at \
+             FROM derived_metrics \
+             WHERE plugin_id = ? AND plugin_version = ? AND (? IS NULL OR name = ?) \
+             ORDER BY computed_at",
+        ))
+        .bind(plugin_id)
+        .bind(version)
+        .bind(name)
+        .bind(name)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_derived_metric).collect()
+    }
+
+    /// Every derived stream produced by one algorithm (plugin id + version),
+    /// across all subjects (e.g. all `ctl`/`atl`/`tsb` curves training_load wrote).
+    pub async fn derived_streams_for_plugin(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        name: Option<&str>,
+    ) -> Result<Vec<ofit_core::DerivedStream>> {
+        let rows = sqlx::query(&self.p(
+            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, samples, computed_at \
+             FROM derived_streams \
+             WHERE plugin_id = ? AND plugin_version = ? AND (? IS NULL OR name = ?) \
+             ORDER BY computed_at",
+        ))
+        .bind(plugin_id)
+        .bind(version)
+        .bind(name)
+        .bind(name)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_derived_stream).collect()
+    }
+
+    /// Count derived metrics + streams (verification helper).
+    pub async fn count_derived(&self) -> Result<(i64, i64)> {
+        let m: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM derived_metrics"))
+            .fetch_one(&self.pool)
+            .await?;
+        let s: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM derived_streams"))
+            .fetch_one(&self.pool)
+            .await?;
+        Ok((m.get::<i64, _>("n"), s.get::<i64, _>("n")))
+    }
+
     /// Hydrate an activity header row into an [`Activity`] with its membership.
     async fn hydrate_activity(&self, r: AnyRow, id: Uuid) -> Result<Activity> {
         let recording_ids = self.recording_ids_for_activity(id).await?;
@@ -810,6 +991,61 @@ fn row_to_wellness(r: AnyRow) -> Result<WellnessSample> {
         kind: parse_enum::<ofit_core::WellnessKind>(&r.get::<String, _>("kind"))?,
         value: r.get::<f64, _>("value"),
         ts: parse_ts(&r.get::<String, _>("ts"))?,
+    })
+}
+
+/// Split a [`DerivedSubject`] into its stored `(subject_kind, subject_id)` TEXT
+/// columns: `("activity"|"day", uuid)`.
+fn subject_parts(subject: &ofit_core::DerivedSubject) -> (String, String) {
+    match subject {
+        ofit_core::DerivedSubject::Activity(id) => ("activity".to_string(), id.to_string()),
+        ofit_core::DerivedSubject::Day(id) => ("day".to_string(), id.to_string()),
+    }
+}
+
+/// Inverse of [`subject_parts`].
+fn subject_from_parts(kind: &str, id: &str) -> Result<ofit_core::DerivedSubject> {
+    let uuid = parse_uuid(id)?;
+    match kind {
+        "activity" => Ok(ofit_core::DerivedSubject::Activity(uuid)),
+        "day" => Ok(ofit_core::DerivedSubject::Day(uuid)),
+        other => Err(DbError::Config(format!("bad subject_kind {other:?}"))),
+    }
+}
+
+fn row_to_derived_metric(r: AnyRow) -> Result<ofit_core::DerivedMetric> {
+    Ok(ofit_core::DerivedMetric {
+        id: parse_uuid(&r.get::<String, _>("id"))?,
+        plugin: ofit_core::PluginRef::new(
+            r.get::<String, _>("plugin_id"),
+            r.get::<String, _>("plugin_version"),
+        ),
+        subject: subject_from_parts(
+            &r.get::<String, _>("subject_kind"),
+            &r.get::<String, _>("subject_id"),
+        )?,
+        name: r.get::<String, _>("name"),
+        value: r.get::<f64, _>("value"),
+        computed_at: parse_ts(&r.get::<String, _>("computed_at"))?,
+    })
+}
+
+fn row_to_derived_stream(r: AnyRow) -> Result<ofit_core::DerivedStream> {
+    let samples: Vec<Sample> = serde_json::from_str(&r.get::<String, _>("samples"))
+        .map_err(|e| DbError::Config(format!("decode derived stream samples: {e}")))?;
+    Ok(ofit_core::DerivedStream {
+        id: parse_uuid(&r.get::<String, _>("id"))?,
+        plugin: ofit_core::PluginRef::new(
+            r.get::<String, _>("plugin_id"),
+            r.get::<String, _>("plugin_version"),
+        ),
+        subject: subject_from_parts(
+            &r.get::<String, _>("subject_kind"),
+            &r.get::<String, _>("subject_id"),
+        )?,
+        name: r.get::<String, _>("name"),
+        samples,
+        computed_at: parse_ts(&r.get::<String, _>("computed_at"))?,
     })
 }
 

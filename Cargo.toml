@@ -40,6 +40,10 @@ gpx = "0.10"
 quick-xml = "0.40"
 # wasm plugin host
 extism = "1"
+# plugin manifests (TOML next to the .wasm; JSON also accepted via serde_json)
+toml = "0.8"
+# compile WAT text -> wasm bytes in-process (dev-only, no toolchain) for host tests
+wat = "1"
 # utils
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
