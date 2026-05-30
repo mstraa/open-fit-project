@@ -3,7 +3,18 @@
 _Living doc — current state of the build. Update on every change._
 
 **Last updated:** 2026-05-30
-**Current phase:** Phase 1 MVP done ✅ · **Design system ported** (Garmin-class dark UI from `docs/designs/`) ✅ · **FIT metric + device-name extraction deepened** ✅ · **Manual split / remove-recording (durable)** ✅
+**Current phase:** Phase 1 + tie-off DONE ✅ · **Phase 2a (server) started: wellness streaming** 🚧
+
+## Phase 2a — real-time wellness ingestion (server side; no hardware needed)
+The streaming-first wellness path the model was pre-wired for is now live.
+- **ofit-db**: `insert_wellness_samples(&[..])` (batched, one tx) + `ensure_source(kind,name)` (get-or-create) for attributing streamed samples.
+- **ofit-api**: `POST /api/wellness` batch ingest (sourceless samples → shared "Live stream" source; persists + fans out) and **`GET /api/wellness/live` WebSocket** that pushes live samples as JSON frames via a `tokio::broadcast` channel. `GET /api/wellness?kind=&from=&to=` (trend) already existed. DTOs `WellnessIngest`/`WellnessIngestResponse`/`LiveWellness` in OpenAPI.
+- **web**: `useWellnessLive` hook (WS → latest-per-kind + rolling buffer, auto-reconnect); a **Live HR card** on the Wellness screen (current bpm + sparkline + connection pill). The screen's trend cards already consume `getWellness`, so they light up once data exists.
+- **`scripts/wellness-sim.sh`**: dev tool that seeds a few days of resting-HR/HRV/stress/body-battery and streams live HR ~1/s to `POST /api/wellness` — to demo the dashboard without hardware (a Gadgetbridge relay replaces it in Phase 2a-interop).
+- **Verified**: batch ingest + trend GET; WS upgrade → 101; **live frames delivered end-to-end** (Node WS client received streamed HR in real time); web builds.
+- **Next in Phase 2a**: Gadgetbridge relay (Android) as the real producer; wire dashboard wellness tiles to latest values; the **Timescale hypertable** can now land (wellness has a native-timestamp write-path to design against). Cross-origin WS cookie auth caveat once an account exists (same-origin prod is fine).
+
+## Earlier (Phase 1 + tie-off, design port, etc.) — details below
 
 ## Remove a recording from an activity — durable manual split (ofit-core + ofit-db + ofit-api)
 The user can detach a recording (one device's contribution) from an activity without losing it: it moves into its **own new single-recording activity**, and the split is **durable** (re-importing never auto-merges it back).

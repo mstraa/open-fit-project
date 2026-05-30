@@ -18,6 +18,7 @@ import { EmptyState } from "../ui/EmptyState";
 import { Seg } from "../ui/Seg";
 import { getWellness } from "../api/endpoints";
 import type { WellnessSample } from "../api/types";
+import { useWellnessLive } from "../hooks/useWellnessLive";
 
 /* ------------------------------------------------------------- date range */
 
@@ -186,6 +187,58 @@ function StatTile({
 
 /* ------------------------------------------------------------------ screen */
 
+/** Live real-time card: current HR from the wellness WebSocket + a sparkline. */
+function LiveCard() {
+  const live = useWellnessLive();
+  const hr = live.last.heart_rate;
+  const buf = live.buffer.heart_rate ?? [];
+  const values = buf.map((s) => s.value);
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const span = max - min || 1;
+  const w = 220;
+  const h = 40;
+  const path = values
+    .map((v, i) => {
+      const x = values.length > 1 ? (i / (values.length - 1)) * w : 0;
+      const y = h - ((v - min) / span) * h;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="card" style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 18 }}>
+      <div className="stat__ico t-hr" style={{ marginBottom: 0 }}>
+        <HeartGlyph />
+      </div>
+      <div style={{ minWidth: 96 }}>
+        <div className="stat__label">Live heart rate</div>
+        <div className="stat__val num" style={{ marginTop: 2 }}>
+          {hr ? Math.round(hr.value) : "—"} <small>bpm</small>
+        </div>
+      </div>
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ flex: "0 0 auto" }} aria-hidden>
+        {path && <path d={path} fill="none" stroke="var(--hr)" strokeWidth={2} />}
+      </svg>
+      <span
+        className={live.connected ? "pill pill--good" : "pill"}
+        style={{ marginLeft: "auto" }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: live.connected ? "var(--good)" : "var(--faint)",
+          }}
+        />
+        {live.connected ? "streaming" : "waiting for stream"}
+      </span>
+    </div>
+  );
+}
+
 export function Wellness() {
   const [range, setRange] = useState<Range>("week");
   const series = useWellness();
@@ -215,6 +268,9 @@ export function Wellness() {
           Phase 4
         </span>
       </div>
+
+      {/* live real-time feed (WebSocket) */}
+      <LiveCard />
 
       {/* stat tiles */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>
