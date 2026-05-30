@@ -9,7 +9,7 @@
 // - `cursorMs` places a locator dot at the GPS position for that time (synced to
 //   the charts' hover cursor).
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -34,6 +34,17 @@ const OSM_STYLE: StyleSpecification = {
   layers: [{ id: "osm", type: "raster", source: "osm" }],
 };
 
+/** Desaturate + dim the basemap so the colored speed path stands out. */
+function applyBasemap(map: maplibregl.Map, grayscale: boolean) {
+  try {
+    map.setPaintProperty("osm", "raster-saturation", grayscale ? -1 : 0);
+    map.setPaintProperty("osm", "raster-opacity", grayscale ? 0.72 : 1);
+    map.setPaintProperty("osm", "raster-contrast", grayscale ? -0.08 : 0);
+  } catch {
+    /* layer not ready yet */
+  }
+}
+
 export interface TrackMapProps {
   track: LatLngSample[];
   /** Optional per-point metric (speed) to color the path; length === track. */
@@ -49,6 +60,11 @@ export function TrackMap({ track, colorValues, cursorMs, height = 320 }: TrackMa
   const cursorMarkerRef = useRef<maplibregl.Marker | null>(null);
   const cursorDotRef = useRef<HTMLDivElement | null>(null);
   const { theme } = useTheme();
+
+  // Default to a desaturated basemap so the colored path reads clearly.
+  const [grayscale, setGrayscale] = useState(true);
+  const grayRef = useRef(grayscale);
+  grayRef.current = grayscale;
 
   const colored = !!colorValues && colorValues.length === track.length && track.length > 1;
 
@@ -69,6 +85,7 @@ export function TrackMap({ track, colorValues, cursorMs, height = 320 }: TrackMa
 
     map.on("load", () => {
       const accent = resolveCssColor("var(--accent)", "#3d8bfd");
+      applyBasemap(map, grayRef.current);
 
       if (colored && colorValues) {
         // One segment feature per pair, carrying the mean speed as `v`.
@@ -142,6 +159,12 @@ export function TrackMap({ track, colorValues, cursorMs, height = 320 }: TrackMa
     };
   }, [track, colored, colorValues, theme]);
 
+  // Toggle the basemap saturation without rebuilding the map.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && map.isStyleLoaded()) applyBasemap(map, grayscale);
+  }, [grayscale]);
+
   // Move/show the locator dot when the synced cursor changes (no map rebuild).
   useEffect(() => {
     const marker = cursorMarkerRef.current;
@@ -174,6 +197,33 @@ export function TrackMap({ track, colorValues, cursorMs, height = 320 }: TrackMa
           border: "1px solid var(--color-border)",
         }}
       />
+      <button
+        type="button"
+        onClick={() => setGrayscale((g) => !g)}
+        title={grayscale ? "Switch to color basemap" : "Switch to grayscale basemap"}
+        style={{
+          position: "absolute",
+          top: 48,
+          left: 12,
+          zIndex: 2,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "5px 9px",
+          borderRadius: 999,
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          color: "var(--muted)",
+          font: "600 11px var(--font-sans, sans-serif)",
+          cursor: "pointer",
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 3a9 9 0 010 18z" fill="currentColor" stroke="none" />
+        </svg>
+        {grayscale ? "Color map" : "Grayscale"}
+      </button>
       {colored && (
         <div
           style={{

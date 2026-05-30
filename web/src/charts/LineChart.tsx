@@ -114,7 +114,17 @@ function LineChartImpl({
         ...(syncKey ? { sync: { key: syncKey } } : {}),
       },
       legend: { show: false },
-      scales: { x: { time: false } },
+      scales: {
+        x: { time: false },
+        // Reserve headroom at the top so the value pill on the cursor line sits
+        // above the trace instead of covering it.
+        y: {
+          range: (_u, dataMin, dataMax) => {
+            const pad = dataMax - dataMin || 1;
+            return [dataMin - pad * 0.08, dataMax + pad * 0.32];
+          },
+        },
+      },
       plugins: [cursorPlugin],
       axes: [
         {
