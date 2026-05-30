@@ -16,8 +16,8 @@ import { Seg } from "../ui/Seg";
 import { EmptyState } from "../ui/EmptyState";
 import { useActivities } from "../hooks/useActivities";
 import { useTrainingLoad, hasTrainingLoad } from "../hooks/useTrainingLoad";
-import { importFiles, listSources } from "../api/endpoints";
-import type { Source, Sport } from "../api/types";
+import { importFiles, listSources, getWellness } from "../api/endpoints";
+import type { Source, Sport, WellnessKind } from "../api/types";
 import type { TrainingLoadResponseDto } from "../api/schema";
 import { MultiLineChart, type MultiSeries } from "../charts/MultiLineChart";
 import { formatDuration, sportLabel } from "../ui/format";
@@ -210,9 +210,9 @@ export function Dashboard() {
       {/* stat tiles — training load / resting HR / HRV / body battery */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>
         <TrainingLoadTile data={tlData} ready={tlReady} />
-        <StatTileEmpty tint="t-hr" label="Resting HR" phase="Phase 3" icon={<WellnessIcon />} />
+        <WellnessLatestTile kind="resting_heart_rate" label="Resting HR" unit="bpm" tint="t-hr" icon={<WellnessIcon />} />
         <HrvTile data={tlData} />
-        <StatTileEmpty tint="t-elev" label="Body battery" phase="Phase 3" icon={<BatteryGlyph />} />
+        <WellnessLatestTile kind="body_battery" label="Body battery" unit="%" tint="t-elev" icon={<BatteryGlyph />} />
       </div>
 
       {/* main grid */}
@@ -508,6 +508,60 @@ function TrainingLoadChart({ data }: { data: TrainingLoadResponseDto }) {
     { label: "Form (TSB)", values: data.series.map((p) => p.tsb), stroke: "var(--elev)" },
   ];
   return <MultiLineChart x={x} series={series} height={220} />;
+}
+
+/** Latest value of a continuous wellness kind (resting HR, body battery, …).
+ * Shows the most recent reading when present; falls back to the empty state. */
+function WellnessLatestTile({
+  kind,
+  label,
+  unit,
+  tint,
+  icon,
+}: {
+  kind: WellnessKind;
+  label: string;
+  unit: string;
+  tint: string;
+  icon: ReactNode;
+}) {
+  const [val, setVal] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getWellness(kind)
+      .then((s) => {
+        if (!alive) return;
+        const last = s.samples.length ? s.samples[s.samples.length - 1].value : null;
+        setVal(last);
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (alive) setLoaded(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [kind]);
+
+  if (!loaded || val == null) {
+    return <StatTileEmpty tint={tint} label={label} phase="Phase 4" icon={icon} />;
+  }
+  return (
+    <div className="card stat">
+      <div className={`stat__ico ${tint}`}>{icon}</div>
+      <div className="stat__label">{label}</div>
+      <div className="stat__val num" style={{ fontSize: 22 }}>
+        {Math.round(val)}
+        <span style={{ fontSize: 12, color: "var(--muted)" }}> {unit}</span>
+      </div>
+      <div className="stat__delta flat">
+        <span className="tag" style={{ fontFamily: "var(--font-mono)" }}>
+          latest reading
+        </span>
+      </div>
+    </div>
+  );
 }
 
 /* -------------------------------------------------------- stat tile empty */
