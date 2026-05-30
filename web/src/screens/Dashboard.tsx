@@ -18,6 +18,7 @@ import { useActivities } from "../hooks/useActivities";
 import { importFiles, listSources } from "../api/endpoints";
 import type { Source, Sport } from "../api/types";
 import { formatDuration, sportLabel } from "../ui/format";
+import "./Dashboard.css";
 
 /* --------------------------------------------------------------- ranges */
 

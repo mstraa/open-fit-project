@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useTheme } from "../theme/ThemeProvider";
+import { resolveCssColor } from "../ui/colors";
 import type { ScalarSample } from "../api/types";
 
 function tokenColor(name: string, fallback: string): string {
@@ -47,8 +48,11 @@ export function LineChart({
     const ys = samples.map((s) => s.value);
     const data: uPlot.AlignedData = [xs, ys];
 
-    const axisColor = tokenColor("--color-text-muted", "#888");
-    const gridColor = tokenColor("--color-border", "#ccc");
+    const axisColor = resolveCssColor(tokenColor("--color-text-muted", "#888"), "#888");
+    const gridColor = resolveCssColor(tokenColor("--color-border", "#ccc"), "#ccc");
+    // uPlot draws to canvas, which can't resolve `var(--x)` or parse oklch();
+    // normalize the metric color to an rgb() the canvas accepts.
+    const strokeColor = resolveCssColor(stroke, axisColor);
 
     const width = el.clientWidth || 600;
 
@@ -81,8 +85,8 @@ export function LineChart({
         {},
         {
           label,
-          stroke,
-          width: 1.5,
+          stroke: strokeColor,
+          width: 2,
           points: { show: false },
           value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} ${unit}`),
         },

@@ -9,6 +9,7 @@ import maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "../theme/ThemeProvider";
+import { resolveCssColor } from "../ui/colors";
 import type { LatLngSample } from "../api/types";
 
 /** Key-free OSM raster style (attribution required, no token). */
@@ -52,10 +53,8 @@ export function TrackMap({ track, height = 320 }: TrackMapProps) {
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
     map.on("load", () => {
-      const accent =
-        getComputedStyle(document.documentElement)
-          .getPropertyValue("--color-accent")
-          .trim() || "#2f6df6";
+      // MapLibre's color parser can't read oklch()/var(); normalize to rgb().
+      const accent = resolveCssColor("var(--accent)", "#3d8bfd");
 
       map.addSource("track", {
         type: "geojson",
@@ -70,7 +69,7 @@ export function TrackMap({ track, height = 320 }: TrackMapProps) {
         type: "line",
         source: "track",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": accent, "line-width": 3 },
+        paint: { "line-color": accent, "line-width": 4 },
       });
 
       // Start/end markers.
