@@ -86,9 +86,73 @@ impl Db {
         &self.pool
     }
 
+    /// Make a query's `?` placeholders portable: sqlx's `Any` driver does NOT
+    /// translate them, and Postgres requires `$1, $2, …`. SQLite keeps `?`.
+    /// Our SQL never contains a literal `?`, so a positional rewrite is safe.
+    fn p(&self, sql: &str) -> String {
+        if self.backend != Backend::Postgres {
+            return sql.to_string();
+        }
+        let mut out = String::with_capacity(sql.len() + 8);
+        let mut n = 0u32;
+        for ch in sql.chars() {
+            if ch == '?' {
+                n += 1;
+                out.push('$');
+                out.push_str(&n.to_string());
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
     /// Run embedded migrations. Portable SQL → same result on both engines.
     pub async fn run_migrations(&self) -> Result<()> {
         MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// On Postgres, prepare for TimescaleDB. **Non-destructive and non-fatal.**
+    /// * SQLite → no-op.
+    /// * plain Postgres → no-op.
+    /// * Postgres + TimescaleDB → enable the extension.
+    ///
+    /// The `wellness_samples` **hypertable is deliberately deferred to the
+    /// wellness-streaming phase (Phase 4).** Reason (verified against
+    /// timescale/timescaledb pg16): our portable schema stores `ts` as RFC3339
+    /// **TEXT** (so the same SQL serves SQLite and Postgres), but a hypertable
+    /// must partition on a **native** timestamp column — and TimescaleDB will
+    /// **not** accept a `BEFORE INSERT` trigger to populate that partition column
+    /// (the partition value must come from the INSERT itself; a trigger leaves it
+    /// NULL → "Columns used for time partitioning cannot be NULL"). A GENERATED
+    /// column is also rejected (the text→timestamptz cast isn't immutable).
+    /// So the hypertable lands when the wellness write-path is built and can
+    /// provide a native `ts` (a Postgres-specific column type for that table),
+    /// rather than mutating the portable schema into a state where inserts break.
+    pub async fn apply_timescale(&self) -> Result<()> {
+        if self.backend != Backend::Postgres {
+            return Ok(());
+        }
+        let available = sqlx::query("SELECT 1 AS x FROM pg_available_extensions WHERE name = 'timescaledb'")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if !available {
+            tracing::info!("timescaledb not available; wellness_samples stays a plain table");
+            return Ok(());
+        }
+        if let Err(e) = sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(error = %e, "could not enable timescaledb extension");
+        }
+        tracing::info!(
+            "timescaledb available; wellness hypertable deferred to the wellness-streaming phase (needs native ts)"
+        );
         Ok(())
     }
 
@@ -96,10 +160,8 @@ impl Db {
 
     /// Insert a [`Source`].
     pub async fn insert_source(&self, s: &Source) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO sources (id, kind, name, manufacturer, default_priority, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
+        sqlx::query(&self.p("INSERT INTO sources (id, kind, name, manufacturer, default_priority, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?)"))
         .bind(s.id.to_string())
         .bind(serde_plain(&s.kind))
         .bind(&s.name)
@@ -113,7 +175,7 @@ impl Db {
 
     /// Fetch a source's name by id, if present.
     pub async fn get_source_name(&self, id: uuid::Uuid) -> Result<Option<String>> {
-        let row: Option<AnyRow> = sqlx::query("SELECT name FROM sources WHERE id = ?")
+        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT name FROM sources WHERE id = ?"))
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -123,11 +185,9 @@ impl Db {
     /// Insert a [`RawRecording`]. Relies on the unique hash index for exact
     /// dedup; callers can treat a unique-violation as "already ingested".
     pub async fn insert_recording(&self, r: &RawRecording) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO raw_recordings \
+        sqlx::query(&self.p("INSERT INTO raw_recordings \
              (id, source_id, content_hash, sport, started_at, ended_at, metadata, ingested_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"))
         .bind(r.id.to_string())
         .bind(r.source_id.to_string())
         .bind(r.content_hash.as_str())
@@ -144,10 +204,8 @@ impl Db {
     /// Insert a continuous [`WellnessSample`] (the high-rate streaming path).
     /// In a real stream this would be batched; kept single-row here for clarity.
     pub async fn insert_wellness_sample(&self, w: &WellnessSample) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
-             VALUES (?, ?, ?, ?, ?)",
-        )
+        sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
+             VALUES (?, ?, ?, ?, ?)"))
         .bind(w.id.to_string())
         .bind(w.source_id.to_string())
         .bind(serde_plain(&w.kind))
@@ -160,7 +218,7 @@ impl Db {
 
     /// Count wellness samples (smoke-test helper / trend cardinality).
     pub async fn count_wellness_samples(&self) -> Result<i64> {
-        let row: AnyRow = sqlx::query("SELECT COUNT(*) AS n FROM wellness_samples")
+        let row: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM wellness_samples"))
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get::<i64, _>("n"))
@@ -179,13 +237,11 @@ impl Db {
         from: Option<&str>,
         to: Option<&str>,
     ) -> Result<Vec<WellnessSample>> {
-        let rows = sqlx::query(
-            "SELECT id, source_id, kind, value, ts FROM wellness_samples \
+        let rows = sqlx::query(&self.p("SELECT id, source_id, kind, value, ts FROM wellness_samples \
              WHERE kind = ? \
                AND (? IS NULL OR ts >= ?) \
                AND (? IS NULL OR ts <= ?) \
-             ORDER BY ts ASC",
-        )
+             ORDER BY ts ASC"))
         .bind(serde_plain(&kind))
         .bind(from)
         .bind(from)
@@ -202,7 +258,7 @@ impl Db {
     /// exact-dedup check the import pipeline runs before persisting).
     pub async fn recording_exists_by_hash(&self, content_hash: &str) -> Result<bool> {
         let row: Option<AnyRow> =
-            sqlx::query("SELECT 1 AS one FROM raw_recordings WHERE content_hash = ? LIMIT 1")
+            sqlx::query(&self.p("SELECT 1 AS one FROM raw_recordings WHERE content_hash = ? LIMIT 1"))
                 .bind(content_hash)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -212,7 +268,7 @@ impl Db {
     /// Look up an existing recording id by its content hash, if present.
     pub async fn recording_id_by_hash(&self, content_hash: &str) -> Result<Option<Uuid>> {
         let row: Option<AnyRow> =
-            sqlx::query("SELECT id FROM raw_recordings WHERE content_hash = ? LIMIT 1")
+            sqlx::query(&self.p("SELECT id FROM raw_recordings WHERE content_hash = ? LIMIT 1"))
                 .bind(content_hash)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -221,7 +277,7 @@ impl Db {
 
     /// Count raw recordings (verification helper).
     pub async fn count_recordings(&self) -> Result<i64> {
-        let row: AnyRow = sqlx::query("SELECT COUNT(*) AS n FROM raw_recordings")
+        let row: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM raw_recordings"))
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get::<i64, _>("n"))
@@ -234,10 +290,8 @@ impl Db {
         kind: SourceKind,
         name: &str,
     ) -> Result<Option<Source>> {
-        let row: Option<AnyRow> = sqlx::query(
-            "SELECT id, kind, name, manufacturer, default_priority, created_at \
-             FROM sources WHERE kind = ? AND name = ? LIMIT 1",
-        )
+        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT id, kind, name, manufacturer, default_priority, created_at \
+             FROM sources WHERE kind = ? AND name = ? LIMIT 1"))
         .bind(serde_plain(&kind))
         .bind(name)
         .fetch_optional(&self.pool)
@@ -247,10 +301,8 @@ impl Db {
 
     /// List all sources, ordered by descending default priority then name.
     pub async fn list_sources(&self) -> Result<Vec<Source>> {
-        let rows = sqlx::query(
-            "SELECT id, kind, name, manufacturer, default_priority, created_at \
-             FROM sources ORDER BY default_priority DESC, name ASC",
-        )
+        let rows = sqlx::query(&self.p("SELECT id, kind, name, manufacturer, default_priority, created_at \
+             FROM sources ORDER BY default_priority DESC, name ASC"))
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(row_to_source).collect()
@@ -260,10 +312,8 @@ impl Db {
     pub async fn insert_stream(&self, s: &Stream) -> Result<()> {
         let samples_json = serde_json::to_string(&s.samples)
             .map_err(|e| DbError::Config(format!("encode stream samples: {e}")))?;
-        sqlx::query(
-            "INSERT INTO streams (id, recording_id, kind, sample_count, samples) \
-             VALUES (?, ?, ?, ?, ?)",
-        )
+        sqlx::query(&self.p("INSERT INTO streams (id, recording_id, kind, sample_count, samples) \
+             VALUES (?, ?, ?, ?, ?)"))
         .bind(s.id.to_string())
         .bind(s.recording_id.to_string())
         .bind(serde_plain(&s.kind))
@@ -284,10 +334,8 @@ impl Db {
 
     /// Fetch all streams for a recording (samples decoded from the JSON blob).
     pub async fn streams_for_recording(&self, recording_id: Uuid) -> Result<Vec<Stream>> {
-        let rows = sqlx::query(
-            "SELECT id, recording_id, kind, samples FROM streams \
-             WHERE recording_id = ? ORDER BY kind ASC",
-        )
+        let rows = sqlx::query(&self.p("SELECT id, recording_id, kind, samples FROM streams \
+             WHERE recording_id = ? ORDER BY kind ASC"))
         .bind(recording_id.to_string())
         .fetch_all(&self.pool)
         .await?;
@@ -300,10 +348,8 @@ impl Db {
     pub async fn upsert_activity(&self, a: &Activity) -> Result<()> {
         // Portable upsert without ON CONFLICT dialect differences: try UPDATE,
         // INSERT if nothing was updated.
-        let updated = sqlx::query(
-            "UPDATE activities SET sport = ?, started_at = ?, ended_at = ?, \
-             user_confirmed = ? WHERE id = ?",
-        )
+        let updated = sqlx::query(&self.p("UPDATE activities SET sport = ?, started_at = ?, ended_at = ?, \
+             user_confirmed = ? WHERE id = ?"))
         .bind(serde_plain(&a.sport))
         .bind(a.started_at.to_rfc3339())
         .bind(a.ended_at.to_rfc3339())
@@ -312,10 +358,8 @@ impl Db {
         .execute(&self.pool)
         .await?;
         if updated.rows_affected() == 0 {
-            sqlx::query(
-                "INSERT INTO activities (id, sport, started_at, ended_at, user_confirmed, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
-            )
+            sqlx::query(&self.p("INSERT INTO activities (id, sport, started_at, ended_at, user_confirmed, created_at) \
+                 VALUES (?, ?, ?, ?, ?, ?)"))
             .bind(a.id.to_string())
             .bind(serde_plain(&a.sport))
             .bind(a.started_at.to_rfc3339())
@@ -335,14 +379,12 @@ impl Db {
         activity_id: Uuid,
         recording_ids: &[Uuid],
     ) -> Result<()> {
-        sqlx::query("DELETE FROM activity_recordings WHERE activity_id = ?")
+        sqlx::query(&self.p("DELETE FROM activity_recordings WHERE activity_id = ?"))
             .bind(activity_id.to_string())
             .execute(&self.pool)
             .await?;
         for rid in recording_ids {
-            sqlx::query(
-                "INSERT INTO activity_recordings (activity_id, recording_id) VALUES (?, ?)",
-            )
+            sqlx::query(&self.p("INSERT INTO activity_recordings (activity_id, recording_id) VALUES (?, ?)"))
             .bind(activity_id.to_string())
             .bind(rid.to_string())
             .execute(&self.pool)
@@ -355,11 +397,11 @@ impl Db {
     /// [`RawRecording`]s and their [`Stream`]s are **not** touched (raw data is
     /// never lost); only the grouping is removed.
     pub async fn delete_activity(&self, activity_id: Uuid) -> Result<()> {
-        sqlx::query("DELETE FROM activity_recordings WHERE activity_id = ?")
+        sqlx::query(&self.p("DELETE FROM activity_recordings WHERE activity_id = ?"))
             .bind(activity_id.to_string())
             .execute(&self.pool)
             .await?;
-        sqlx::query("DELETE FROM activities WHERE id = ?")
+        sqlx::query(&self.p("DELETE FROM activities WHERE id = ?"))
             .bind(activity_id.to_string())
             .execute(&self.pool)
             .await?;
@@ -443,7 +485,7 @@ impl Db {
 
     /// Count activities (verification helper).
     pub async fn count_activities(&self) -> Result<i64> {
-        let row: AnyRow = sqlx::query("SELECT COUNT(*) AS n FROM activities")
+        let row: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM activities"))
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get::<i64, _>("n"))
@@ -451,10 +493,8 @@ impl Db {
 
     /// List activities (header rows), most recent first.
     pub async fn list_activities(&self) -> Result<Vec<Activity>> {
-        let rows = sqlx::query(
-            "SELECT id, sport, started_at, ended_at, user_confirmed, created_at \
-             FROM activities ORDER BY started_at DESC",
-        )
+        let rows = sqlx::query(&self.p("SELECT id, sport, started_at, ended_at, user_confirmed, created_at \
+             FROM activities ORDER BY started_at DESC"))
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
@@ -467,10 +507,8 @@ impl Db {
 
     /// Fetch one activity with its recording membership populated, if present.
     pub async fn get_activity(&self, id: Uuid) -> Result<Option<Activity>> {
-        let row: Option<AnyRow> = sqlx::query(
-            "SELECT id, sport, started_at, ended_at, user_confirmed, created_at \
-             FROM activities WHERE id = ?",
-        )
+        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT id, sport, started_at, ended_at, user_confirmed, created_at \
+             FROM activities WHERE id = ?"))
         .bind(id.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -482,9 +520,7 @@ impl Db {
 
     /// Recording ids belonging to an activity.
     pub async fn recording_ids_for_activity(&self, activity_id: Uuid) -> Result<Vec<Uuid>> {
-        let rows = sqlx::query(
-            "SELECT recording_id FROM activity_recordings WHERE activity_id = ?",
-        )
+        let rows = sqlx::query(&self.p("SELECT recording_id FROM activity_recordings WHERE activity_id = ?"))
         .bind(activity_id.to_string())
         .fetch_all(&self.pool)
         .await?;
@@ -495,10 +531,8 @@ impl Db {
 
     /// Fetch one raw recording by id, if present.
     pub async fn get_recording(&self, id: Uuid) -> Result<Option<RawRecording>> {
-        let row: Option<AnyRow> = sqlx::query(
-            "SELECT id, source_id, content_hash, sport, started_at, ended_at, metadata, ingested_at \
-             FROM raw_recordings WHERE id = ?",
-        )
+        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT id, source_id, content_hash, sport, started_at, ended_at, metadata, ingested_at \
+             FROM raw_recordings WHERE id = ?"))
         .bind(id.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -507,10 +541,8 @@ impl Db {
 
     /// All raw recordings (used by the dedup pipeline to re-cluster on import).
     pub async fn list_recordings(&self) -> Result<Vec<RawRecording>> {
-        let rows = sqlx::query(
-            "SELECT id, source_id, content_hash, sport, started_at, ended_at, metadata, ingested_at \
-             FROM raw_recordings ORDER BY started_at ASC",
-        )
+        let rows = sqlx::query(&self.p("SELECT id, source_id, content_hash, sport, started_at, ended_at, metadata, ingested_at \
+             FROM raw_recordings ORDER BY started_at ASC"))
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(row_to_recording).collect()
@@ -532,11 +564,9 @@ impl Db {
 
     /// Insert a [`MetricSourcePreference`].
     pub async fn insert_preference(&self, p: &MetricSourcePreference) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO metric_source_preferences \
+        sqlx::query(&self.p("INSERT INTO metric_source_preferences \
              (id, metric, scope, activity_id, source_id, retroactive, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
+             VALUES (?, ?, ?, ?, ?, ?, ?)"))
         .bind(p.id.to_string())
         .bind(serde_plain(&p.metric))
         .bind(serde_plain(&p.scope))
@@ -551,10 +581,8 @@ impl Db {
 
     /// List all preferences (defaults + overrides).
     pub async fn list_preferences(&self) -> Result<Vec<MetricSourcePreference>> {
-        let rows = sqlx::query(
-            "SELECT id, metric, scope, activity_id, source_id, retroactive, updated_at \
-             FROM metric_source_preferences",
-        )
+        let rows = sqlx::query(&self.p("SELECT id, metric, scope, activity_id, source_id, retroactive, updated_at \
+             FROM metric_source_preferences"))
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(row_to_preference).collect()
@@ -566,11 +594,9 @@ impl Db {
         &self,
         activity_id: Uuid,
     ) -> Result<Vec<MetricSourcePreference>> {
-        let rows = sqlx::query(
-            "SELECT id, metric, scope, activity_id, source_id, retroactive, updated_at \
+        let rows = sqlx::query(&self.p("SELECT id, metric, scope, activity_id, source_id, retroactive, updated_at \
              FROM metric_source_preferences \
-             WHERE scope = 'default' OR activity_id = ?",
-        )
+             WHERE scope = 'default' OR activity_id = ?"))
         .bind(activity_id.to_string())
         .fetch_all(&self.pool)
         .await?;

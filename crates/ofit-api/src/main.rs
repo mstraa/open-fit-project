@@ -119,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("connecting to database…");
     let db = Db::connect(&database_url).await?;
     db.run_migrations().await?;
+    db.apply_timescale().await?; // no-op unless Postgres + TimescaleDB
     tracing::info!(backend = ?db.backend(), "database ready, migrations applied");
 
     let state = AppState {
