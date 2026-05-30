@@ -1,0 +1,13 @@
+[package]
+name = "ofit-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ofit-core.workspace = true
+ofit-db.workspace = true
+fitparser.workspace = true
+anyhow.workspace = true
+sha2.workspace = true
+tracing.workspace = true

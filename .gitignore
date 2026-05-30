@@ -1,0 +1,10 @@
+/target
+**/target
+Cargo.lock
+node_modules
+web/dist
+*.db
+*.db-*
+.env
+.DS_Store
+data/

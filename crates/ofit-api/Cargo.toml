@@ -1,0 +1,28 @@
+[package]
+name = "ofit-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ofit-api"
+path = "src/main.rs"
+
+[dependencies]
+ofit-core.workspace = true
+ofit-db.workspace = true
+ofit-ingest.workspace = true
+ofit-analytics.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+uuid.workspace = true

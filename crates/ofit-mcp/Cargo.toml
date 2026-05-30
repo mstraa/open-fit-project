@@ -1,0 +1,10 @@
+[package]
+name = "ofit-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ofit-core.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

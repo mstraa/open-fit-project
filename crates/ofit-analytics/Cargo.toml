@@ -1,0 +1,11 @@
+[package]
+name = "ofit-analytics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ofit-core.workspace = true
+ofit-db.workspace = true
+ofit-plugins.workspace = true
+anyhow.workspace = true
