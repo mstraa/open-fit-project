@@ -30,6 +30,8 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const res = await fetch(url, {
+    // Send/receive the session cookie (cross-origin in the dev split).
+    credentials: "include",
     headers: { Accept: "application/json", ...(init?.headers ?? {}) },
     ...init,
   });

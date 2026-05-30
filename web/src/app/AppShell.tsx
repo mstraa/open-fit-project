@@ -11,6 +11,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useHealth } from "../hooks/useHealth";
 import { useActivities } from "../hooks/useActivities";
+import { useAuth } from "../auth/AuthProvider";
 import {
   ActivitiesIcon,
   AlgorithmsIcon,
@@ -36,6 +37,13 @@ export interface AppShellProps extends TopbarProps {
 
 /** The system-section algorithm count is static (no backend yet) — Phase 4+. */
 const ALGORITHM_COUNT = 7;
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "··";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 export function AppShell({ title, crumb, actions, children }: AppShellProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -84,6 +92,7 @@ export function AppShell({ title, crumb, actions, children }: AppShellProps) {
 function Rail({ open }: { open: boolean }) {
   const health = useHealth();
   const { activities } = useActivities();
+  const { username, logout } = useAuth();
   const activityBadge = activities.length > 0 ? String(activities.length) : undefined;
 
   return (
@@ -114,12 +123,34 @@ function Rail({ open }: { open: boolean }) {
 
       <div className="rail__foot">
         <div className="userchip">
-          <div className="userchip__av">AC</div>
-          <div style={{ flex: 1 }}>
-            <div className="userchip__name">Alex C.</div>
-            <div className="userchip__meta">Local · 192.168.1.29</div>
+          <div className="userchip__av">{initials(username)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="userchip__name">{username || "Local user"}</div>
+            <div className="userchip__meta">self-hosted · local</div>
           </div>
-          <HealthDot health={health} />
+          {username ? (
+            <button
+              type="button"
+              onClick={() => void logout()}
+              title="Log out"
+              aria-label="Log out"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--muted)",
+                cursor: "pointer",
+                display: "grid",
+                placeItems: "center",
+                padding: 4,
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+                <path d="M16 17l5-5-5-5M21 12H9M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          ) : (
+            <HealthDot health={health} />
+          )}
         </div>
       </div>
     </aside>

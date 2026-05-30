@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { ThemeProvider } from "./theme/ThemeProvider";
+import { AuthProvider } from "./auth/AuthProvider";
 import { App } from "./App";
 // app.css = canonical design system (defines --bg/--surface/--accent/--hr…).
 // tokens.css = legacy --color-*/--space-*/--radius-* bridge → design tokens.
@@ -16,7 +17,9 @@ createRoot(rootEl).render(
   <StrictMode>
     <ThemeProvider>
       <BrowserRouter>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </BrowserRouter>
     </ThemeProvider>
   </StrictMode>,
