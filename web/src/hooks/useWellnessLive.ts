@@ -23,8 +23,11 @@ export interface WellnessLive {
 const MAX_BUFFER = 120;
 
 function wsUrl(): string {
-  // http(s)://host → ws(s)://host, same path under /api.
-  return `${API_BASE.replace(/^http/, "ws")}/api/wellness/live`;
+  // Absolute API base → ws(s) of the same host. Relative (same-origin) → build
+  // from the page origin so vite's WS proxy (dev) / ofit-api (prod) handles it.
+  if (API_BASE) return `${API_BASE.replace(/^http/, "ws")}/api/wellness/live`;
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/api/wellness/live`;
 }
 
 export function useWellnessLive(): WellnessLive {

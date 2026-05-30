@@ -14,9 +14,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Proxy backend routes to ofit-api (axum) during `npm run dev`.
+      // Proxy backend routes to ofit-api (axum) during `npm run dev` so the app
+      // is SAME-ORIGIN (session cookies + the live WebSocket work without CORS).
       "/health": "http://localhost:8087",
-      "/api": "http://localhost:8087",
+      "/api": { target: "http://localhost:8087", ws: true },
       "/api-docs": "http://localhost:8087",
     },
   },

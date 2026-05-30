@@ -8,12 +8,13 @@ import type { HealthDto } from "./schema";
 
 /**
  * Base URL of the ofit-api backend.
- * Read from Vite env (`VITE_API_BASE`), defaulting to the local dev server.
- * During `npm run dev` an empty/relative base also works because vite.config.ts
- * proxies /health, /api and /api-docs to ofit-api.
+ * Defaults to **relative** (same-origin): in `npm run dev` vite proxies /health,
+ * /api and /api-docs (incl. the WebSocket) to ofit-api, and in production the app
+ * is served by ofit-api itself — both same-origin, so session cookies + the live
+ * WS work without CORS. Set `VITE_API_BASE` only when the web is served from a
+ * different origin than the API.
  */
-export const API_BASE: string =
-  import.meta.env.VITE_API_BASE ?? "http://localhost:8087";
+export const API_BASE: string = import.meta.env.VITE_API_BASE ?? "";
 
 export class ApiError extends Error {
   constructor(
