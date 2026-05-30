@@ -55,6 +55,13 @@ fn kind_key(kind: StreamKind) -> u8 {
         StreamKind::Wind => 6,
         StreamKind::Temperature => 7,
         StreamKind::Distance => 8,
+        StreamKind::VerticalOscillation => 9,
+        StreamKind::GroundContactTime => 10,
+        StreamKind::StrideLength => 11,
+        StreamKind::VerticalRatio => 12,
+        StreamKind::FormPower => 13,
+        StreamKind::AirPower => 14,
+        StreamKind::LegSpringStiffness => 15,
     }
 }
 

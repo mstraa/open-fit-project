@@ -42,13 +42,54 @@ use crate::stream::{Stream, StreamKind};
 /// Pure: no IDs are persisted, `Activity`s get fresh `Uuid`s. The caller
 /// (import pipeline) reconciles these against the DB.
 pub fn cluster_recordings(recordings: &[RawRecording]) -> Vec<Activity> {
-    let mut order: Vec<&RawRecording> = recordings.iter().collect();
+    cluster_recordings_respecting(recordings, &[])
+}
+
+/// Like [`cluster_recordings`], but **respects user-confirmed groupings**.
+///
+/// `locked` are activities the user has explicitly curated (a manual merge or
+/// split, [`Activity::user_confirmed`] == `true`). Their membership is treated
+/// as fixed: those activities are emitted verbatim (with their existing ids and
+/// recordings), and any recording that belongs to a locked activity is **never**
+/// re-clustered — so re-running clustering after a manual split does not silently
+/// merge the recordings back together.
+///
+/// Recordings not claimed by any locked activity are clustered normally
+/// (single-linkage, sport + time overlap) and, crucially, are **not** allowed to
+/// join a locked activity either — locked groupings are closed sets. The result
+/// is the locked activities followed by the freshly clustered ones, in
+/// deterministic order.
+pub fn cluster_recordings_respecting(
+    recordings: &[RawRecording],
+    locked: &[Activity],
+) -> Vec<Activity> {
+    use std::collections::BTreeSet;
+
+    // Recording ids already owned by a user-confirmed activity are off-limits.
+    let claimed: BTreeSet<Uuid> = locked
+        .iter()
+        .flat_map(|a| a.recording_ids.iter().copied())
+        .collect();
+
+    // Emit the locked activities verbatim (preserve id + confirmed membership).
+    let mut activities: Vec<Activity> = locked.to_vec();
+
+    let mut order: Vec<&RawRecording> = recordings
+        .iter()
+        .filter(|r| !claimed.contains(&r.id))
+        .collect();
     order.sort_by(|a, b| a.started_at.cmp(&b.started_at).then(a.id.cmp(&b.id)));
 
-    let mut activities: Vec<Activity> = Vec::new();
+    // Cluster only the free recordings amongst themselves; never let them join a
+    // locked activity (those are closed). We track how many free activities we've
+    // appended so the locked ones stay untouched.
+    let locked_len = activities.len();
     for rec in order {
-        // Join the first activity that accepts this recording (single-linkage).
-        if let Some(act) = activities.iter_mut().find(|a| a.accepts(rec)) {
+        if let Some(act) = activities
+            .iter_mut()
+            .skip(locked_len)
+            .find(|a| a.accepts(rec))
+        {
             // Same sport guaranteed by `accepts`, so this cannot error.
             let _ = act.add_recording(rec);
         } else {
@@ -56,6 +97,58 @@ pub fn cluster_recordings(recordings: &[RawRecording]) -> Vec<Activity> {
         }
     }
     activities
+}
+
+/// Detach `recording_id` from `activity`, returning the *split off* recording as
+/// its own fresh single-recording [`Activity`].
+///
+/// This is the durable manual-split primitive (PLAN.md: "fusion/split manuel").
+/// Both the trimmed original and the new single-recording activity are marked
+/// [`Activity::user_confirmed`] so subsequent clustering
+/// ([`cluster_recordings_respecting`]) will not merge them back together.
+///
+/// Returns `None` when the recording is not a member of `activity`, or when it
+/// is the *only* recording (removing it would leave an empty activity — the
+/// caller should treat that as a no-op / error rather than orphan data).
+///
+/// The recording's [`RawRecording`] row and its [`Stream`]s are untouched; only
+/// the activity grouping changes (the raw data is never lost).
+pub fn detach_recording(activity: &Activity, recording_id: Uuid) -> Option<DetachResult> {
+    if !activity.recording_ids.contains(&recording_id) {
+        return None;
+    }
+    if activity.recording_ids.len() <= 1 {
+        return None;
+    }
+
+    let mut remaining = activity.clone();
+    remaining.recording_ids.retain(|&r| r != recording_id);
+    remaining.user_confirmed = true;
+
+    let detached = Activity {
+        id: Uuid::new_v4(),
+        sport: activity.sport,
+        // Window is recomputed by the caller from the recording's own times if
+        // desired; default to the original window, which the caller narrows.
+        started_at: activity.started_at,
+        ended_at: activity.ended_at,
+        recording_ids: vec![recording_id],
+        user_confirmed: true,
+        created_at: chrono::Utc::now(),
+    };
+
+    Some(DetachResult { remaining, detached })
+}
+
+/// Outcome of [`detach_recording`]: the trimmed original activity and the new
+/// single-recording activity that now owns the removed recording. Both are
+/// `user_confirmed` so the split is durable across re-imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachResult {
+    /// The original activity with the recording removed (now user-confirmed).
+    pub remaining: Activity,
+    /// A fresh single-recording activity owning the detached recording.
+    pub detached: Activity,
 }
 
 /// The resolved canonical view of an activity: the winning source per metric
@@ -281,6 +374,65 @@ mod tests {
         assert_eq!(run.recording_ids.len(), 3);
         let ride = acts.iter().find(|a| a.sport == Sport::Cycling).unwrap();
         assert_eq!(ride.recording_ids.len(), 1);
+    }
+
+    #[test]
+    fn detach_splits_into_own_confirmed_activity() {
+        // Two overlapping running recordings → one activity → detach one →
+        // a 2-recording (well, 1) remaining + 1 detached, both user_confirmed.
+        let r1 = rec(1, Sport::Running, 0, 30);
+        let r2 = rec(2, Sport::Running, 10, 30);
+        let mut act = Activity::from_recording(&r1);
+        act.add_recording(&r2).unwrap();
+        assert_eq!(act.recording_ids.len(), 2);
+
+        let res = detach_recording(&act, r2.id).expect("detach a member");
+        assert_eq!(res.remaining.recording_ids, vec![r1.id]);
+        assert_eq!(res.detached.recording_ids, vec![r2.id]);
+        assert!(res.remaining.user_confirmed);
+        assert!(res.detached.user_confirmed);
+        assert_eq!(res.remaining.id, act.id, "original id preserved");
+        assert_ne!(res.detached.id, act.id, "detached gets a fresh id");
+
+        // Guard: detaching the last/only recording is a no-op.
+        assert!(detach_recording(&res.detached, r2.id).is_none());
+        // Guard: detaching a non-member is a no-op.
+        assert!(detach_recording(&act, Uuid::from_u128(999)).is_none());
+    }
+
+    #[test]
+    fn reclustering_respects_user_confirmed_split() {
+        // The two overlapping run recordings would normally merge into 1
+        // activity. After a manual split (2 user-confirmed activities), running
+        // clustering again must KEEP them split.
+        let r1 = rec(1, Sport::Running, 0, 30);
+        let r2 = rec(2, Sport::Running, 10, 30);
+
+        // Plain clustering merges them.
+        assert_eq!(cluster_recordings(&[r1.clone(), r2.clone()]).len(), 1);
+
+        // Manual split → two locked single-recording activities.
+        let mut act = Activity::from_recording(&r1);
+        act.add_recording(&r2).unwrap();
+        let res = detach_recording(&act, r2.id).unwrap();
+        let locked = vec![res.remaining.clone(), res.detached.clone()];
+
+        // Re-clustering while respecting the locked groupings keeps 2 activities.
+        let out = cluster_recordings_respecting(&[r1.clone(), r2.clone()], &locked);
+        assert_eq!(out.len(), 2, "user-confirmed split survives re-clustering");
+        // Each locked activity is emitted verbatim with a single recording.
+        for a in &out {
+            assert_eq!(a.recording_ids.len(), 1);
+            assert!(a.user_confirmed);
+        }
+
+        // A genuinely new, overlapping recording does NOT get pulled into a
+        // locked activity; it forms its own free activity.
+        let r3 = rec(3, Sport::Running, 5, 30);
+        let out = cluster_recordings_respecting(&[r1, r2, r3.clone()], &locked);
+        assert_eq!(out.len(), 3, "new recording stays out of locked groupings");
+        let free = out.iter().find(|a| a.recording_ids.contains(&r3.id)).unwrap();
+        assert_eq!(free.recording_ids, vec![r3.id]);
     }
 
     #[test]

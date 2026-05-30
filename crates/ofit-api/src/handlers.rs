@@ -165,6 +165,74 @@ pub async fn get_activity(
     State(state): State<AppState>,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ActivityDetail>, ApiError> {
+    let detail = build_activity_detail(&state, id).await?;
+    Ok(Json(detail))
+}
+
+/// `DELETE /api/activities/{id}/recordings/{recording_id}` — remove (detach) a
+/// recording from an activity.
+///
+/// The recording is **not** deleted: it is split into its own new
+/// single-recording activity (a durable manual split). Both the trimmed
+/// original and the new activity are marked `user_confirmed`, so re-importing or
+/// re-running clustering will not auto-merge them back
+/// ([`ofit_db::Db::detach_recording_from_activity`]).
+///
+/// On success returns **200** with the *updated* (re-resolved) detail of the
+/// activity the recording was removed from — so the remove UI can refresh
+/// in place (the per-metric source view is recomputed, since one contributing
+/// source is now gone). The newly created activity id is also returned.
+///
+/// Guards (return **400**, no-op): the recording is not a member of the
+/// activity, or it is the activity's *only* recording (removing it would leave
+/// an empty activity).
+#[utoipa::path(
+    delete, path = "/api/activities/{id}/recordings/{recording_id}",
+    params(
+        ("id" = uuid::Uuid, Path, description = "activity id"),
+        ("recording_id" = uuid::Uuid, Path, description = "recording to detach"),
+    ),
+    responses(
+        (status = 200, body = RemoveRecordingResponse),
+        (status = 400, description = "recording is not a member, or is the only recording"),
+        (status = 404, description = "activity not found"),
+    )
+)]
+pub async fn remove_recording(
+    State(state): State<AppState>,
+    Path((id, recording_id)): Path<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<RemoveRecordingResponse>, ApiError> {
+    // 404 if the activity does not exist at all (distinct from the 400 guards).
+    if state.db.get_activity(id).await.map_err(internal)?.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "activity not found"));
+    }
+
+    let detached_activity_id = match state
+        .db
+        .detach_recording_from_activity(id, recording_id)
+        .await
+    {
+        Ok(new_id) => new_id,
+        // Domain guards (not-a-member / only-recording) → 400 no-op.
+        Err(ofit_db::DbError::Conflict(msg)) => return Err(err(StatusCode::BAD_REQUEST, msg)),
+        Err(e) => return Err(internal(e)),
+    };
+
+    // Re-resolve and return the updated detail of the original activity (a source
+    // is now gone, so the per-metric resolution may change).
+    let activity = build_activity_detail(&state, id).await?;
+    Ok(Json(RemoveRecordingResponse {
+        activity,
+        detached_activity_id,
+    }))
+}
+
+/// Build the full [`ActivityDetail`] (recordings + re-resolved per-metric view)
+/// for one activity. Shared by `GET /activities/{id}` and the remove endpoint.
+async fn build_activity_detail(
+    state: &AppState,
+    id: uuid::Uuid,
+) -> Result<ActivityDetail, ApiError> {
     let db = &state.db;
     let activity = db
         .get_activity(id)
@@ -263,7 +331,7 @@ pub async fn get_activity(
         }
     }
 
-    Ok(Json(ActivityDetail {
+    Ok(ActivityDetail {
         id: activity.id,
         sport: activity.sport,
         started_at: activity.started_at,
@@ -273,7 +341,7 @@ pub async fn get_activity(
         resolved_metrics,
         track,
         track_source_id,
-    }))
+    })
 }
 
 /// `GET /api/preferences` — list all preferences (defaults + overrides).

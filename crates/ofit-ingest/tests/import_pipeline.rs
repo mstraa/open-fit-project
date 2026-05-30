@@ -1,9 +1,11 @@
-//! Phase-1 fil rouge: import all 6 /test-data files into a fresh SQLite db and
+//! Phase-1 fil rouge: import all /test-data files into a fresh SQLite db and
 //! assert the dedup/fusion invariants.
 //!
-//! The 6 files are 2 efforts (run + ride) in 3 formats each. They must collapse
-//! to exactly 2 activities (1 Running with 3 recordings, 1 Cycling with 3),
-//! and re-importing a file must be a no-op (exact-hash dedup).
+//! The files are 2 efforts: one RUN recorded by several devices/formats (Stryd
+//! FIT + Zepp FIT/GPX/TCX) and one bike RIDE (Garmin FIT/GPX/TCX). They must
+//! collapse to exactly 2 activities (1 Running, 1 Cycling), and re-importing a
+//! file must be a no-op (exact-hash dedup). The run mixes two real devices
+//! (Garmin Forerunner 945 via Stryd export + Zepp) → distinct sources.
 
 use std::path::{Path, PathBuf};
 
@@ -20,16 +22,17 @@ fn test_data_dir() -> PathBuf {
 }
 
 const FILES: &[&str] = &[
-    "long-run.fit",
-    "long-run.gpx",
-    "long-run.tcx",
-    "velo.fit",
-    "velo.gpx",
-    "velo.tcx",
+    "RUN001-Stryd-export.fit",
+    "RUN001-Zepp-App-Export.fit",
+    "RUN001-Zepp-App-Export.gpx",
+    "RUN001-Zepp-App-Export.tcx",
+    "BIKE001-Garmin-Forerunner-945-Garmin-Connect-export.fit",
+    "BIKE001-Garmin-Forerunner-945-Garmin-Connect-export.gpx",
+    "BIKE001-Garmin-Forerunner-945-Garmin-Connect-export.tcx",
 ];
 
 #[tokio::test]
-async fn imports_six_files_into_two_activities_with_exact_dedup() {
+async fn imports_files_into_two_activities_with_exact_dedup() {
     let dir = test_data_dir();
 
     // Fresh on-disk SQLite in a temp dir (the pool opens several connections, so
@@ -49,15 +52,16 @@ async fn imports_six_files_into_two_activities_with_exact_dedup() {
         );
     }
 
-    // 6 raw recordings persisted.
-    assert_eq!(db.count_recordings().await.unwrap(), 6, "raw_recordings");
+    let n_files = FILES.len() as i64;
+    // All raw recordings persisted (one per file).
+    assert_eq!(db.count_recordings().await.unwrap(), n_files, "raw_recordings");
 
     // Exactly 2 activities.
     let activities = db.list_activities().await.unwrap();
     assert_eq!(activities.len(), 2, "activities");
     assert_eq!(db.count_activities().await.unwrap(), 2);
 
-    // 1 Running w/ 3 recordings, 1 Cycling w/ 3 recordings.
+    // 1 Running (4 recordings: Stryd FIT + Zepp FIT/GPX/TCX), 1 Cycling (3).
     let run = activities
         .iter()
         .find(|a| a.sport == Sport::Running)
@@ -66,8 +70,20 @@ async fn imports_six_files_into_two_activities_with_exact_dedup() {
         .iter()
         .find(|a| a.sport == Sport::Cycling)
         .expect("a cycling activity");
-    assert_eq!(run.recording_ids.len(), 3, "running recordings");
+    assert_eq!(run.recording_ids.len(), 4, "running recordings");
     assert_eq!(ride.recording_ids.len(), 3, "cycling recordings");
+
+    // The run mixes two distinct real devices → ≥2 sources for the run.
+    let sources = db.list_sources().await.unwrap();
+    let names: std::collections::BTreeSet<_> = sources.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains("Garmin Forerunner 945"),
+        "expected a Garmin Forerunner 945 source, got {names:?}"
+    );
+    assert!(
+        names.contains("Zepp"),
+        "expected a Zepp source, got {names:?}"
+    );
 
     // Re-importing every file is a no-op (exact-hash dedup), counts unchanged.
     for f in FILES {
@@ -77,7 +93,7 @@ async fn imports_six_files_into_two_activities_with_exact_dedup() {
             "{f} re-import should dedup, got {outcome:?}"
         );
     }
-    assert_eq!(db.count_recordings().await.unwrap(), 6, "no dup recordings");
+    assert_eq!(db.count_recordings().await.unwrap(), n_files, "no dup recordings");
     assert_eq!(db.count_activities().await.unwrap(), 2, "no dup activities");
 
     // Resolved canonical view works end-to-end: with no preferences, each metric

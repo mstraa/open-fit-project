@@ -54,6 +54,14 @@
   --radius-sm: var(--r-sm);
   --radius-md: var(--r);
   --shadow-1: none;
+
+  /* --- extra per-metric colors for the running-dynamics channels ---
+   * On-brand additions (the design ships --hr/--power/--pace/--cadence/
+   * --elev/--cal/--temp); distinct hues so each dynamics chart reads apart. */
+  --metric-gct:    oklch(70% 0.130 320);  /* ground contact — magenta */
+  --metric-stride: oklch(72% 0.130 190);  /* stride length — teal */
+  --metric-vratio: oklch(74% 0.120 110);  /* vertical ratio — lime */
+  --metric-lss:    oklch(70% 0.150 40);   /* leg spring stiffness — rust */
 }
 
 /* The design body rules live in app.css; keep #root full-height for the shell. */

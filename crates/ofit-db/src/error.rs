@@ -16,6 +16,11 @@ pub enum DbError {
     /// Configuration / setup problem (e.g. cannot create SQLite dir).
     #[error("config error: {0}")]
     Config(String),
+
+    /// A domain guard was violated (e.g. detaching the only recording of an
+    /// activity, or a not-found target). Callers map this to a 4xx, not a 500.
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
 
 /// Convenience result alias for DB operations.

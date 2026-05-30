@@ -161,6 +161,20 @@ pub struct ActivityDetail {
     pub track_source_id: Option<Uuid>,
 }
 
+/// Response of `DELETE /api/activities/{id}/recordings/{recording_id}`.
+///
+/// Carries the re-resolved detail of the activity the recording was removed
+/// from (so the UI refreshes in place) plus the id of the new single-recording
+/// activity the detached recording now lives in.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RemoveRecordingResponse {
+    /// The updated (re-resolved) activity the recording was removed from.
+    pub activity: ActivityDetail,
+    /// Id of the new single-recording activity that now owns the detached
+    /// recording (the durable manual split).
+    pub detached_activity_id: Uuid,
+}
+
 /// Scope a preference applies to (mirrors `ofit_core::PreferenceScope`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

@@ -33,6 +33,86 @@ pub enum StreamKind {
     Temperature,
     /// Distance (m, cumulative).
     Distance,
+    /// Vertical oscillation (mm) — running dynamics (Stryd / Garmin).
+    VerticalOscillation,
+    /// Ground contact time / stance time (ms) — running dynamics.
+    GroundContactTime,
+    /// Stride / step length (mm) — running dynamics.
+    StrideLength,
+    /// Vertical ratio (%) — vertical oscillation as a fraction of step length.
+    VerticalRatio,
+    /// Form power (watts) — Stryd: power "wasted" on vertical/braking motion.
+    FormPower,
+    /// Air power (watts) — Stryd: power spent overcoming air resistance (wind).
+    AirPower,
+    /// Leg spring stiffness (kN/m) — Stryd running dynamics.
+    LegSpringStiffness,
+}
+
+impl StreamKind {
+    /// Every variant, in declaration order. Handy for catalogs/iteration.
+    pub const ALL: [StreamKind; 16] = [
+        StreamKind::HeartRate,
+        StreamKind::Power,
+        StreamKind::Cadence,
+        StreamKind::Speed,
+        StreamKind::Altitude,
+        StreamKind::LatLng,
+        StreamKind::Wind,
+        StreamKind::Temperature,
+        StreamKind::Distance,
+        StreamKind::VerticalOscillation,
+        StreamKind::GroundContactTime,
+        StreamKind::StrideLength,
+        StreamKind::VerticalRatio,
+        StreamKind::FormPower,
+        StreamKind::AirPower,
+        StreamKind::LegSpringStiffness,
+    ];
+
+    /// Canonical unit string for the scalar values this kind carries.
+    ///
+    /// [`StreamKind::LatLng`] has no scalar unit (it carries paired degrees) and
+    /// returns an empty string. These units are the contract the API/web rely on
+    /// for axis labels — the ingest parsers scale raw values to match them.
+    pub fn unit(self) -> &'static str {
+        match self {
+            StreamKind::HeartRate => "bpm",
+            StreamKind::Power | StreamKind::FormPower | StreamKind::AirPower => "W",
+            StreamKind::Cadence => "rpm",
+            StreamKind::Speed | StreamKind::Wind => "m/s",
+            StreamKind::Altitude => "m",
+            StreamKind::LatLng => "",
+            StreamKind::Temperature => "°C",
+            StreamKind::Distance => "m",
+            StreamKind::VerticalOscillation | StreamKind::StrideLength => "mm",
+            StreamKind::GroundContactTime => "ms",
+            StreamKind::VerticalRatio => "%",
+            StreamKind::LegSpringStiffness => "kN/m",
+        }
+    }
+
+    /// Short human label for this kind (English; the web may localize/override).
+    pub fn label(self) -> &'static str {
+        match self {
+            StreamKind::HeartRate => "Heart rate",
+            StreamKind::Power => "Power",
+            StreamKind::Cadence => "Cadence",
+            StreamKind::Speed => "Speed",
+            StreamKind::Altitude => "Altitude",
+            StreamKind::LatLng => "Position",
+            StreamKind::Wind => "Wind",
+            StreamKind::Temperature => "Temperature",
+            StreamKind::Distance => "Distance",
+            StreamKind::VerticalOscillation => "Vertical oscillation",
+            StreamKind::GroundContactTime => "Ground contact time",
+            StreamKind::StrideLength => "Stride length",
+            StreamKind::VerticalRatio => "Vertical ratio",
+            StreamKind::FormPower => "Form power",
+            StreamKind::AirPower => "Air power",
+            StreamKind::LegSpringStiffness => "Leg spring stiffness",
+        }
+    }
 }
 
 /// A single time-stamped sample. `t_offset_ms` is milliseconds since the parent

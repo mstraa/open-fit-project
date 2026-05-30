@@ -37,16 +37,23 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
     let mut b = RecordingBuilder::new(name);
     b.meta("parser", "gpx + quick-xml (gpxtpx extensions)");
     if let Some(creator) = gpx.creator.clone() {
+        if let Some(m) = crate::manufacturer_from_device(&creator) {
+            b.meta("manufacturer", m);
+        }
         b.meta("device", creator);
     }
 
-    // Sport from the first track's <type>, if present.
+    // Sport from the first track's <type>, if present. Some GPX exports (e.g.
+    // the Zepp App export) omit the track `<type>` entirely; as a last resort we
+    // infer the sport from filename keywords so the recording can still cluster
+    // with its sibling FIT/TCX of the same effort (which DO declare the sport).
     let sport = gpx
         .tracks
         .iter()
         .find_map(|t| t.type_.as_deref())
         .map(sport_from_str)
-        .unwrap_or(Sport::Other);
+        .filter(|s| *s != Sport::Other)
+        .unwrap_or_else(|| crate::sport_from_filename(name));
     b.set_sport(sport);
 
     let mut idx = 0usize;

@@ -28,7 +28,7 @@
 
 use std::path::Path;
 
-use ofit_core::{cluster_recordings, Activity, RawRecording, Source, SourceKind};
+use ofit_core::{cluster_recordings_respecting, Activity, RawRecording, Source, SourceKind};
 use ofit_db::Db;
 use uuid::Uuid;
 
@@ -143,7 +143,15 @@ async fn ensure_source(db: &Db, rec: &RawRecording) -> Result<Source, ofit_db::D
     if let Some(existing) = db.find_source_by_identity(kind, &name).await? {
         return Ok(existing);
     }
-    let source = Source::new(kind, name, priority);
+    let mut source = Source::new(kind, name, priority);
+    // Carry the parser-derived manufacturer (Garmin / Stryd / Z…) when present.
+    source.manufacturer = rec
+        .metadata
+        .get("manufacturer")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     db.insert_source(&source).await?;
     Ok(source)
 }
@@ -158,17 +166,40 @@ async fn ensure_source(db: &Db, rec: &RawRecording) -> Result<Source, ofit_db::D
 /// rewritten to match the recluster result.
 async fn recluster_and_persist(db: &Db, target_recording: Uuid) -> Result<Uuid, ofit_db::DbError> {
     let recordings = db.list_recordings().await?;
-    let clusters = cluster_recordings(&recordings);
 
     // Existing activities (id + their current members) to reconcile against.
     let existing = db.list_activities().await?;
 
+    // User-confirmed groupings are LOCKED: a manual merge/split must survive
+    // re-imports. We pass them to the clustering as fixed sets so their
+    // recordings are never re-merged (and new recordings never join them).
+    let locked: Vec<Activity> = existing
+        .iter()
+        .filter(|a| a.user_confirmed)
+        .cloned()
+        .collect();
+    let clusters = cluster_recordings_respecting(&recordings, &locked);
+
     let mut target_activity: Option<Uuid> = None;
     for cluster in &clusters {
-        // Reuse an existing activity id if any of this cluster's recordings is
-        // already a member of it (single-linkage means at most one matches).
+        // Locked activities are emitted verbatim with their real ids already;
+        // persist them as-is (no reuse-matching needed).
+        if cluster.user_confirmed {
+            db.upsert_activity(cluster).await?;
+            db.set_activity_recordings(cluster.id, &cluster.recording_ids)
+                .await?;
+            if cluster.recording_ids.contains(&target_recording) {
+                target_activity = Some(cluster.id);
+            }
+            continue;
+        }
+        // Reuse an existing (non-locked) activity id if any of this cluster's
+        // recordings is already a member of it (single-linkage means at most one
+        // matches). Locked activities are handled above and must not be reused
+        // here, so their ids stay stable.
         let reuse_id = existing
             .iter()
+            .filter(|a| !a.user_confirmed)
             .find(|a| {
                 a.recording_ids
                     .iter()

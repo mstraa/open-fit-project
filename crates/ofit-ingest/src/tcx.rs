@@ -138,6 +138,9 @@ fn parse_inner(b: &mut RecordingBuilder, bytes: &[u8]) -> Result<(), quick_xml::
     }
 
     if let Some(c) = creator {
+        if let Some(m) = crate::manufacturer_from_device(&c) {
+            b.meta("manufacturer", m);
+        }
         b.meta("device", c);
     }
     Ok(())

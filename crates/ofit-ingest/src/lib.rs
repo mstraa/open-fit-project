@@ -229,7 +229,50 @@ pub(crate) fn sport_from_str(raw: &str) -> Sport {
     }
 }
 
+/// Last-resort sport inference from filename keywords (e.g. `RUN001…` →
+/// [`Sport::Running`]). Used only when a format carries no sport metadata, so a
+/// recording can still cluster with siblings of the same effort.
+pub(crate) fn sport_from_filename(name: &str) -> Sport {
+    let f = name.to_ascii_lowercase();
+    if f.contains("run") {
+        Sport::Running
+    } else if f.contains("bike") || f.contains("cycl") || f.contains("ride") || f.contains("velo") {
+        Sport::Cycling
+    } else if f.contains("swim") {
+        Sport::Swimming
+    } else if f.contains("walk") || f.contains("hike") {
+        Sport::Walking
+    } else {
+        Sport::Other
+    }
+}
+
 /// Helper shared by parsers: milliseconds from `start` to `ts`, clamped to >= 0.
 pub(crate) fn offset_ms(start: DateTime<Utc>, ts: DateTime<Utc>) -> i64 {
     (ts - start).num_milliseconds().max(0)
+}
+
+/// Best-effort manufacturer label inferred from a free-form device/creator
+/// string (GPX `creator`, TCX `Creator`/`Author`). Returns `None` when nothing
+/// recognizable matches, so we never invent a vendor.
+pub(crate) fn manufacturer_from_device(device: &str) -> Option<String> {
+    let d = device.to_ascii_lowercase();
+    if d.contains("garmin") || d.contains("forerunner") || d.contains("fenix") || d.contains("edge")
+    {
+        Some("Garmin".to_string())
+    } else if d.contains("zepp") || d.contains("amazfit") || d.contains("huami") {
+        Some("Zepp / Amazfit (Huami)".to_string())
+    } else if d.contains("stryd") {
+        Some("Stryd".to_string())
+    } else if d.contains("wahoo") {
+        Some("Wahoo".to_string())
+    } else if d.contains("polar") {
+        Some("Polar".to_string())
+    } else if d.contains("coros") {
+        Some("Coros".to_string())
+    } else if d.contains("suunto") {
+        Some("Suunto".to_string())
+    } else {
+        None
+    }
 }

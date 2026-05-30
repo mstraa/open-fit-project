@@ -14,6 +14,7 @@ import type {
   LatLngSample,
   MetricSourcePreference,
   RecordingInfo,
+  RemoveRecordingResponse,
   ResolvedMetric,
   ScalarSample,
   Source,
@@ -133,8 +134,9 @@ function normalizeResolvedMetric(kind: StreamKind, raw: unknown): ResolvedMetric
   return out;
 }
 
-export async function getActivity(id: string): Promise<ActivityDetail> {
-  const raw = await apiFetch<unknown>(`/api/activities/${encodeURIComponent(id)}`);
+/** Normalize a raw activity-detail payload (GET /api/activities/{id} or the
+ * `activity` field of the remove-recording response) into the view model. */
+function normalizeActivityDetail(raw: unknown, fallbackId: string): ActivityDetail {
   const o = (raw ?? {}) as Record<string, unknown>;
 
   const recordingsRaw = (pick(o, "recordings") as unknown[]) ?? [];
@@ -192,7 +194,7 @@ export async function getActivity(id: string): Promise<ActivityDetail> {
   }
 
   return {
-    id: str(pick(o, "id")) || id,
+    id: str(pick(o, "id")) || fallbackId,
     sport: (str(pick(o, "sport"), "other") as ActivityDetail["sport"]),
     started_at: startedAt || undefined,
     ended_at: endedAt || undefined,
@@ -200,6 +202,36 @@ export async function getActivity(id: string): Promise<ActivityDetail> {
     recordings,
     resolved,
     preferences,
+  };
+}
+
+export async function getActivity(id: string): Promise<ActivityDetail> {
+  const raw = await apiFetch<unknown>(`/api/activities/${encodeURIComponent(id)}`);
+  return normalizeActivityDetail(raw, id);
+}
+
+/**
+ * DELETE /api/activities/{id}/recordings/{recording_id} — durable manual split.
+ * Detaches one recording (a single device's contribution) into its own new
+ * single-recording activity; returns the re-resolved trimmed original plus the
+ * id of the detached activity. Both ends are marked user_confirmed server-side,
+ * so re-import / re-clustering will not merge them back.
+ *
+ * Errors: 400 (not a member, or the activity's only recording — no-op),
+ * 404 (activity not found). These surface as thrown errors from apiSend.
+ */
+export async function removeRecording(
+  activityId: string,
+  recordingId: string,
+): Promise<RemoveRecordingResponse> {
+  const raw = await apiSend<unknown>(
+    `/api/activities/${encodeURIComponent(activityId)}/recordings/${encodeURIComponent(recordingId)}`,
+    "DELETE",
+  );
+  const o = (raw ?? {}) as Record<string, unknown>;
+  return {
+    activity: normalizeActivityDetail(pick(o, "activity"), activityId),
+    detached_activity_id: str(pick(o, "detached_activity_id", "detached_id")),
   };
 }
 

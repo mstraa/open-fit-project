@@ -52,12 +52,15 @@ export async function apiPostForm<T>(
   return apiFetch<T>(path, { method: "POST", body: form, headers: {} });
 }
 
-/** Send a JSON body with the right Content-Type. */
+/** Send a request with an optional JSON body and the right Content-Type. */
 export async function apiSend<T>(
   path: string,
   method: "POST" | "PUT" | "PATCH" | "DELETE",
-  body: unknown,
+  body?: unknown,
 ): Promise<T> {
+  if (body === undefined) {
+    return apiFetch<T>(path, { method });
+  }
   return apiFetch<T>(path, {
     method,
     headers: { "Content-Type": "application/json" },

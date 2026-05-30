@@ -14,11 +14,17 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AppShell } from "../app/AppShell";
-import { getActivity, listSources, putPreference } from "../api/endpoints";
+import {
+  getActivity,
+  listSources,
+  putPreference,
+  removeRecording,
+} from "../api/endpoints";
 import type {
   ActivityDetail,
   ScalarSample,
   Source,
+  Sport,
   StreamKind,
 } from "../api/types";
 import { LineChart } from "../charts/LineChart";
@@ -26,8 +32,20 @@ import { TrackMap } from "../charts/TrackMap";
 import { valueAtMs } from "../charts/series";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { EmptyState } from "../ui/EmptyState";
-import { Seg } from "../ui/Seg";
-import { CHART_METRICS, formatDuration, metricLabel } from "../ui/format";
+import {
+  METRIC_ORDER,
+  DEFAULT_VISIBLE,
+  formatDuration,
+  formatPace,
+  metricLabel,
+  metricMeta,
+  speedLabel,
+  speedModeFor,
+  speedToMode,
+  speedUnit,
+  type MetricMeta,
+  type SpeedMode,
+} from "../ui/format";
 import "./WorkoutDetail.css";
 
 /* ----------------------------------------------------------------- helpers */
@@ -107,13 +125,85 @@ function PinIcon() {
   );
 }
 
-const SUMMARY_UNIT: Partial<Record<StreamKind, string>> = {
-  heart_rate: "bpm",
-  power: "W",
-  cadence: "spm",
-  speed: "m/s",
-  altitude: "m",
-};
+function FusionIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+      <circle cx="8" cy="8" r="4" />
+      <circle cx="16" cy="16" r="4" />
+      <path d="M11 11l2 2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} aria-hidden>
+      <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
+ * Sport-aware presentation for one resolved metric: label, unit, a per-sample
+ * value transform (raw m/s → pace s/km or km/h for `speed`), and optional
+ * chart formatters (min:ss pace axis, inverted so faster sits higher).
+ * Everything except `speed` passes through unchanged.
+ */
+interface MetricPresentation {
+  meta: MetricMeta;
+  label: string;
+  unit: string;
+  /** Transform raw resolved samples into display samples. */
+  transform: (samples: ScalarSample[] | undefined) => ScalarSample[];
+  valueFormat?: (v: number) => string;
+  yAxisFormat?: (v: number) => string;
+  invertY?: boolean;
+  /** Format an average (already in display units) for the summary tile. */
+  formatAvg: (v: number) => string;
+}
+
+const identity = (s: ScalarSample[] | undefined): ScalarSample[] => s ?? [];
+
+function presentMetric(meta: MetricMeta, sport: Sport | undefined): MetricPresentation {
+  if (meta.kind === "speed") {
+    const mode: SpeedMode = speedModeFor(sport);
+    const unit = speedUnit(mode);
+    const label = speedLabel(mode);
+    const transform = (samples: ScalarSample[] | undefined): ScalarSample[] =>
+      (samples ?? []).map((s) => ({
+        t_offset_ms: s.t_offset_ms,
+        value: speedToMode(s.value, mode),
+      }));
+    if (mode === "pace") {
+      return {
+        meta,
+        label,
+        unit,
+        transform,
+        valueFormat: (v) => `${formatPace(v)} ${unit}`,
+        yAxisFormat: (v) => formatPace(v),
+        invertY: true,
+        formatAvg: (v) => formatPace(v),
+      };
+    }
+    return {
+      meta,
+      label,
+      unit,
+      transform,
+      valueFormat: (v) => `${v.toFixed(1)} ${unit}`,
+      formatAvg: (v) => v.toFixed(1),
+    };
+  }
+  return {
+    meta,
+    label: meta.label,
+    unit: meta.unit,
+    transform: identity,
+    valueFormat: (v) => `${v.toFixed(0)} ${meta.unit}`,
+    formatAvg: (v) => v.toFixed(meta.kind === "leg_spring_stiffness" ? 1 : 0),
+  };
+}
 
 /* ------------------------------------------------------------------ screen */
 
@@ -121,7 +211,6 @@ export function WorkoutDetail() {
   const { id = "" } = useParams();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [sources, setSources] = useState<Source[]>([]);
-  const [metricView, setMetricView] = useState<"all" | StreamKind>("all");
 
   const load = useCallback(() => {
     if (!id) return;
@@ -185,6 +274,25 @@ export function WorkoutDetail() {
     [id, load],
   );
 
+  // Remove (detach) a recording from this activity, then refetch so charts and
+  // sources re-resolve. The detached recording lives on in its own activity.
+  const onRemoveRecording = useCallback(
+    async (recordingId: string) => {
+      const res = await removeRecording(id, recordingId);
+      // Re-resolved trimmed original comes back in the response; reuse it
+      // directly so the view updates without an extra round-trip, then refresh
+      // sources (a source may no longer back any metric here).
+      setState({ kind: "ok", detail: res.activity });
+      listSources()
+        .then(setSources)
+        .catch(() => {});
+    },
+    [id],
+  );
+
+  // The fusion / sources panel is hidden by default behind this toggle.
+  const [showFusion, setShowFusion] = useState(false);
+
   // Topbar bits. ActivityDetail has no sport/name field, so the crumb shows the
   // activity id; the in-page header derives a label below.
   const crumb = <>Activities / {id ? id.slice(0, 8) : "—"}</>;
@@ -194,10 +302,21 @@ export function WorkoutDetail() {
       title="Activity detail"
       crumb={crumb}
       actions={
-        <Link to="/activities" className="btn btn--ghost">
-          <BackIcon />
-          Back to activities
-        </Link>
+        <>
+          <button
+            type="button"
+            className={showFusion ? "btn" : "btn btn--ghost"}
+            aria-pressed={showFusion}
+            onClick={() => setShowFusion((v) => !v)}
+          >
+            <FusionIcon />
+            Sources &amp; fusion
+          </button>
+          <Link to="/activities" className="btn btn--ghost">
+            <BackIcon />
+            Back to activities
+          </Link>
+        </>
       }
     >
       {state.kind === "loading" && <EmptyState label="Loading activity…" icon={<span />} />}
@@ -213,12 +332,12 @@ export function WorkoutDetail() {
       {state.kind === "ok" && (
         <DetailBody
           detail={state.detail}
-          metricView={metricView}
-          onMetricView={setMetricView}
+          showFusion={showFusion}
           candidatesByMetric={candidatesByMetric}
           sourceName={sourceName}
           srcClassFor={(sid) => srcClass(sourceName(sid))}
           onPick={onPick}
+          onRemoveRecording={onRemoveRecording}
         />
       )}
     </AppShell>
@@ -229,22 +348,23 @@ export function WorkoutDetail() {
 
 function DetailBody({
   detail,
-  metricView,
-  onMetricView,
+  showFusion,
   candidatesByMetric,
   sourceName,
   srcClassFor,
   onPick,
+  onRemoveRecording,
 }: {
   detail: ActivityDetail;
-  metricView: "all" | StreamKind;
-  onMetricView: (v: "all" | StreamKind) => void;
+  showFusion: boolean;
   candidatesByMetric: Map<StreamKind, Source[]>;
   sourceName: (id: string | undefined) => string;
   srcClassFor: (id: string | undefined) => string;
   onPick: (metric: StreamKind, sourceId: string) => Promise<void>;
+  onRemoveRecording: (recordingId: string) => Promise<void>;
 }) {
   const track = detail.resolved.lat_lng?.track ?? [];
+  const sport = detail.sport ?? "other";
 
   // Synced graph↔map cursor (ms since start).
   const [hoverMs, setHoverMs] = useState<number | null>(null);
@@ -257,39 +377,76 @@ function DetailBody({
     return track.map((p) => valueAtMs(speed, p.t_offset_ms) ?? 0);
   }, [detail, track]);
 
-  const scalarMetrics = CHART_METRICS.filter(
-    (m) => (detail.resolved[m.kind]?.samples?.length ?? 0) > 0,
-  );
+  // EVERY resolved scalar metric the API returns (lat_lng excluded — it's the
+  // map track), ordered by METRIC_ORDER, with sport-aware presentation.
+  const scalarMetrics = useMemo(() => {
+    const present = (Object.keys(detail.resolved) as StreamKind[])
+      .filter((k) => k !== "lat_lng" && (detail.resolved[k]?.samples?.length ?? 0) > 0);
+    const ordered: MetricPresentation[] = [];
+    for (const k of METRIC_ORDER) {
+      if (present.includes(k)) {
+        const meta = metricMeta(k);
+        if (meta) ordered.push(presentMetric(meta, sport));
+      }
+    }
+    // Unknown future kinds not in METRIC_ORDER → appended via the fallback meta.
+    for (const k of present) {
+      if (!METRIC_ORDER.includes(k as (typeof METRIC_ORDER)[number])) {
+        const meta = metricMeta(k);
+        if (meta) ordered.push(presentMetric(meta, sport));
+      }
+    }
+    return ordered;
+  }, [detail, sport]);
+
+  // Per-metric show/hide. Default to a sane subset; everything else is toggled.
+  const [visible, setVisible] = useState<Set<StreamKind>>(() => new Set());
+  // Initialize/reconcile the visible set whenever the available metrics change.
+  useEffect(() => {
+    setVisible((prev) => {
+      const available = new Set(scalarMetrics.map((m) => m.meta.kind));
+      // Keep prior choices that are still available; if empty (first load),
+      // seed with the default-visible subset intersected with what's present.
+      const next = new Set<StreamKind>();
+      for (const k of prev) if (available.has(k)) next.add(k);
+      if (next.size === 0) {
+        for (const k of DEFAULT_VISIBLE) if (available.has(k)) next.add(k);
+        // If none of the defaults are present, show the first metric.
+        if (next.size === 0 && scalarMetrics[0]) next.add(scalarMetrics[0].meta.kind);
+      }
+      return next;
+    });
+  }, [scalarMetrics]);
+
+  const toggleMetric = useCallback((kind: StreamKind) => {
+    setVisible((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }, []);
+
+  const visibleCharts = scalarMetrics.filter((m) => visible.has(m.meta.kind));
 
   // Approximate total duration from the longest resolved scalar stream.
   const durationSecs = useMemo(() => {
     let maxMs = 0;
-    for (const m of CHART_METRICS) {
-      const ss = detail.resolved[m.kind]?.samples;
+    for (const m of scalarMetrics) {
+      const ss = detail.resolved[m.meta.kind]?.samples;
       if (ss && ss.length) maxMs = Math.max(maxMs, ss[ss.length - 1].t_offset_ms);
     }
     if (track.length) maxMs = Math.max(maxMs, track[track.length - 1].t_offset_ms);
     return Math.round(maxMs / 1000);
-  }, [detail, track]);
+  }, [detail, track, scalarMetrics]);
 
   const recordingCount = detail.recordings.length;
-  const sport = detail.sport ?? "other";
 
-  // Metrics that get a fusion-picker row: any resolved metric with >1 candidate
-  // (or any candidate at all, so the user can confirm the active source).
+  // Metrics that get a fusion-picker row: any resolved metric with a candidate
+  // source (so the user can confirm/flip the active source).
   const pickerMetrics = (Object.keys(detail.resolved) as StreamKind[]).filter(
-    (k) => (candidatesByMetric.get(k)?.length ?? 0) > 0,
+    (k) => k !== "lat_lng" && (candidatesByMetric.get(k)?.length ?? 0) > 0,
   );
-
-  const visibleCharts =
-    metricView === "all"
-      ? scalarMetrics
-      : scalarMetrics.filter((m) => m.kind === metricView);
-
-  const segOptions = [
-    { value: "all" as const, label: "All" },
-    ...scalarMetrics.map((m) => ({ value: m.kind, label: m.label })),
-  ];
 
   return (
     <>
@@ -317,17 +474,19 @@ function DetailBody({
       <div className="summary">
         <SummaryTile label="Duration" value={durationSecs > 0 ? formatDuration(durationSecs) : "—"} />
         <SummaryTile label="Recordings" value={String(recordingCount)} suffix=" merged" />
-        {scalarMetrics.map((m) => {
-          const resolved = detail.resolved[m.kind];
-          const a = avg(resolved?.samples);
+        {scalarMetrics.map((p) => {
+          const resolved = detail.resolved[p.meta.kind];
+          // Average is computed on the DISPLAY-transformed samples so pace/kmh
+          // tiles read correctly (e.g. average pace, not average m/s).
+          const a = avg(p.transform(resolved?.samples));
           const sid = resolved?.source_id;
           const name = sourceName(sid);
           return (
-            <div key={m.kind}>
-              <div className="lbl">Avg {m.label}</div>
+            <div key={p.meta.kind}>
+              <div className="lbl">Avg {p.label}</div>
               <div className="val">
-                {a == null ? "—" : a.toFixed(0)}
-                <small> {SUMMARY_UNIT[m.kind] ?? m.unit}</small>
+                {a == null ? "—" : p.formatAvg(a)}
+                <small> {p.unit}</small>
               </div>
               {sid ? (
                 <span className={`src ${srcClassFor(sid)}`} style={{ marginTop: 7 }}>
@@ -390,76 +549,89 @@ function DetailBody({
               <div className="card__title">
                 Metrics<span className="sub">over time</span>
               </div>
-              {scalarMetrics.length > 0 ? (
-                <div className="card__tools">
-                  <Seg<"all" | StreamKind>
-                    options={segOptions}
-                    value={metricView}
-                    onChange={onMetricView}
-                    aria-label="Metric"
-                  />
-                </div>
-              ) : null}
             </div>
 
             {scalarMetrics.length > 0 ? (
               <>
-                <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                  {visibleCharts.map((m) => {
-                    const resolved = detail.resolved[m.kind];
+                {/* show/hide chips — one per resolved scalar metric */}
+                <div className="metric-chips" role="group" aria-label="Show or hide metrics">
+                  {scalarMetrics.map((p) => {
+                    const on = visible.has(p.meta.kind);
                     return (
-                      <div key={m.kind}>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            marginBottom: 6,
-                            fontSize: 12,
-                            fontWeight: 600,
-                          }}
-                        >
-                          <i
-                            aria-hidden
-                            style={{
-                              width: 9,
-                              height: 9,
-                              borderRadius: 3,
-                              background: m.color,
-                              display: "inline-block",
-                            }}
-                          />
-                          {m.label}
-                          <span className="muted" style={{ fontWeight: 500 }}>
-                            · {sourceName(resolved?.source_id)}
-                          </span>
-                        </div>
-                        <LineChart
-                          samples={resolved?.samples ?? []}
-                          stroke={m.color}
-                          unit={SUMMARY_UNIT[m.kind] ?? m.unit}
-                          label={m.label}
-                          height={150}
-                          syncKey="wd-cursor"
-                          onHover={setHoverMs}
-                        />
-                      </div>
+                      <button
+                        key={p.meta.kind}
+                        type="button"
+                        className={`metric-chip${on ? " is-on" : ""}`}
+                        aria-pressed={on}
+                        onClick={() => toggleMetric(p.meta.kind)}
+                      >
+                        <i aria-hidden style={{ background: p.meta.color }} />
+                        {p.label}
+                      </button>
                     );
                   })}
                 </div>
-                <div className="legend" style={{ marginTop: 12, justifyContent: "center" }}>
-                  {scalarMetrics.map((m) => (
-                    <i key={m.kind}>
-                      <b style={{ background: m.color }} />
-                      {m.label} · {sourceName(detail.resolved[m.kind]?.source_id)}
-                    </i>
-                  ))}
-                </div>
+
+                {visibleCharts.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                    {visibleCharts.map((p) => {
+                      const resolved = detail.resolved[p.meta.kind];
+                      const samples = p.transform(resolved?.samples);
+                      return (
+                        <div key={p.meta.kind}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              marginBottom: 6,
+                              fontSize: 12,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <i
+                              aria-hidden
+                              style={{
+                                width: 9,
+                                height: 9,
+                                borderRadius: 3,
+                                background: p.meta.color,
+                                display: "inline-block",
+                              }}
+                            />
+                            {p.label}
+                            <span className="muted" style={{ fontWeight: 500 }}>
+                              · {sourceName(resolved?.source_id)}
+                            </span>
+                          </div>
+                          <LineChart
+                            samples={samples}
+                            stroke={p.meta.color}
+                            unit={p.unit}
+                            label={p.label}
+                            valueFormat={p.valueFormat}
+                            yAxisFormat={p.yAxisFormat}
+                            invertY={p.invertY}
+                            height={150}
+                            syncKey="wd-cursor"
+                            onHover={setHoverMs}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <EmptyState
+                    label="No graphs shown"
+                    hint="Use the chips above to show one or more metrics."
+                    compact
+                  />
+                )}
               </>
             ) : (
               <EmptyState
                 label="No metric streams"
-                hint="No resolved scalar streams (HR / power / cadence / speed / altitude) for this activity yet."
+                hint="No resolved scalar streams for this activity yet."
                 compact
               />
             )}
@@ -485,47 +657,66 @@ function DetailBody({
 
         {/* ===================== RIGHT column ===================== */}
         <div className="grid" style={{ gap: "var(--gap)" }}>
-          {/* ===== THE FUSION CORE ===== */}
-          <div className="card" style={{ borderColor: "var(--accent-dim)" }}>
-            <div className="card__head">
-              <div className="card__title">
-                Metric sources<span className="sub">multi-device fusion</span>
+          {/* ===== THE FUSION CORE (hidden behind the topbar toggle) ===== */}
+          {showFusion ? (
+            <div className="card" style={{ borderColor: "var(--accent-dim)" }}>
+              <div className="card__head">
+                <div className="card__title">
+                  Metric sources<span className="sub">multi-device fusion</span>
+                </div>
+                <div className="card__tools">
+                  <span className={recordingCount > 1 ? "pill pill--good" : "pill"}>
+                    {recordingCount} {recordingCount === 1 ? "device" : "devices"}
+                  </span>
+                </div>
               </div>
-              <div className="card__tools">
-                <span className={recordingCount > 1 ? "pill pill--good" : "pill"}>
-                  {recordingCount} {recordingCount === 1 ? "device" : "devices"}
-                </span>
-              </div>
-            </div>
-            <p className="faint" style={{ fontSize: 12, margin: "-6px 0 14px", lineHeight: 1.5 }}>
-              Open Fit keeps every raw stream and resolves the best source <b>per metric</b>. Change
-              any pick below to re-interpret this activity.
-            </p>
+              <p className="faint" style={{ fontSize: 12, margin: "-6px 0 14px", lineHeight: 1.5 }}>
+                Open Fit keeps every raw stream and resolves the best source <b>per metric</b>. Change
+                any pick below to re-interpret this activity.
+              </p>
 
-            {pickerMetrics.length > 0 ? (
-              <div>
-                {pickerMetrics.map((metric) => (
-                  <FusionRow
-                    key={metric}
-                    metric={metric}
-                    color={CHART_METRICS.find((m) => m.kind === metric)?.color ?? "var(--accent)"}
-                    candidates={candidatesByMetric.get(metric) ?? []}
-                    selectedId={detail.resolved[metric]?.source_id}
-                    srcClassFor={srcClassFor}
-                    onPick={onPick}
+              {/* recordings list — show device names + a remove (×) per source */}
+              <div className="rec-list">
+                {detail.recordings.map((rec) => (
+                  <RecordingChip
+                    key={rec.id}
+                    name={rec.source_name}
+                    format={rec.format}
+                    metricCount={rec.stream_kinds.filter((k) => k !== "lat_lng").length}
+                    srcClass={srcClassFor(rec.source_id)}
+                    canRemove={recordingCount > 1}
+                    onRemove={() => onRemoveRecording(rec.id)}
                   />
                 ))}
               </div>
-            ) : (
-              <EmptyState label="No multi-source metrics" compact />
-            )}
 
-            <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "16px 0 0" }} />
-            <p className="faint" style={{ fontSize: 11.5, margin: "12px 0 0", lineHeight: 1.5 }}>
-              Per-activity overrides apply immediately. Default source priority &amp; retroactive
-              re-resolve live in Settings.
-            </p>
-          </div>
+              <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "14px 0" }} />
+
+              {pickerMetrics.length > 0 ? (
+                <div>
+                  {pickerMetrics.map((metric) => (
+                    <FusionRow
+                      key={metric}
+                      metric={metric}
+                      color={metricMeta(metric)?.color ?? "var(--accent)"}
+                      candidates={candidatesByMetric.get(metric) ?? []}
+                      selectedId={detail.resolved[metric]?.source_id}
+                      srcClassFor={srcClassFor}
+                      onPick={onPick}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState label="No multi-source metrics" compact />
+              )}
+
+              <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "16px 0 0" }} />
+              <p className="faint" style={{ fontSize: 11.5, margin: "12px 0 0", lineHeight: 1.5 }}>
+                Per-activity overrides apply immediately. Default source priority &amp; retroactive
+                re-resolve live in Settings.
+              </p>
+            </div>
+          ) : null}
 
           {/* HR zones — needs zone-boundary config + time-in-zone aggregation */}
           <div className="card">
@@ -583,6 +774,69 @@ function SummaryTile({
         {value}
         {suffix ? <small>{suffix}</small> : null}
       </div>
+    </div>
+  );
+}
+
+/** One recording in the activity: device name + metric count + remove (×). */
+function RecordingChip({
+  name,
+  format,
+  metricCount,
+  srcClass,
+  canRemove,
+  onRemove,
+}: {
+  name: string;
+  format: string;
+  metricCount: number;
+  srcClass: string;
+  canRemove: boolean;
+  onRemove: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const remove = async () => {
+    if (busy) return;
+    const ok = window.confirm(
+      `Remove “${name}” from this activity?\n\n` +
+        "Its recording will be detached into its own new activity (no data is lost). " +
+        "This split is durable — re-importing won't merge it back.",
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await onRemove();
+    } catch (e) {
+      window.alert(
+        `Couldn't remove this source: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rec-chip" data-busy={busy ? "1" : undefined}>
+      <span className={`src ${srcClass}`}>
+        <span className="src__dot" />
+        {name}
+      </span>
+      <span className="rec-chip__meta">
+        {format.toUpperCase()} · {metricCount} {metricCount === 1 ? "metric" : "metrics"}
+      </span>
+      {canRemove ? (
+        <button
+          type="button"
+          className="rec-chip__x"
+          aria-label={`Remove ${name} from this activity`}
+          title="Remove source from this activity"
+          disabled={busy}
+          onClick={remove}
+        >
+          <CloseIcon />
+        </button>
+      ) : null}
     </div>
   );
 }

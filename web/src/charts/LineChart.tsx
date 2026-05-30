@@ -32,6 +32,15 @@ export interface LineChartProps {
   syncKey?: string;
   /** Reports the hovered time in ms since start (null on leave). */
   onHover?: (ms: number | null) => void;
+  /**
+   * Optional formatter for a y value in the tooltip/legend (e.g. pace m:ss).
+   * Defaults to a 0-decimal number + unit.
+   */
+  valueFormat?: (v: number) => string;
+  /** Optional formatter for the y-axis tick labels (defaults to integers). */
+  yAxisFormat?: (v: number) => string;
+  /** Invert the y-axis (used for pace so faster/lower sits higher). */
+  invertY?: boolean;
 }
 
 function LineChartImpl({
@@ -42,6 +51,9 @@ function LineChartImpl({
   height = 200,
   syncKey,
   onHover,
+  valueFormat,
+  yAxisFormat,
+  invertY = false,
 }: LineChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
@@ -57,6 +69,9 @@ function LineChartImpl({
     const xs = samples.map((s) => s.t_offset_ms / 1000);
     const ys = samples.map((s) => s.value);
     const data: uPlot.AlignedData = [xs, ys];
+
+    const fmtVal = (v: number) => (valueFormat ? valueFormat(v) : `${v.toFixed(0)} ${unit}`);
+    const fmtAxis = (v: number) => (yAxisFormat ? yAxisFormat(v) : String(Math.round(v)));
 
     const axisColor = resolveCssColor(tokenColor("--color-text-muted", "#888"), "#888");
     const gridColor = resolveCssColor(tokenColor("--color-border", "#ccc"), "#ccc");
@@ -101,7 +116,7 @@ function LineChartImpl({
           } else {
             tip.style.display = "block";
             tip.style.left = `${u.valToPos(xv, "x", false)}px`;
-            tip.textContent = `${yv.toFixed(0)} ${unit}`;
+            tip.textContent = fmtVal(yv);
           }
           if (xv != null) onHoverRef.current?.(xv * 1000);
         },
@@ -119,8 +134,10 @@ function LineChartImpl({
       scales: {
         x: { time: false },
         // Reserve headroom at the top so the value pill on the cursor line sits
-        // above the trace instead of covering it.
+        // above the trace instead of covering it. When inverted (pace), the
+        // axis runs high→low so faster (lower pace) renders higher up.
         y: {
+          dir: invertY ? -1 : 1,
           range: (_u, dataMin, dataMax) => {
             const pad = dataMax - dataMin || 1;
             return [dataMin - pad * 0.08, dataMax + pad * 0.16];
@@ -138,7 +155,11 @@ function LineChartImpl({
               return `${m}:${String(s).padStart(2, "0")}`;
             }),
         },
-        { ...axisStyle, size: 52 },
+        {
+          ...axisStyle,
+          size: 52,
+          values: (_u, vals) => vals.map((v) => fmtAxis(v)),
+        },
       ],
       series: [
         {},
@@ -147,7 +168,7 @@ function LineChartImpl({
           stroke: strokeColor,
           width: 2,
           points: { show: false },
-          value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} ${unit}`),
+          value: (_u, v) => (v == null ? "—" : fmtVal(v)),
         },
       ],
     };
@@ -167,7 +188,7 @@ function LineChartImpl({
       plot.destroy();
       plotRef.current = null;
     };
-  }, [samples, stroke, unit, label, height, theme, syncKey]);
+  }, [samples, stroke, unit, label, height, theme, syncKey, valueFormat, yAxisFormat, invertY]);
 
   // Top margin reserves a strip for the value pill that floats above the plot.
   return <div ref={containerRef} style={{ width: "100%", position: "relative", marginTop: 16 }} />;

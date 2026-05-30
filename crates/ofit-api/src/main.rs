@@ -64,6 +64,7 @@ struct Version {
         handlers::list_sources,
         handlers::list_activities,
         handlers::get_activity,
+        handlers::remove_recording,
         handlers::list_preferences,
         handlers::set_preference,
         handlers::wellness,
@@ -77,6 +78,7 @@ struct Version {
         dto::ActivitySummary,
         dto::ActivityDetail,
         dto::RecordingDto,
+        dto::RemoveRecordingResponse,
         dto::ResolvedScalarMetric,
         dto::ScalarPoint,
         dto::TrackPoint,
@@ -136,6 +138,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/sources", get(handlers::list_sources))
         .route("/activities", get(handlers::list_activities))
         .route("/activities/:id", get(handlers::get_activity))
+        .route(
+            "/activities/:id/recordings/:recording_id",
+            axum::routing::delete(handlers::remove_recording),
+        )
         .route(
             "/preferences",
             get(handlers::list_preferences).put(handlers::set_preference),

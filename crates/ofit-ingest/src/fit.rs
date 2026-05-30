@@ -24,7 +24,7 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
     b.meta("parser", "fitparser");
 
     let mut sport_set = false;
-    let mut device: Option<String> = None;
+    let mut ident = DeviceIdentity::default();
 
     for rec in &records {
         match format!("{:?}", rec.kind()).as_str() {
@@ -35,22 +35,204 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
                     sport_set = true;
                 }
             }
-            "DeviceInfo" if device.is_none() => {
-                // Prefer the named product, fall back to manufacturer.
-                device = field_str(rec, "garmin_product")
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| field_str(rec, "product_name"))
-                    .or_else(|| field_str(rec, "manufacturer"));
-            }
+            // file_id is the authoritative origin of the recording.
+            "FileId" => ident.absorb_file_id(rec),
+            // The "creator" device_info row (device_index="creator") is the
+            // recording device; later rows are attached sensors (HRM, footpod…).
+            "DeviceInfo" => ident.absorb_device_info(rec),
             _ => {}
         }
     }
 
-    if let Some(dev) = device {
-        b.meta("device", dev);
+    let (device, manufacturer) = ident.resolve(name);
+    b.meta("device", device);
+    if let Some(m) = manufacturer {
+        b.meta("manufacturer", m);
     }
 
     Ok(b)
+}
+
+/// Accumulates identity signals from `file_id` + the creator `device_info` row
+/// to derive a human device name and a manufacturer string.
+#[derive(Default)]
+struct DeviceIdentity {
+    manufacturer: Option<String>,
+    garmin_product: Option<String>,
+    product_name: Option<String>,
+    /// Free-form `source` on the creator device_info (e.g. Zepp/Huami host).
+    source: Option<String>,
+}
+
+impl DeviceIdentity {
+    fn absorb_file_id(&mut self, rec: &FitDataRecord) {
+        self.manufacturer
+            .get_or_insert_with(|| field_str(rec, "manufacturer").unwrap_or_default());
+        if let Some(p) = nonempty(field_str(rec, "garmin_product")) {
+            self.garmin_product.get_or_insert(p);
+        }
+        if let Some(p) = nonempty(field_str(rec, "product_name")) {
+            self.product_name.get_or_insert(p);
+        }
+    }
+
+    fn absorb_device_info(&mut self, rec: &FitDataRecord) {
+        // Only the creator row describes the recording device itself.
+        if field_str(rec, "device_index").as_deref() != Some("creator") {
+            return;
+        }
+        if let Some(m) = nonempty(field_str(rec, "manufacturer")) {
+            // Prefer a concrete manufacturer over a placeholder like
+            // "development".
+            if self
+                .manufacturer
+                .as_deref()
+                .map(is_placeholder_manufacturer)
+                .unwrap_or(true)
+            {
+                self.manufacturer = Some(m);
+            }
+        }
+        if let Some(p) = nonempty(field_str(rec, "garmin_product")) {
+            self.garmin_product.get_or_insert(p);
+        }
+        if let Some(p) = nonempty(field_str(rec, "product_name")) {
+            self.product_name.get_or_insert(p);
+        }
+        if let Some(s) = nonempty(field_str(rec, "source")) {
+            self.source.get_or_insert(s);
+        }
+    }
+
+    /// Resolve `(device_name, manufacturer)` from the gathered signals, falling
+    /// back to the filename only as a last resort.
+    fn resolve(&self, filename: &str) -> (String, Option<String>) {
+        let raw_mfr = self.manufacturer.as_deref().unwrap_or("");
+
+        // Zepp/Amazfit (Huami) FITs declare manufacturer "development" but carry
+        // a `source` host like "run.mifit.huami.com" on the creator row.
+        if let Some(src) = &self.source {
+            let s = src.to_ascii_lowercase();
+            if s.contains("huami") || s.contains("mifit") || s.contains("zepp") || s.contains("amazfit")
+            {
+                return ("Zepp".to_string(), Some("Zepp / Amazfit (Huami)".to_string()));
+            }
+        }
+
+        let mfr_name = manufacturer_name(raw_mfr);
+
+        // Garmin: map the product id to a model name where we can.
+        if raw_mfr.eq_ignore_ascii_case("garmin") {
+            if let Some(prod) = &self.garmin_product {
+                if let Some(model) = garmin_product_name(prod) {
+                    return (model.to_string(), Some("Garmin".to_string()));
+                }
+                // Unknown product id but known vendor.
+                return (format!("Garmin ({prod})"), Some("Garmin".to_string()));
+            }
+            return ("Garmin".to_string(), Some("Garmin".to_string()));
+        }
+
+        // Stryd-origin file (rare: a Stryd app export rather than a Garmin one).
+        if raw_mfr.eq_ignore_ascii_case("stryd") {
+            return ("Stryd".to_string(), Some("Stryd".to_string()));
+        }
+
+        // A concrete, non-placeholder manufacturer with a product name.
+        if !is_placeholder_manufacturer(raw_mfr) && !raw_mfr.is_empty() {
+            let name = self
+                .product_name
+                .clone()
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| mfr_name.to_string());
+            return (name, Some(mfr_name.to_string()));
+        }
+
+        // Last resort: derive from the filename keywords.
+        device_from_filename(filename)
+    }
+}
+
+/// Whether a manufacturer string is a placeholder we should look past.
+fn is_placeholder_manufacturer(m: &str) -> bool {
+    matches!(m.to_ascii_lowercase().as_str(), "development" | "dynastream" | "" )
+}
+
+fn nonempty(s: Option<String>) -> Option<String> {
+    s.filter(|s| !s.trim().is_empty())
+}
+
+/// Map a FIT manufacturer string (as decoded by `fitparser`) to a display name.
+fn manufacturer_name(raw: &str) -> &'static str {
+    match raw.to_ascii_lowercase().as_str() {
+        "garmin" => "Garmin",
+        "stryd" => "Stryd",
+        "wahoo_fitness" | "wahoo" => "Wahoo",
+        "polar" | "polar_electro" => "Polar",
+        "coros" => "Coros",
+        "suunto" => "Suunto",
+        "huami" | "zepp" | "amazfit" => "Zepp / Amazfit (Huami)",
+        "" | "development" => "Unknown",
+        // Title-case the unknown vendor token for a friendlier label.
+        other => leaked_titlecase(other),
+    }
+}
+
+/// Title-case an unknown lowercase vendor token into a `'static` string.
+fn leaked_titlecase(s: &str) -> &'static str {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i == 0 {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+    }
+    Box::leak(out.into_boxed_str())
+}
+
+/// Map a Garmin product token (as decoded by `fitparser`, e.g. `"fr945"`) to a
+/// human model name. Covers common Forerunner/Fenix/Edge ids; unknowns return
+/// `None` so the caller keeps the raw token.
+fn garmin_product_name(prod: &str) -> Option<&'static str> {
+    Some(match prod.to_ascii_lowercase().as_str() {
+        "fr945" => "Garmin Forerunner 945",
+        "fr945_lte" => "Garmin Forerunner 945 LTE",
+        "fr955" => "Garmin Forerunner 955",
+        "fr965" => "Garmin Forerunner 965",
+        "fr745" => "Garmin Forerunner 745",
+        "fr935" => "Garmin Forerunner 935",
+        "fr920xt" => "Garmin Forerunner 920XT",
+        "fr245" | "fr245m" => "Garmin Forerunner 245",
+        "fr255" => "Garmin Forerunner 255",
+        "fr265" => "Garmin Forerunner 265",
+        "fenix5" => "Garmin Fenix 5",
+        "fenix5x" => "Garmin Fenix 5X",
+        "fenix6" => "Garmin Fenix 6",
+        "fenix6_pro" => "Garmin Fenix 6 Pro",
+        "fenix7" => "Garmin Fenix 7",
+        "edge_530" => "Garmin Edge 530",
+        "edge_830" => "Garmin Edge 830",
+        "edge_1030" => "Garmin Edge 1030",
+        "vivoactive4" => "Garmin Vivoactive 4",
+        _ => return None,
+    })
+}
+
+/// Last-resort device naming from filename keywords.
+fn device_from_filename(filename: &str) -> (String, Option<String>) {
+    let f = filename.to_ascii_lowercase();
+    if f.contains("stryd") {
+        // A Stryd-labelled export of a Garmin recording is still a Garmin file;
+        // but with no in-file identity we surface the keyword we have.
+        ("Stryd".to_string(), Some("Stryd".to_string()))
+    } else if f.contains("zepp") || f.contains("amazfit") || f.contains("huami") {
+        ("Zepp".to_string(), Some("Zepp / Amazfit (Huami)".to_string()))
+    } else if f.contains("garmin") || f.contains("forerunner") || f.contains("fr945") {
+        ("Garmin Forerunner 945".to_string(), Some("Garmin".to_string()))
+    } else {
+        ("File import (fit)".to_string(), None)
+    }
 }
 
 /// Pull the metrics we care about out of a single `Record` message.
@@ -87,6 +269,53 @@ fn extract_record(b: &mut RecordingBuilder, rec: &FitDataRecord) {
     );
     push(b, rec, ts, StreamKind::Distance, &["distance"]);
     push(b, rec, ts, StreamKind::Temperature, &["temperature"]);
+
+    // --- Running dynamics (Stryd developer fields + native Garmin profile) ---
+    // Field names and units per the discovery dump: Stryd emits human-readable
+    // developer-field names ("Vertical Oscillation" in cm, "Ground Time" in ms,
+    // "Form Power"/"Air Power" in W, "Leg Spring Stiffness" in kN/m); native
+    // Garmin running-dynamics fields use the FIT profile names/scaling.
+
+    // Vertical oscillation → canonical mm. Native `vertical_oscillation` is
+    // already mm; Stryd's "Vertical Oscillation" is cm → ×10.
+    if let Some(v) = field_f64(rec, "vertical_oscillation") {
+        b.push_scalar(StreamKind::VerticalOscillation, ts, v);
+    } else if let Some(cm) = field_f64(rec, "Vertical Oscillation") {
+        b.push_scalar(StreamKind::VerticalOscillation, ts, cm * 10.0);
+    }
+
+    // Ground contact time (ms). Native `stance_time` and Stryd "Ground Time"
+    // are both already milliseconds.
+    push(
+        b,
+        rec,
+        ts,
+        StreamKind::GroundContactTime,
+        &["stance_time", "Ground Time"],
+    );
+
+    // Stride / step length → canonical mm. Native `step_length` is mm; the FIT
+    // `cycle_length16` profile field is metres → ×1000.
+    if let Some(v) = field_f64(rec, "step_length") {
+        b.push_scalar(StreamKind::StrideLength, ts, v);
+    } else if let Some(m) = field_f64(rec, "cycle_length16") {
+        b.push_scalar(StreamKind::StrideLength, ts, m * 1000.0);
+    }
+
+    // Vertical ratio (%) — native Garmin running dynamics (absent from Stryd's
+    // export, present on Garmin native running dynamics).
+    push(b, rec, ts, StreamKind::VerticalRatio, &["vertical_ratio"]);
+
+    // Stryd power decomposition + leg spring stiffness.
+    push(b, rec, ts, StreamKind::FormPower, &["Form Power"]);
+    push(b, rec, ts, StreamKind::AirPower, &["Air Power"]);
+    push(
+        b,
+        rec,
+        ts,
+        StreamKind::LegSpringStiffness,
+        &["Leg Spring Stiffness"],
+    );
 }
 
 /// Push the first present field name from `names` as a scalar for `kind`.

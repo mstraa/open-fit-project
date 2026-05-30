@@ -27,8 +27,8 @@ pub mod wellness;
 
 pub use activity::Activity;
 pub use dedup::{
-    cluster_recordings, resolve_activity_view, ResolvedActivityView, ResolvedMetric,
-    SelectionReason,
+    cluster_recordings, cluster_recordings_respecting, detach_recording, resolve_activity_view,
+    DetachResult, ResolvedActivityView, ResolvedMetric, SelectionReason,
 };
 pub use derived::{DerivedMetric, DerivedStream, DerivedSubject, PluginRef};
 pub use error::{Error, Result};

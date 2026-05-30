@@ -351,6 +351,96 @@ impl Db {
         Ok(())
     }
 
+    /// Delete an activity header row and its membership join rows. The member
+    /// [`RawRecording`]s and their [`Stream`]s are **not** touched (raw data is
+    /// never lost); only the grouping is removed.
+    pub async fn delete_activity(&self, activity_id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM activity_recordings WHERE activity_id = ?")
+            .bind(activity_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM activities WHERE id = ?")
+            .bind(activity_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Detach one recording from an activity into its **own** new
+    /// single-recording activity (a durable manual split).
+    ///
+    /// Implements [`ofit_core::detach_recording`] against the store:
+    /// 1. The recording is removed from `activity`; both the trimmed original
+    ///    and the new single-recording activity are marked `user_confirmed` so
+    ///    re-running clustering (the import pipeline) will not merge them back
+    ///    ([`ofit_core::cluster_recordings_respecting`]).
+    /// 2. The detached activity's window is recomputed from the recording's own
+    ///    `started_at`/`ended_at`; the remaining activity's window is recomputed
+    ///    from its surviving members so both windows stay tight.
+    /// 3. The recording row and its streams are untouched — only the grouping
+    ///    changes.
+    ///
+    /// Returns the id of the new detached activity. Returns
+    /// [`DbError::Conflict`] when the recording is not a member, or when it is
+    /// the activity's only recording (removing it would orphan the data — the
+    /// API surfaces this as a 400 no-op).
+    pub async fn detach_recording_from_activity(
+        &self,
+        activity_id: Uuid,
+        recording_id: Uuid,
+    ) -> Result<Uuid> {
+        let activity = self
+            .get_activity(activity_id)
+            .await?
+            .ok_or_else(|| DbError::Conflict("activity not found".into()))?;
+
+        let mut res = ofit_core::detach_recording(&activity, recording_id).ok_or_else(|| {
+            DbError::Conflict(
+                "recording is not a member, or is the activity's only recording".into(),
+            )
+        })?;
+
+        // Tighten the detached activity's window to the recording it now owns.
+        if let Some(rec) = self.get_recording(recording_id).await? {
+            res.detached.started_at = rec.started_at;
+            res.detached.ended_at = rec.ended_at;
+        }
+
+        // Tighten the remaining activity's window to its surviving members.
+        if let Some((min_start, max_end)) = self.member_window(&res.remaining.recording_ids).await? {
+            res.remaining.started_at = min_start;
+            res.remaining.ended_at = max_end;
+        }
+
+        // Persist both groupings (membership + headers).
+        self.upsert_activity(&res.remaining).await?;
+        self.set_activity_recordings(res.remaining.id, &res.remaining.recording_ids)
+            .await?;
+        self.upsert_activity(&res.detached).await?;
+        self.set_activity_recordings(res.detached.id, &res.detached.recording_ids)
+            .await?;
+
+        Ok(res.detached.id)
+    }
+
+    /// Compute the `[min(started_at), max(ended_at)]` window across the given
+    /// recordings, or `None` when the set is empty.
+    async fn member_window(
+        &self,
+        recording_ids: &[Uuid],
+    ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+        let mut window: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
+        for rid in recording_ids {
+            if let Some(rec) = self.get_recording(*rid).await? {
+                window = Some(match window {
+                    None => (rec.started_at, rec.ended_at),
+                    Some((s, e)) => (s.min(rec.started_at), e.max(rec.ended_at)),
+                });
+            }
+        }
+        Ok(window)
+    }
+
     /// Count activities (verification helper).
     pub async fn count_activities(&self) -> Result<i64> {
         let row: AnyRow = sqlx::query("SELECT COUNT(*) AS n FROM activities")

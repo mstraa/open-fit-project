@@ -29,7 +29,14 @@ export type StreamKind =
   | "lat_lng"
   | "wind"
   | "temperature"
-  | "distance";
+  | "distance"
+  | "vertical_oscillation"
+  | "ground_contact_time"
+  | "stride_length"
+  | "vertical_ratio"
+  | "form_power"
+  | "air_power"
+  | "leg_spring_stiffness";
 
 /** Broad data-origin kind — mirror ofit-core `SourceKind`. */
 export type SourceKind =
@@ -121,6 +128,17 @@ export interface ActivityDetail {
   /** Map keyed by StreamKind → resolved stream. */
   resolved: Partial<Record<StreamKind, ResolvedMetric>>;
   preferences: MetricSourcePreference[];
+}
+
+/**
+ * Response of DELETE /api/activities/{id}/recordings/{recording_id}.
+ * `activity` is the FULL re-resolved detail of the trimmed original activity;
+ * `detached_activity_id` is the new single-recording activity now owning the
+ * removed recording (durable manual split — both marked user_confirmed).
+ */
+export interface RemoveRecordingResponse {
+  activity: ActivityDetail;
+  detached_activity_id: string;
 }
 
 /** Per-file outcome of POST /api/import (tolerant — shape varies by backend). */
