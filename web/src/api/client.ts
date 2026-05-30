@@ -11,7 +11,7 @@
  * proxies /health, /api and /api-docs to ofit-api.
  */
 export const API_BASE: string =
-  import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
+  import.meta.env.VITE_API_BASE ?? "http://localhost:8087";
 
 export class ApiError extends Error {
   constructor(

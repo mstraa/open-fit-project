@@ -39,18 +39,18 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "8087:8087"
     environment:
       # Point the same binary at Postgres/Timescale instead of SQLite.
       DATABASE_URL: ${POSTGRES_DATABASE_URL:-postgres://${POSTGRES_USER:-ofit}:${POSTGRES_PASSWORD:-ofit}@db:5432/${POSTGRES_DB:-ofit}}
       OFIT_TOKEN: ${OFIT_TOKEN:-}
-      OFIT_BIND: 0.0.0.0:8080
+      OFIT_BIND: 0.0.0.0:8087
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       # Still useful for imports / config even when the DB is external.
       - ofit-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8087/health"]
       interval: 30s
       timeout: 3s
       retries: 3

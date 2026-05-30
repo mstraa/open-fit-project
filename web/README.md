@@ -29,16 +29,16 @@ npm run gen:api    # (placeholder) generate the typed client from OpenAPI
 Run the backend alongside it:
 
 ```sh
-cargo run -p ofit-api   # from the repo root (serves :8080)
+cargo run -p ofit-api   # from the repo root (serves :8087)
 ```
 
-The dev server proxies `/health`, `/api`, and `/api-docs` to `http://localhost:8080`.
+The dev server proxies `/health`, `/api`, and `/api-docs` to `http://localhost:8087`.
 
 ## Configuration
 
 | Env var         | Default                 | Purpose                       |
 | --------------- | ----------------------- | ----------------------------- |
-| `VITE_API_BASE` | `http://localhost:8080` | Base URL of the ofit-api host |
+| `VITE_API_BASE` | `http://localhost:8087` | Base URL of the ofit-api host |
 
 Copy [`.env.example`](.env.example) to `.env` to override.
 

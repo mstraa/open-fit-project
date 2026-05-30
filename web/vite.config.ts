@@ -15,9 +15,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       // Proxy backend routes to ofit-api (axum) during `npm run dev`.
-      "/health": "http://localhost:8080",
-      "/api": "http://localhost:8080",
-      "/api-docs": "http://localhost:8080",
+      "/health": "http://localhost:8087",
+      "/api": "http://localhost:8087",
+      "/api-docs": "http://localhost:8087",
     },
   },
 });

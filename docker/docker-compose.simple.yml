@@ -18,17 +18,17 @@ services:
     image: openfit/ofit-api:latest
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8087:8087"
     environment:
       # SQLite file lives on the persistent volume mounted at /data.
       DATABASE_URL: ${DATABASE_URL:-sqlite:///data/ofit.db?mode=rwc}
       OFIT_TOKEN: ${OFIT_TOKEN:-}
-      OFIT_BIND: 0.0.0.0:8080
+      OFIT_BIND: 0.0.0.0:8087
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ofit-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8087/health"]
       interval: 30s
       timeout: 3s
       retries: 3

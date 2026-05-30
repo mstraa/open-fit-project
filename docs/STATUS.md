@@ -7,9 +7,9 @@ _Living doc — current state of the build. Update on every change._
 
 ## Run the MVP
 ```sh
-DATABASE_URL="sqlite://./data/ofit.db?mode=rwc" cargo run -p ofit-api   # api on :8080
-cd web && npm install && npm run dev                                    # dashboard (VITE_API_BASE defaults to :8080)
-# import via the dashboard, or: curl -F file=@test-data/long-run.fit http://localhost:8080/api/import
+DATABASE_URL="sqlite://./data/ofit.db?mode=rwc" cargo run -p ofit-api   # api on :8087
+cd web && npm install && npm run dev                                    # dashboard (VITE_API_BASE defaults to :8087)
+# import via the dashboard, or: curl -F file=@test-data/long-run.fit http://localhost:8087/api/import
 ```
 Verified flow: import the 6 `test-data/` files → **2 activities** (Running ×3, Cycling ×3, exact-hash dedup) → detail shows 7 resolved scalar charts + map track → per-metric source picker flips `selected_by` to `activity_override`.
 
@@ -26,12 +26,12 @@ Verified flow: import the 6 `test-data/` files → **2 activities** (Running ×3
 - [x] `web/`: Vite + React 18 + TS (strict) scaffold. Design-token theming
       (`src/theme/tokens.css`, light+dark via `[data-theme]`) + `ThemeProvider`/`ThemeToggle`.
       App shows name, theme toggle, and live `GET /health` check (base from
-      `VITE_API_BASE`, default `http://localhost:8080`). API-first: `src/api/` has a
+      `VITE_API_BASE`, default `http://localhost:8087`). API-first: `src/api/` has a
       temporary fetch wrapper + README noting the typed client is generated from
       OpenAPI (`/api-docs/openapi.json`); `gen:api` placeholder script. `npm install`
       done (67 pkgs); `npm run build` green (tsc + vite).
 - [x] `docker/`: compose `simple` (SQLite binary) + `full` (api + Postgres/Timescale), Dockerfile.
-      Multi-stage `Dockerfile` (rust:1.83-bookworm → debian:bookworm-slim, port 8080, `/data` VOLUME,
+      Multi-stage `Dockerfile` (rust:1.83-bookworm → debian:bookworm-slim, port 8087, `/data` VOLUME,
       `DATABASE_URL` default SQLite, `OFIT_TOKEN`, `/health` HEALTHCHECK). `docker/.env.example`,
       `docker/README.md` with the two-tier commands from PLAN.md verification (steps 1 & 7).
 
@@ -133,7 +133,7 @@ normalized samples table if per-sample queries land. Ingest a wellness feed so
 
 ### API field assumptions the web client makes (reconcile with ofit-api)
 The web client targets these shapes under `/api` (base = `VITE_API_BASE`, default
-`http://localhost:8080`). Enum values are canonical ofit-core serde **snake_case**.
+`http://localhost:8087`). Enum values are canonical ofit-core serde **snake_case**.
 - `GET /api/activities` → `[{ id, sport, started_at, ended_at, recording_count,
   duration_secs }]`. Client falls back to `ended_at-started_at` if `duration_secs`
   is absent; tolerates `activity_id`, `start/end`, `recordings_count` aliases.

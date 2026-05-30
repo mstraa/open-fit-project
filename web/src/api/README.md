@@ -8,7 +8,7 @@ backend. We do **not** hand-write API request/response types.
 `ofit-api` (axum + utoipa) serves its OpenAPI schema at:
 
 ```
-$VITE_API_BASE/api-docs/openapi.json   # default: http://localhost:8080/api-docs/openapi.json
+$VITE_API_BASE/api-docs/openapi.json   # default: http://localhost:8087/api-docs/openapi.json
 ```
 
 The fully-typed client is **generated** from that schema (e.g. via
@@ -42,5 +42,5 @@ implemented once `ofit-api` exposes the OpenAPI document.)
 
 ## Conventions
 
-- Base URL comes from `import.meta.env.VITE_API_BASE` (default `http://localhost:8080`).
+- Base URL comes from `import.meta.env.VITE_API_BASE` (default `http://localhost:8087`).
 - Generated files in `src/api/generated/` are build artifacts — do not edit by hand.

@@ -32,7 +32,7 @@ Key variables (see [`.env.example`](.env.example) for the full list):
 | `OFIT_TOKEN` | Single-user auth token. Leave empty to set it in the first-run wizard. |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials for the `db` service (full tier). |
 
-The API listens on **8080** (REST + WebSocket/SSE) with a `/health` endpoint
+The API listens on **8087** (REST + WebSocket/SSE) with a `/health` endpoint
 used by both the image `HEALTHCHECK` and the compose healthchecks. Persistent
 state (SQLite DB, imports, wizard config) lives on the `/data` volume.
 
@@ -45,7 +45,7 @@ first launch.
 docker compose -f docker/docker-compose.simple.yml up
 ```
 
-Then open the wizard / API at <http://localhost:8080>. The SQLite database is
+Then open the wizard / API at <http://localhost:8087>. The SQLite database is
 stored on the `ofit-data` named volume, so it survives container restarts.
 
 ## Full tier (Postgres / TimescaleDB)

@@ -46,18 +46,18 @@ WORKDIR /data
 VOLUME ["/data"]
 
 # REST + WebSocket/SSE.
-EXPOSE 8080
+EXPOSE 8087
 
 # Sensible defaults; override either in compose or `docker run -e`.
 #  - DATABASE_URL: SQLite file on the /data volume by default (simple tier).
 #  - OFIT_TOKEN:   single-user auth token; empty means "set me via the wizard".
 ENV DATABASE_URL="sqlite:///data/ofit.db?mode=rwc" \
     OFIT_TOKEN="" \
-    OFIT_BIND="0.0.0.0:8080" \
+    OFIT_BIND="0.0.0.0:8087" \
     RUST_LOG="info"
 
 # Container-level liveness check; compose files also define their own.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:8080/health || exit 1
+    CMD curl -fsS http://localhost:8087/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/ofit-api"]

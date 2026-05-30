@@ -111,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     if token.is_none() {
         tracing::warn!("OFIT_TOKEN unset — /api auth is DISABLED (first-run/dev mode)");
     }
-    let bind = std::env::var("OFIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let bind = std::env::var("OFIT_BIND").unwrap_or_else(|_| "0.0.0.0:8087".to_string());
 
     // ---- connect db + migrate on startup ----
     tracing::info!("connecting to database…");
