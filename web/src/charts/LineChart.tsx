@@ -3,8 +3,12 @@
 // uPlot draws to a <canvas>, so axis/grid colors don't inherit CSS. We read the
 // current design tokens via getComputedStyle and rebuild the plot when the
 // theme (or data) changes, keeping light/dark correct.
+//
+// - `syncKey` links cursors across charts (hovering one moves all).
+// - `onHover(ms)` reports the hovered time so the map can place its locator dot.
+// - a small tooltip shows the value at the cursor, on top of the cursor line.
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useTheme } from "../theme/ThemeProvider";
@@ -13,30 +17,36 @@ import type { ScalarSample } from "../api/types";
 
 function tokenColor(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
-  const v = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
 }
 
 export interface LineChartProps {
   samples: ScalarSample[];
-  /** Line stroke color (token-ish hex from format.ts). */
+  /** Line stroke color (CSS token or color). */
   stroke: string;
   unit: string;
   label: string;
   height?: number;
+  /** Shared key to sync the cursor across sibling charts. */
+  syncKey?: string;
+  /** Reports the hovered time in ms since start (null on leave). */
+  onHover?: (ms: number | null) => void;
 }
 
-export function LineChart({
+function LineChartImpl({
   samples,
   stroke,
   unit,
   label,
   height = 200,
+  syncKey,
+  onHover,
 }: LineChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
+  const onHoverRef = useRef(onHover);
+  onHoverRef.current = onHover;
   // `theme` is read so the effect re-runs and recolors on theme switch.
   const { theme } = useTheme();
 
@@ -50,8 +60,6 @@ export function LineChart({
 
     const axisColor = resolveCssColor(tokenColor("--color-text-muted", "#888"), "#888");
     const gridColor = resolveCssColor(tokenColor("--color-border", "#ccc"), "#ccc");
-    // uPlot draws to canvas, which can't resolve `var(--x)` or parse oklch();
-    // normalize the metric color to an rgb() the canvas accepts.
     const strokeColor = resolveCssColor(stroke, axisColor);
 
     const width = el.clientWidth || 600;
@@ -63,12 +71,51 @@ export function LineChart({
       font: "12px var(--font-sans, sans-serif)",
     };
 
+    // Tooltip showing the value at the cursor, on top of the cursor line.
+    const tip = document.createElement("div");
+    tip.style.cssText =
+      "position:absolute;top:2px;transform:translateX(-50%);display:none;" +
+      "padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;" +
+      "font:600 11px var(--font-mono,monospace);z-index:10;" +
+      "background:var(--surface-2);border:1px solid var(--border);";
+    tip.style.color = strokeColor;
+
+    const cursorPlugin: uPlot.Plugin = {
+      hooks: {
+        init: (u) => {
+          u.over.appendChild(tip);
+        },
+        setCursor: (u) => {
+          const idx = u.cursor.idx;
+          if (idx == null) {
+            tip.style.display = "none";
+            onHoverRef.current?.(null);
+            return;
+          }
+          const xv = u.data[0][idx];
+          const yv = u.data[1][idx];
+          if (yv == null || xv == null) {
+            tip.style.display = "none";
+          } else {
+            tip.style.display = "block";
+            tip.style.left = `${u.valToPos(xv, "x", false)}px`;
+            tip.textContent = `${yv.toFixed(0)} ${unit}`;
+          }
+          if (xv != null) onHoverRef.current?.(xv * 1000);
+        },
+      },
+    };
+
     const opts: uPlot.Options = {
       width,
       height,
-      cursor: { y: false },
+      cursor: {
+        y: false,
+        ...(syncKey ? { sync: { key: syncKey } } : {}),
+      },
       legend: { show: false },
       scales: { x: { time: false } },
+      plugins: [cursorPlugin],
       axes: [
         {
           ...axisStyle,
@@ -108,7 +155,10 @@ export function LineChart({
       plot.destroy();
       plotRef.current = null;
     };
-  }, [samples, stroke, unit, label, height, theme]);
+  }, [samples, stroke, unit, label, height, theme, syncKey]);
 
-  return <div ref={containerRef} style={{ width: "100%" }} />;
+  return <div ref={containerRef} style={{ width: "100%", position: "relative" }} />;
 }
+
+// Memoized so per-frame cursor state in the parent doesn't rebuild every chart.
+export const LineChart = memo(LineChartImpl);

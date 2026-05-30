@@ -23,6 +23,7 @@ import type {
 } from "../api/types";
 import { LineChart } from "../charts/LineChart";
 import { TrackMap } from "../charts/TrackMap";
+import { valueAtMs } from "../charts/series";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { EmptyState } from "../ui/EmptyState";
 import { Seg } from "../ui/Seg";
@@ -245,6 +246,17 @@ function DetailBody({
 }) {
   const track = detail.resolved.lat_lng?.track ?? [];
 
+  // Synced graph↔map cursor (ms since start).
+  const [hoverMs, setHoverMs] = useState<number | null>(null);
+
+  // Per-track-point speed (resolved speed stream aligned to the GPS timeline) →
+  // colors the map path. undefined when there's no speed stream.
+  const speedColors = useMemo(() => {
+    const speed = detail.resolved.speed?.samples;
+    if (!speed || speed.length === 0 || track.length === 0) return undefined;
+    return track.map((p) => valueAtMs(speed, p.t_offset_ms) ?? 0);
+  }, [detail, track]);
+
   const scalarMetrics = CHART_METRICS.filter(
     (m) => (detail.resolved[m.kind]?.samples?.length ?? 0) > 0,
   );
@@ -349,7 +361,12 @@ function DetailBody({
                       </div>
                     }
                   >
-                    <TrackMap track={track} height={300} />
+                    <TrackMap
+                      track={track}
+                      colorValues={speedColors}
+                      cursorMs={hoverMs}
+                      height={300}
+                    />
                   </ErrorBoundary>
                 </div>
               </>
@@ -423,6 +440,8 @@ function DetailBody({
                           unit={SUMMARY_UNIT[m.kind] ?? m.unit}
                           label={m.label}
                           height={150}
+                          syncKey="wd-cursor"
+                          onHover={setHoverMs}
                         />
                       </div>
                     );
