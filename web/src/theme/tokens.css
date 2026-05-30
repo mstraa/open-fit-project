@@ -1,0 +1,88 @@
+/*
+ * Design tokens — the single source of truth for the look & feel.
+ * Themes are driven entirely by CSS custom properties so any UI can be re-skinned
+ * without touching component code. Light is the default; dark applies via
+ * [data-theme="dark"] on <html> (set by the ThemeProvider).
+ *
+ * Naming: --color-*, --space-*, --font-*, --radius-*, --size-*.
+ */
+
+:root,
+[data-theme="light"] {
+  /* Color — surfaces & text */
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-alt: #eef0f4;
+  --color-border: #d7dbe2;
+  --color-text: #16191f;
+  --color-text-muted: #5a616e;
+
+  /* Color — brand & status */
+  --color-accent: #2f6df6;
+  --color-accent-contrast: #ffffff;
+  --color-success: #1a9c5b;
+  --color-warning: #c98a00;
+  --color-danger: #d23b3b;
+
+  /* Spacing scale (4px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Typography */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.75rem;
+  --font-weight-normal: 400;
+  --font-weight-bold: 600;
+  --line-height-base: 1.5;
+
+  /* Radius & misc */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --shadow-1: 0 1px 2px rgba(16, 19, 25, 0.06), 0 2px 8px rgba(16, 19, 25, 0.06);
+}
+
+[data-theme="dark"] {
+  --color-bg: #0f1115;
+  --color-surface: #171a21;
+  --color-surface-alt: #1f232c;
+  --color-border: #2b313c;
+  --color-text: #e8eaee;
+  --color-text-muted: #9aa2b1;
+
+  --color-accent: #5b8dff;
+  --color-accent-contrast: #0f1115;
+  --color-success: #36c07f;
+  --color-warning: #e0a83a;
+  --color-danger: #f06363;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* Base element styling derived from tokens. */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  -webkit-font-smoothing: antialiased;
+}

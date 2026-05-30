@@ -1,0 +1,38 @@
+# Open Fit — "simple" tier (AGPL-3.0-or-later)
+#
+# Single ofit-api container backed by SQLite on a named volume.
+# First run triggers the config wizard (set OFIT_TOKEN there or via .env).
+#
+#   docker compose -f docker/docker-compose.simple.yml up
+#
+# Build context is the repo root (..) so the Dockerfile sees the whole
+# Cargo workspace.
+
+name: openfit-simple
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: openfit/ofit-api:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # SQLite file lives on the persistent volume mounted at /data.
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///data/ofit.db?mode=rwc}
+      OFIT_TOKEN: ${OFIT_TOKEN:-}
+      OFIT_BIND: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ofit-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ofit-data:

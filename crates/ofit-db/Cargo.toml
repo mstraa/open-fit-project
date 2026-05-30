@@ -7,7 +7,10 @@ license.workspace = true
 [dependencies]
 ofit-core.workspace = true
 sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 tracing.workspace = true

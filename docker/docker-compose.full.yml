@@ -1,0 +1,61 @@
+# Open Fit — "full" tier (AGPL-3.0-or-later)
+#
+# ofit-api + TimescaleDB (Postgres 16). Same application code as the simple
+# tier — only DATABASE_URL changes (sqlx supports both backends). Timescale is
+# used for the high-volume continuous wellness / HR time-series.
+#
+#   cp docker/.env.example docker/.env   # set POSTGRES_PASSWORD + OFIT_TOKEN
+#   docker compose -f docker/docker-compose.full.yml up
+#
+# Build context is the repo root (..) so the Dockerfile sees the whole
+# Cargo workspace.
+
+name: openfit-full
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ofit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ofit}
+      POSTGRES_DB: ${POSTGRES_DB:-ofit}
+    volumes:
+      - ofit-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ofit} -d ${POSTGRES_DB:-ofit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: openfit/ofit-api:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      # Point the same binary at Postgres/Timescale instead of SQLite.
+      DATABASE_URL: ${POSTGRES_DATABASE_URL:-postgres://${POSTGRES_USER:-ofit}:${POSTGRES_PASSWORD:-ofit}@db:5432/${POSTGRES_DB:-ofit}}
+      OFIT_TOKEN: ${OFIT_TOKEN:-}
+      OFIT_BIND: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      # Still useful for imports / config even when the DB is external.
+      - ofit-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ofit-data:
+  ofit-pgdata:
