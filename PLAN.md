@@ -99,9 +99,15 @@ Une **API d'ingestion unique** (batch + streaming) alimentée par deux adaptateu
 
 **Phase 6 — Création de workouts + envoi device (cloudless)** : builder → encodage **FIT workout** → push sans cloud (USB `Garmin/Workouts`, ou BLE via Gadgetbridge si supporté). Dériquer l'**écriture FIT en Rust**.
 
-**Phase 7 — Registre communautaire d'algorithmes** *(site participatif)* : service web séparé pour publier/parcourir/installer des plugins WASM par hardware (signature, versionnage, modération/confiance, compat métriques requises ↔ sources dispo).
+**Phase 7 — Registre communautaire d'algorithmes** *(site participatif)* : service web séparé pour publier/parcourir/installer des plugins WASM par hardware (signature, versionnage, modération/confiance, compat métriques requises ↔ sources dispo). **Le registre héberge deux types d'artefacts partageables** : (a) **plugins d'algorithmes** (WASM) ; (b) **visualisations** (specs déclaratives, cf. Phase 9) — mêmes mécaniques de publication/parcours/install/signature/confiance, filtrables par hardware **et** par métriques requises.
 
-**Phase 8 — Serveur MCP** : couche fine au-dessus de l'API (requêter/créer, lancer un algo) pour les LLMs.
+**Phase 8 — Serveur MCP** : couche fine au-dessus de l'API (requêter/créer, lancer un algo) pour les LLMs. **Socle de la Phase 9** : expose en outils MCP le catalogue de métriques/streams disponibles, les requêtes de données (dérivées comprises) et la création de visualisations.
+
+**Phase 9 — Visualisations génératives (skill MCP)** *(point d'extension orienté utilisateur)* : un **skill** s'appuyant sur le serveur MCP (Phase 8) pour **créer des visualisations à la demande en langage naturel** — ex. « barres du nombre de pas par jour vs température extérieure », « HRV vs charge d'entraînement sur 90 j », ou tout ce que l'utilisateur/la communauté voudra voir. Principes :
+- **Spec déclarative, pas de code arbitraire** : le skill produit une *VisualizationSpec* versionnée (source de données = requête sur métriques/dérivées + transform/agrégation + type de graphe + encodages d'axes) que le frontend rend avec les libs existantes (uPlot, MapLibre, etc.). Sandbox par construction (data-only, pas d'exécution de code tiers côté client), comme les plugins d'algos.
+- **Seamless avec l'UI** : la viz utilise les **design tokens** et les composants du dashboard → intégration native (thème clair/sombre, responsive), aucune feuille de style ad hoc.
+- **Composable** : une viz peut consommer des **DerivedMetric/DerivedStream** issues des plugins d'algos (Phase 3) → algos et visualisations se combinent.
+- **Partageable comme les plugins** : publication/parcours/install d'une *VisualizationSpec* via le **même registre communautaire** (Phase 7), filtrable par hardware et par métriques requises (compat ↔ sources dispo), signée et versionnée. Importer une viz partagée = la voir immédiatement si les données requises existent, sinon message « métrique X indisponible sur ton hardware ».
 
 **Explorations transverses** : **sync BLE depuis un PC** (`btleplug` ; tension protocoles Gadgetbridge Java vs Rust desktop) ; multi-UI/thème ; multi-utilisateur ; backup/export ; observabilité.
 
