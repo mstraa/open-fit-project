@@ -48,6 +48,9 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sha2 = "0.10"
+# auth
+argon2 = "0.5"
+rand = "0.8"
 
 # internal crates
 ofit-core = { path = "crates/ofit-core" }

@@ -156,6 +156,99 @@ impl Db {
         Ok(())
     }
 
+    // ---- auth: users & sessions (single-user, multi-user-ready) ----
+
+    /// Number of accounts. 0 ⇒ first-run (the setup wizard applies).
+    pub async fn user_count(&self) -> Result<i64> {
+        let row: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM users"))
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("n"))
+    }
+
+    /// Create an account with an already-hashed (argon2 PHC) password.
+    pub async fn create_user(&self, id: Uuid, username: &str, password_hash: &str) -> Result<()> {
+        sqlx::query(&self.p(
+            "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+        ))
+        .bind(id.to_string())
+        .bind(username)
+        .bind(password_hash)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Look up `(user_id, password_hash)` by username for login verification.
+    pub async fn user_by_username(&self, username: &str) -> Result<Option<(Uuid, String)>> {
+        let row: Option<AnyRow> =
+            sqlx::query(&self.p("SELECT id, password_hash FROM users WHERE username = ?"))
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some(r) => Ok(Some((
+                parse_uuid(&r.get::<String, _>("id"))?,
+                r.get::<String, _>("password_hash"),
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    /// The username for a user id (for `GET /api/me`).
+    pub async fn username_of(&self, id: Uuid) -> Result<Option<String>> {
+        let row: Option<AnyRow> =
+            sqlx::query(&self.p("SELECT username FROM users WHERE id = ?"))
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|r| r.get::<String, _>("username")))
+    }
+
+    /// Persist a session token for `user_id`, expiring at `expires_at`.
+    pub async fn create_session(
+        &self,
+        token: &str,
+        user_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(&self.p(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        ))
+        .bind(token)
+        .bind(user_id.to_string())
+        .bind(Utc::now().to_rfc3339())
+        .bind(expires_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Resolve a session token to its user id if present and unexpired.
+    pub async fn session_user(&self, token: &str) -> Result<Option<Uuid>> {
+        let row: Option<AnyRow> = sqlx::query(&self.p(
+            "SELECT user_id FROM sessions WHERE token = ? AND expires_at >= ?",
+        ))
+        .bind(token)
+        .bind(Utc::now().to_rfc3339())
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(r) => Ok(Some(parse_uuid(&r.get::<String, _>("user_id"))?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a session (logout).
+    pub async fn delete_session(&self, token: &str) -> Result<()> {
+        sqlx::query(&self.p("DELETE FROM sessions WHERE token = ?"))
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // ---- minimal insert/get helpers (prove the round trip) ----
 
     /// Insert a [`Source`].

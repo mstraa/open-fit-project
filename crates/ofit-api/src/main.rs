@@ -14,18 +14,21 @@ use std::sync::Arc;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::{header, Request, StatusCode},
-    middleware::{self, Next},
-    response::{IntoResponse, Response},
+    http::{header, Method},
+    middleware,
     routing::{get, post},
     Json, Router,
 };
 use ofit_db::Db;
 use serde::Serialize;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
+mod auth;
 mod dto;
 mod handlers;
 
@@ -60,6 +63,11 @@ struct Version {
     paths(
         health,
         version,
+        auth::status,
+        auth::setup,
+        auth::login,
+        auth::logout,
+        auth::me,
         handlers::import,
         handlers::list_sources,
         handlers::list_activities,
@@ -87,6 +95,9 @@ struct Version {
         dto::SetPreferenceRequest,
         dto::WellnessResponse,
         dto::WellnessPoint,
+        auth::SetupStatus,
+        auth::Credentials,
+        auth::Me,
         ofit_core::SourceKind,
         ofit_core::Sport,
         ofit_core::StreamKind,
@@ -127,8 +138,16 @@ async fn main() -> anyhow::Result<()> {
         token: token.map(Arc::from),
     };
 
-    // `/api/*` sits behind the auth stub; public routes (health, swagger) do not.
-    let api = Router::new()
+    // Auth routes are always reachable (login/setup/status); the rest sit behind
+    // `require_auth`.
+    let public_api = Router::new()
+        .route("/auth/status", get(auth::status))
+        .route("/auth/setup", post(auth::setup))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/me", get(auth::me));
+
+    let protected_api = Router::new()
         .route("/version", get(version))
         // Initial-backfill uploads can be many MB (multi-format FIT/GPX/TCX).
         // Raise the body limit well above axum's 2 MB default for this route.
@@ -148,14 +167,31 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::list_preferences).put(handlers::set_preference),
         )
         .route("/wellness", get(handlers::wellness))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth_stub));
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+
+    let api = public_api.merge(protected_api);
 
     let app = Router::new()
         .route("/health", get(health))
         .nest("/api", api)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        // Session cookies are credentialed, so we reflect the request origin
+        // (a wildcard `*` is invalid with credentials). Same-origin prod needs
+        // no CORS; this is for the dev split (vite :5173 → api :8087).
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::mirror_request())
+                .allow_credentials(true)
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -182,24 +218,3 @@ async fn version() -> Json<Version> {
     })
 }
 
-/// Single-user auth STUB. When `OFIT_TOKEN` is set, require
-/// `Authorization: Bearer <token>` on `/api/*`. TODO(phase: auth): real
-/// credential store, sessions, and per-user scoping.
-async fn auth_stub(
-    State(state): State<AppState>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
-    let Some(expected) = state.token.as_deref() else {
-        return next.run(req).await; // auth disabled
-    };
-    let presented = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    match presented {
-        Some(t) if t == expected => next.run(req).await,
-        _ => (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response(),
-    }
-}

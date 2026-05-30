@@ -26,3 +26,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+argon2.workspace = true
+rand.workspace = true
