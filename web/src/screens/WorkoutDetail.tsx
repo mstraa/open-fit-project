@@ -380,8 +380,18 @@ function DetailBody({
   // EVERY resolved scalar metric the API returns (lat_lng excluded — it's the
   // map track), ordered by METRIC_ORDER, with sport-aware presentation.
   const scalarMetrics = useMemo(() => {
+    // Gate sparse channels: some FITs carry a metric (e.g. Stryd stride length
+    // via cycle_length16) that is mostly zeros — charting it looks broken. Keep
+    // a metric only if a meaningful fraction of its samples are non-zero.
+    const hasEnoughData = (k: StreamKind): boolean => {
+      const samples = detail.resolved[k]?.samples ?? [];
+      if (samples.length === 0) return false;
+      let nonZero = 0;
+      for (const s of samples) if (s.value !== 0) nonZero++;
+      return nonZero / samples.length >= 0.2;
+    };
     const present = (Object.keys(detail.resolved) as StreamKind[])
-      .filter((k) => k !== "lat_lng" && (detail.resolved[k]?.samples?.length ?? 0) > 0);
+      .filter((k) => k !== "lat_lng" && hasEnoughData(k));
     const ordered: MetricPresentation[] = [];
     for (const k of METRIC_ORDER) {
       if (present.includes(k)) {
