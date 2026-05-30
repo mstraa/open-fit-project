@@ -16,6 +16,7 @@
 //! [PLAN.md]: ../../../PLAN.md
 
 pub mod activity;
+pub mod dedup;
 pub mod derived;
 pub mod error;
 pub mod preference;
@@ -25,6 +26,10 @@ pub mod stream;
 pub mod wellness;
 
 pub use activity::Activity;
+pub use dedup::{
+    cluster_recordings, resolve_activity_view, ResolvedActivityView, ResolvedMetric,
+    SelectionReason,
+};
 pub use derived::{DerivedMetric, DerivedStream, DerivedSubject, PluginRef};
 pub use error::{Error, Result};
 pub use preference::{resolve_source, MetricSourcePreference, PreferenceScope};

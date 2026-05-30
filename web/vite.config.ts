@@ -6,6 +6,11 @@ import react from "@vitejs/plugin-react";
 // served separately and reads VITE_API_BASE directly (see src/api/client.ts).
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // The lazy-loaded detail chunk bundles MapLibre GL (large by nature);
+    // raise the warning threshold rather than fight a vendor lib's size.
+    chunkSizeWarningLimit: 1500,
+  },
   server: {
     port: 5173,
     proxy: {

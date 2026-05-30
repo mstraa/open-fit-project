@@ -12,8 +12,10 @@
     "gen:api": "echo 'TODO: generate the typed API client from the ofit-api OpenAPI schema at $VITE_API_BASE/api-docs/openapi.json (e.g. openapi-typescript or @hey-api/openapi-ts) into src/api/generated/. Do NOT hand-write API types — see src/api/README.md.' && exit 0"
   },
   "dependencies": {
+    "maplibre-gl": "^5.24.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

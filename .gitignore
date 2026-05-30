@@ -8,3 +8,7 @@ web/dist
 .env
 .DS_Store
 data/
+
+# Local-only test fixtures (personal GPS/HR data — privacy)
+test-data/
+samples/

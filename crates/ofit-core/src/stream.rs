@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 /// The metric a stream carries. This enum is also the granularity at which
 /// per-metric source preferences resolve (see [`crate::preference`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamKind {
     /// Heart rate (bpm).

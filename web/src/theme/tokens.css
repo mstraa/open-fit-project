@@ -86,3 +86,9 @@ body {
   line-height: var(--line-height-base);
   -webkit-font-smoothing: antialiased;
 }
+
+@keyframes ofit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

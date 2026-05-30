@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 /// Sport / activity type. Kept coarse on purpose — fine-grained typing is a
 /// presentation concern, while dedup clustering only needs the broad category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Sport {
     /// Running (incl. trail).

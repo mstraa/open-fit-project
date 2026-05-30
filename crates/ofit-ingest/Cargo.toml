@@ -8,6 +8,14 @@ license.workspace = true
 ofit-core.workspace = true
 ofit-db.workspace = true
 fitparser.workspace = true
-anyhow.workspace = true
+gpx.workspace = true
+quick-xml.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
 sha2.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

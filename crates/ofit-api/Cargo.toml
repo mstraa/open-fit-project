@@ -13,7 +13,7 @@ ofit-core.workspace = true
 ofit-db.workspace = true
 ofit-ingest.workspace = true
 ofit-analytics.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["multipart"] }
 tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true

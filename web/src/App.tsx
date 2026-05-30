@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { ThemeToggle } from "./theme/ThemeToggle";
 import { API_BASE, getHealth } from "./api/client";
+import { ActivitiesList } from "./views/ActivitiesList";
+import { Spinner } from "./ui/primitives";
+
+// Code-split the detail view: it pulls in uPlot + MapLibre GL, which are heavy.
+// The list view (the entry point) stays light.
+const ActivityDetail = lazy(() =>
+  import("./views/ActivityDetail").then((m) => ({ default: m.ActivityDetail })),
+);
 
 const APP_NAME = "Open Fit";
 
@@ -9,8 +17,11 @@ type HealthState =
   | { kind: "ok"; status: string }
   | { kind: "error"; message: string };
 
+type View = { name: "list" } | { name: "detail"; activityId: string };
+
 export function App() {
   const [health, setHealth] = useState<HealthState>({ kind: "loading" });
+  const [view, setView] = useState<View>({ name: "list" });
 
   useEffect(() => {
     let cancelled = false;
@@ -34,7 +45,7 @@ export function App() {
   return (
     <main
       style={{
-        maxWidth: "48rem",
+        maxWidth: "64rem",
         margin: "0 auto",
         padding: "var(--space-8) var(--space-4)",
       }}
@@ -48,80 +59,84 @@ export function App() {
           marginBottom: "var(--space-8)",
         }}
       >
-        <h1
+        <button
+          type="button"
+          onClick={() => setView({ name: "list" })}
           style={{
             margin: 0,
+            padding: 0,
+            border: "none",
+            background: "none",
+            color: "var(--color-text)",
             fontSize: "var(--font-size-xl)",
             fontWeight: "var(--font-weight-bold)",
+            cursor: "pointer",
           }}
         >
           {APP_NAME}
-        </h1>
-        <ThemeToggle />
+        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
+          <HealthBadge state={health} />
+          <ThemeToggle />
+        </div>
       </header>
 
-      <section
+      {view.name === "list" ? (
+        <ActivitiesList
+          onOpen={(activityId) => setView({ name: "detail", activityId })}
+        />
+      ) : (
+        <Suspense fallback={<Spinner label="Loading charts…" />}>
+          <ActivityDetail
+            activityId={view.activityId}
+            onBack={() => setView({ name: "list" })}
+          />
+        </Suspense>
+      )}
+
+      <footer
         style={{
-          background: "var(--color-surface)",
-          border: "1px solid var(--color-border)",
-          borderRadius: "var(--radius-md)",
-          boxShadow: "var(--shadow-1)",
-          padding: "var(--space-6)",
+          marginTop: "var(--space-8)",
+          color: "var(--color-text-muted)",
+          fontSize: "var(--font-size-sm)",
+          textAlign: "center",
         }}
       >
-        <h2
-          style={{
-            margin: 0,
-            marginBottom: "var(--space-3)",
-            fontSize: "var(--font-size-lg)",
-          }}
-        >
-          API connection
-        </h2>
-        <p
-          style={{
-            margin: 0,
-            marginBottom: "var(--space-3)",
-            color: "var(--color-text-muted)",
-            fontSize: "var(--font-size-sm)",
-          }}
-        >
-          Backend:{" "}
-          <code style={{ fontFamily: "var(--font-mono)" }}>{API_BASE}</code>
-        </p>
-        <HealthBadge state={health} />
-      </section>
+        Backend: <code style={{ fontFamily: "var(--font-mono)" }}>{API_BASE}</code>
+      </footer>
     </main>
   );
 }
 
 function HealthBadge({ state }: { state: HealthState }) {
   let color = "var(--color-text-muted)";
-  let label = "Checking GET /health…";
+  let label = "checking…";
 
   if (state.kind === "ok") {
     color = "var(--color-success)";
-    label = `Healthy — status: ${state.status}`;
+    label = state.status;
   } else if (state.kind === "error") {
     color = "var(--color-danger)";
-    label = `Unreachable — ${state.message}`;
+    label = "offline";
   }
 
   return (
     <span
+      title={state.kind === "error" ? state.message : `GET /health: ${label}`}
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: "var(--space-2)",
         color,
+        fontSize: "var(--font-size-sm)",
         fontWeight: "var(--font-weight-bold)",
       }}
     >
       <span
         aria-hidden
         style={{
-          width: "0.625rem",
-          height: "0.625rem",
+          width: "0.5rem",
+          height: "0.5rem",
           borderRadius: "50%",
           background: "currentColor",
         }}

@@ -24,12 +24,21 @@ npm run gen:api
 (Currently a placeholder — see the `gen:api` script in `package.json`. It will be
 implemented once `ofit-api` exposes the OpenAPI document.)
 
-## What's here now (Phase 0)
+## What's here now (Phase 0 → Phase 1)
 
-- **`client.ts`** — a minimal hand-written `fetch` wrapper (`apiFetch`, `getHealth`,
-  `API_BASE`). This is a temporary bootstrap so the app can prove end-to-end wiring
-  by calling `GET /health`. Once `gen:api` is wired up, response types here should be
-  replaced by the generated ones; the thin transport wrapper can remain.
+- **`client.ts`** — the thin transport (`apiFetch`, `apiSend`, `apiPostForm`,
+  `getHealth`, `API_BASE`). This layer is keeper material; only the *types* are
+  temporary.
+- **`types.ts`** — **all** API-boundary types, hand-written for Phase 1 and
+  **centralized here on purpose** so they're trivially swapped for the
+  OpenAPI-generated client later (see the `TODO(api-first)` at the top). They
+  mirror the canonical `ofit-core` types (serde `snake_case` enums).
+- **`endpoints.ts`** — typed wrappers (`listActivities`, `getActivity`,
+  `listSources`, `listPreferences`, `putPreference`, `importFiles`). These are
+  deliberately **tolerant** of field-name drift because the Phase-1 REST contract
+  is still indicative: a few likely aliases are normalized at the boundary so the
+  UI sees one stable shape. Replace with the generated client once the OpenAPI
+  schema exists; keep the transport wrapper.
 
 ## Conventions
 

@@ -36,7 +36,33 @@ export async function apiFetch<T>(
   if (!res.ok) {
     throw new ApiError(`${res.status} ${res.statusText}`, res.status);
   }
-  return (await res.json()) as T;
+  // Tolerate empty bodies (e.g. 204) by returning undefined-as-T.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/**
+ * POST a `FormData` body (used by the multipart import endpoint). We do NOT set
+ * Content-Type so the browser adds the multipart boundary automatically.
+ */
+export async function apiPostForm<T>(
+  path: string,
+  form: FormData,
+): Promise<T> {
+  return apiFetch<T>(path, { method: "POST", body: form, headers: {} });
+}
+
+/** Send a JSON body with the right Content-Type. */
+export async function apiSend<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  body: unknown,
+): Promise<T> {
+  return apiFetch<T>(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 /** Shape of GET /health. Will be replaced by the generated OpenAPI type. */

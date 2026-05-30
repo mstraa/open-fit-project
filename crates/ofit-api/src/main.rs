@@ -13,11 +13,11 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{header, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use ofit_db::Db;
@@ -26,13 +26,16 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
+mod dto;
+mod handlers;
+
 /// Shared application state handed to every handler.
 #[derive(Clone)]
-struct AppState {
-    db: Db,
+pub(crate) struct AppState {
+    pub db: Db,
     /// Bearer token required on `/api/*` when set. `None` = auth disabled
     /// (first-run / local dev). Real multi-credential auth is a later phase.
-    token: Option<Arc<str>>,
+    pub token: Option<Arc<str>>,
 }
 
 /// Liveness payload. Reports the DB backend in use so the simple/full tier is
@@ -54,8 +57,40 @@ struct Version {
 /// is generated from it (never hand-write API types — AGENTS.md).
 #[derive(OpenApi)]
 #[openapi(
-    paths(health, version),
-    components(schemas(Health, Version)),
+    paths(
+        health,
+        version,
+        handlers::import,
+        handlers::list_sources,
+        handlers::list_activities,
+        handlers::get_activity,
+        handlers::list_preferences,
+        handlers::set_preference,
+        handlers::wellness,
+    ),
+    components(schemas(
+        Health,
+        Version,
+        dto::ImportResponse,
+        dto::ImportFileResult,
+        dto::SourceDto,
+        dto::ActivitySummary,
+        dto::ActivityDetail,
+        dto::RecordingDto,
+        dto::ResolvedScalarMetric,
+        dto::ScalarPoint,
+        dto::TrackPoint,
+        dto::PreferenceDto,
+        dto::PreferenceScopeDto,
+        dto::SetPreferenceRequest,
+        dto::WellnessResponse,
+        dto::WellnessPoint,
+        ofit_core::SourceKind,
+        ofit_core::Sport,
+        ofit_core::StreamKind,
+        ofit_core::WellnessKind,
+        ofit_core::SelectionReason,
+    )),
     info(title = "Open Fit API", description = "Cloudless self-hosted fitness platform")
 )]
 struct ApiDoc;
@@ -92,6 +127,20 @@ async fn main() -> anyhow::Result<()> {
     // `/api/*` sits behind the auth stub; public routes (health, swagger) do not.
     let api = Router::new()
         .route("/version", get(version))
+        // Initial-backfill uploads can be many MB (multi-format FIT/GPX/TCX).
+        // Raise the body limit well above axum's 2 MB default for this route.
+        .route(
+            "/import",
+            post(handlers::import).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+        )
+        .route("/sources", get(handlers::list_sources))
+        .route("/activities", get(handlers::list_activities))
+        .route("/activities/:id", get(handlers::get_activity))
+        .route(
+            "/preferences",
+            get(handlers::list_preferences).put(handlers::set_preference),
+        )
+        .route("/wellness", get(handlers::wellness))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_stub));
 
     let app = Router::new()
