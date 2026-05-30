@@ -1,8 +1,10 @@
 // Minimal hand-written fetch wrapper.
 //
-// This is a temporary stand-in. The real, fully-typed API client will be
-// GENERATED from the ofit-api OpenAPI schema (utoipa) — see ./README.md.
-// Do NOT hand-write request/response types here once generation is wired up.
+// Thin transport. API-boundary TYPES come from the OpenAPI-generated schema
+// (`npm run gen:api` → ./generated/schema.d.ts, aliased in ./schema.ts) so they
+// can't drift from the server. See ./README.md.
+
+import type { HealthDto } from "./schema";
 
 /**
  * Base URL of the ofit-api backend.
@@ -70,11 +72,8 @@ export async function apiSend<T>(
   });
 }
 
-/** Shape of GET /health. Will be replaced by the generated OpenAPI type. */
-export interface HealthResponse {
-  status: string;
-  [key: string]: unknown;
-}
+/** Shape of GET /health — from the OpenAPI-generated schema. */
+export type HealthResponse = HealthDto;
 
 /** Proves API-first wiring: pings the backend health endpoint. */
 export function getHealth(): Promise<HealthResponse> {

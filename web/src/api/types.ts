@@ -10,46 +10,19 @@
 // the API contract in the task brief is "indicative", so we normalize a few
 // likely aliases at the boundary rather than scatter optionals across the UI.
 
-/** Sport categories — mirror ofit-core `Sport` (serde snake_case). */
-export type Sport =
-  | "running"
-  | "cycling"
-  | "swimming"
-  | "walking"
-  | "strength"
-  | "other";
+// Enums now come from the OpenAPI-generated schema (./schema.ts), so they can't
+// drift from the server. Imported for local use in the view-model interfaces
+// below AND re-exported for the rest of the app.
+import type {
+  Sport,
+  StreamKind,
+  SourceKind,
+  SelectionReason,
+  PreferenceScope,
+  WellnessKind,
+} from "./schema";
 
-/** Metric channels — mirror ofit-core `StreamKind` (serde snake_case). */
-export type StreamKind =
-  | "heart_rate"
-  | "power"
-  | "cadence"
-  | "speed"
-  | "altitude"
-  | "lat_lng"
-  | "wind"
-  | "temperature"
-  | "distance"
-  | "vertical_oscillation"
-  | "ground_contact_time"
-  | "stride_length"
-  | "vertical_ratio"
-  | "form_power"
-  | "air_power"
-  | "leg_spring_stiffness";
-
-/** Broad data-origin kind — mirror ofit-core `SourceKind`. */
-export type SourceKind =
-  | "device"
-  | "file_import"
-  | "gadgetbridge"
-  | "unknown";
-
-/** Why a source was selected for a metric — mirror ofit-core `SelectionReason`. */
-export type SelectionReason = "activity_override" | "default" | "priority";
-
-/** Preference scope — mirror ofit-core `PreferenceScope`. */
-export type PreferenceScope = "default" | "activity";
+export type { Sport, StreamKind, SourceKind, SelectionReason, PreferenceScope, WellnessKind };
 
 /** A logical data origin (device/import). Mirror ofit-core `Source`. */
 export interface Source {
