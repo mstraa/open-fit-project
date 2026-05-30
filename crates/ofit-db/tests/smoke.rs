@@ -5,8 +5,12 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn migrates_and_roundtrips_on_sqlite() {
-    let url = "sqlite::memory:";
-    let db = Db::connect(url).await.expect("connect");
+    // Use a temp file (not sqlite::memory:) because a pool gives each connection
+    // its own private in-memory DB, so migrations wouldn't be visible to the
+    // connection that runs the inserts. File-backed SQLite + Postgres share state.
+    let dir = std::env::temp_dir().join(format!("ofit-smoke-{}", Uuid::new_v4()));
+    let url = format!("sqlite://{}/ofit.db?mode=rwc", dir.display());
+    let db = Db::connect(&url).await.expect("connect");
     db.run_migrations().await.expect("migrate");
 
     let src = Source::new(SourceKind::Device, "Garmin 945", 100);

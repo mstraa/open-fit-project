@@ -34,3 +34,12 @@ FIT/zip import → RawRecording+Streams; dedup v1 (hash + temporal/sport cluster
 - Gadgetbridge coverage (Garmin FIT w/ Stryd over BLE? Helio?) — validate with real hardware before Phase 2b.
 - FIT **writing** in Rust immature → Phase 6 risk.
 - sqlx-cli not installed locally; migrations run via `ofit-db` at startup or `cargo sqlx` once added.
+
+## Carry-over for Phase 1 (from Phase 0 build)
+- **Hash:** `ofit_core::ContentHash::of_bytes` is a crypto-free **non-cryptographic fallback**. `ofit-ingest` (already depends on `sha2`) MUST overwrite it with real SHA-256 at ingestion — the dedup unique-hash index depends on this. Honor the documented ALGORITHM/hex contract.
+- **Streams** currently persist samples as a JSON blob in the `streams` table. If Phase 1 analytics need per-sample queries, add a normalized (portable) samples table.
+- **Postgres untested:** only SQLite was exercised. The `Any`-driver path + portable SQL are designed for both; run `docker/docker-compose.full.yml` and re-run the verification thread to confirm.
+- **Timescale:** `wellness_samples` is shaped to become a hypertable — add a Postgres-only migration branch when the full tier is exercised.
+- **Auth:** replace the `OFIT_TOKEN` bearer stub in `ofit-api` with real single-user auth wired to the first-run wizard.
+- **web `gen:api`:** implement for real (e.g. `openapi-typescript` from `/api-docs/openapi.json` → `src/api/generated/`) and drop the hand-written `HealthResponse` type.
+- **Need from user:** real **945 + Stryd `.fit`** files (+ an overlapping recording from another source) to verify dedup/fusion. Suggested drop dir: `samples/`.

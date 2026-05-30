@@ -1,0 +1,12 @@
+target
+**/target
+web/node_modules
+web/dist
+node_modules
+.git
+data
+*.db
+*.db-*
+.env
+**/.env
+.DS_Store
