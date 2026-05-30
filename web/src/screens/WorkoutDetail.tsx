@@ -261,6 +261,7 @@ function DetailBody({
   }, [detail, track]);
 
   const recordingCount = detail.recordings.length;
+  const sport = detail.sport ?? "other";
 
   // Metrics that get a fusion-picker row: any resolved metric with >1 candidate
   // (or any candidate at all, so the user can confirm the active source).
@@ -282,11 +283,11 @@ function DetailBody({
     <>
       {/* ---- header ---- */}
       <div className="wd-head">
-        <div className={`wd-head__ic ${SPORT_TINT.running}`}>
+        <div className={`wd-head__ic ${SPORT_TINT[sport] ?? SPORT_TINT.other}`}>
           <SportGlyph />
         </div>
         <div style={{ flex: 1 }}>
-          <div className="wd-title">{SPORT_TITLE.running} — Activity</div>
+          <div className="wd-title">{SPORT_TITLE[sport] ?? SPORT_TITLE.other} — Activity</div>
           <div className="wd-sub">
             <span>
               <CalIcon /> {durationSecs > 0 ? formatDuration(durationSecs) : "—"}

@@ -113,6 +113,10 @@ export interface MetricSourcePreference {
 /** GET /api/activities/{id} — the full detail payload. */
 export interface ActivityDetail {
   id?: string;
+  sport?: Sport;
+  started_at?: string;
+  ended_at?: string;
+  duration_secs?: number;
   recordings: RecordingInfo[];
   /** Map keyed by StreamKind → resolved stream. */
   resolved: Partial<Record<StreamKind, ResolvedMetric>>;

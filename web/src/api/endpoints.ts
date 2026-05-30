@@ -184,7 +184,23 @@ export async function getActivity(id: string): Promise<ActivityDetail> {
   const prefsRaw = (pick(o, "preferences") as unknown[]) ?? [];
   const preferences = prefsRaw.map((p) => normalizePreference(p));
 
-  return { id: str(pick(o, "id")) || id, recordings, resolved, preferences };
+  const startedAt = str(pick(o, "started_at", "start"));
+  const endedAt = str(pick(o, "ended_at", "end"));
+  let duration = num(pick(o, "duration_secs", "duration"), NaN);
+  if (!Number.isFinite(duration) && startedAt && endedAt) {
+    duration = Math.max(0, (Date.parse(endedAt) - Date.parse(startedAt)) / 1000);
+  }
+
+  return {
+    id: str(pick(o, "id")) || id,
+    sport: (str(pick(o, "sport"), "other") as ActivityDetail["sport"]),
+    started_at: startedAt || undefined,
+    ended_at: endedAt || undefined,
+    duration_secs: Number.isFinite(duration) ? duration : undefined,
+    recordings,
+    resolved,
+    preferences,
+  };
 }
 
 /* --------------------------------------------------------- preferences */
