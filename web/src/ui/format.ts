@@ -41,11 +41,11 @@ export interface MetricMeta {
 
 /** Scalar metrics we render as line charts, in display order. */
 export const CHART_METRICS: MetricMeta[] = [
-  { kind: "heart_rate", label: "Heart rate", unit: "bpm", color: "#e0484b" },
-  { kind: "power", label: "Power", unit: "W", color: "#2f6df6" },
-  { kind: "cadence", label: "Cadence", unit: "rpm/spm", color: "#1a9c5b" },
-  { kind: "speed", label: "Speed", unit: "m/s", color: "#c98a00" },
-  { kind: "altitude", label: "Altitude", unit: "m", color: "#7a5af0" },
+  { kind: "heart_rate", label: "Heart rate", unit: "bpm", color: "var(--hr)" },
+  { kind: "power", label: "Power", unit: "W", color: "var(--power)" },
+  { kind: "cadence", label: "Cadence", unit: "rpm/spm", color: "var(--cadence)" },
+  { kind: "speed", label: "Speed", unit: "m/s", color: "var(--pace)" },
+  { kind: "altitude", label: "Altitude", unit: "m", color: "var(--elev)" },
 ];
 
 export const METRIC_LABEL: Record<StreamKind, string> = {

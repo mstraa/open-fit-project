@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Fit — Tempo Run · Riverside Loop</title>
+<link rel="stylesheet" href="css/app.css" />
+<style>
+  .wd-head { display:flex; align-items:flex-start; gap:18px; margin-bottom:24px; }
+  .wd-head__ic { width:56px; height:56px; border-radius:15px; display:grid; place-items:center; flex:none; }
+  .wd-head__ic svg { width:30px; height:30px; }
+  .wd-title { font-size:24px; font-weight:740; letter-spacing:-0.03em; }
+  .wd-sub { color:var(--muted); font-size:13px; margin-top:3px; display:flex; gap:14px; flex-wrap:wrap; }
+  .wd-sub span { display:inline-flex; align-items:center; gap:5px; }
+
+  .summary { display:grid; grid-template-columns:repeat(6,1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--r); overflow:hidden; margin-bottom:var(--gap); }
+  .summary > div { background:var(--surface); padding:16px 18px; }
+  .summary .lbl { font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.05em; }
+  .summary .val { font-family:var(--font-mono); font-size:21px; font-weight:700; margin-top:5px; letter-spacing:-0.02em; }
+  .summary .val small { font-size:12px; color:var(--muted); font-weight:600; }
+  .summary .src { margin-top:7px; }
+
+  .layout { display:grid; grid-template-columns:1fr 380px; gap:var(--gap); align-items:start; }
+
+  /* map */
+  .map { height:300px; border-radius:var(--r); overflow:hidden; position:relative; background:
+      radial-gradient(120% 120% at 30% 20%, oklch(24% 0.03 255) 0%, oklch(17% 0.02 255) 60%); }
+  .map svg { position:absolute; inset:0; width:100%; height:100%; }
+  .map__chip { position:absolute; left:12px; top:12px; }
+
+  /* fusion panel */
+  .fusion__row { display:grid; grid-template-columns:120px 1fr; gap:14px; align-items:center; padding:13px 0; border-bottom:1px solid var(--border); }
+  .fusion__row:last-of-type { border-bottom:0; }
+  .fusion__metric { display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; }
+  .fusion__metric i { width:9px; height:9px; border-radius:3px; flex:none; }
+  .srcpick { display:flex; gap:7px; flex-wrap:wrap; }
+  .srcopt {
+    display:inline-flex; align-items:center; gap:7px; padding:6px 11px; border-radius:9px;
+    border:1px solid var(--border); background:var(--surface-2); color:var(--muted);
+    font-size:12px; font-weight:600; cursor:pointer; transition:all .14s; position:relative;
+  }
+  .srcopt:hover { border-color:var(--border-2); color:var(--fg); }
+  .srcopt[aria-disabled="true"] { opacity:.4; cursor:not-allowed; }
+  .srcopt.is-sel { border-color:var(--accent); background:var(--accent-ghost); color:var(--fg); }
+  .srcopt.is-sel::after { content:"✓"; color:var(--accent); font-weight:800; }
+  .srcopt .d { width:8px; height:8px; border-radius:50%; }
+  .srcopt .q { font-family:var(--font-mono); font-size:10px; opacity:.7; }
+
+  .splits .tbl td:first-child, .splits .tbl th:first-child { padding-left:20px; }
+  .splits .barcell { position:relative; }
+  .splits .barcell i { position:absolute; left:14px; right:14px; bottom:6px; height:3px; border-radius:2px; background:var(--accent); opacity:.5; }
+
+  .zone { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+  .zone__k { width:54px; font-size:12px; color:var(--muted); font-weight:600; }
+  .zone__k b { display:block; color:var(--fg); font-family:var(--font-mono); }
+  .zone__bar { flex:1; }
+  .zone__t { width:48px; text-align:right; font-family:var(--font-mono); font-size:12px; color:var(--muted); }
+
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); opacity:0;
+    background:var(--surface-3); border:1px solid var(--border-2); color:var(--fg); padding:11px 18px;
+    border-radius:11px; font-size:13px; box-shadow:var(--shadow-pop); transition:all .25s; z-index:300; display:flex; gap:10px; align-items:center; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  .toast svg { width:16px; height:16px; color:var(--accent); }
+
+  .switch { position:relative; width:42px; height:24px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .switch .sl { position:absolute; inset:0; background:var(--surface-3); border:1px solid var(--border); border-radius:99px; transition:.2s; }
+  .switch .sl::before { content:""; position:absolute; width:18px; height:18px; left:2px; top:2px; border-radius:50%; background:var(--muted); transition:.2s; }
+  .switch input:checked + .sl { background:var(--accent); border-color:var(--accent); }
+  .switch input:checked + .sl::before { transform:translateX(18px); background:#04121f; }
+
+  @media (max-width:1180px){ .summary{grid-template-columns:repeat(3,1fr);} .layout{grid-template-columns:1fr;} }
+  @media (max-width:620px){ .summary{grid-template-columns:repeat(2,1fr);} }
+</style>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="app">
+
+  <!-- RAIL -->
+  <aside class="rail">
+    <div class="rail__brand">
+      <div class="rail__logo"><svg viewBox="0 0 24 24" fill="none"><path d="M3 13h3l2-7 4 14 3-9 2 2h4" stroke="#04121f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div><div class="rail__name">Open<span>Fit</span></div><div class="rail__sub">self-hosted · cloudless</div></div>
+    </div>
+    <nav class="nav">
+      <a href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</a>
+      <a class="is-active" href="workout-detail.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 7 4-14 3 7h4" stroke-linecap="round" stroke-linejoin="round"/></svg>Activities<span class="nav__badge">312</span></a>
+      <a href="wellness.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z" stroke-linejoin="round"/></svg>Wellness</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>Sleep</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5m0 14h16M8 16V9m4 7V6m4 10v-4" stroke-linecap="round"/></svg>Trends</a>
+      <div class="nav__label">System</div>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z"/><path d="M3 12l2-1m14 1l2-1M12 3v3m0 12v3" stroke-linecap="round"/></svg>Devices &amp; sources</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round"/></svg>Algorithms<span class="nav__badge">7</span></a>
+      <a href="settings.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.7 7.7 0 000-2l2-1.5-2-3.5-2.4 1a7.6 7.6 0 00-1.7-1L15 0h-4l-.3 2.5a7.6 7.6 0 00-1.7 1l-2.4-1-2 3.5L4.6 11a7.7 7.7 0 000 2l-2 1.5 2 3.5 2.4-1a7.6 7.6 0 001.7 1L11 24h4l.3-2.5a7.6 7.6 0 001.7-1l2.4 1 2-3.5z" stroke-linejoin="round"/></svg>Settings</a>
+    </nav>
+    <div class="rail__foot">
+      <div class="userchip"><div class="userchip__av">AC</div><div style="flex:1"><div class="userchip__name">Alex C.</div><div class="userchip__meta">Local · 192.168.1.29</div></div><div class="dot-live"></div></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <header class="topbar">
+      <button class="iconbtn menu-btn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round"/></svg></button>
+      <a href="dashboard.html" class="iconbtn" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <div>
+        <div class="topbar__title">Activity detail</div>
+        <div class="topbar__crumb">Activities / Tempo Run · Riverside Loop</div>
+      </div>
+      <div class="topbar__spacer"></div>
+      <button class="iconbtn" aria-label="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L18 10l-4-4L4 16v4z" stroke-linejoin="round"/><path d="M13.5 6.5l4 4" /></svg></button>
+      <button class="btn btn--ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V3m0 0L8 7m4-4l4 4M5 21h14" stroke-linecap="round" stroke-linejoin="round"/></svg>Export FIT</button>
+    </header>
+
+    <div class="content">
+
+      <!-- header -->
+      <div class="wd-head">
+        <div class="wd-head__ic t-pace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4l-2 6h4l-3 10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="5" r="1.6" fill="currentColor"/></svg></div>
+        <div style="flex:1">
+          <div class="wd-title">Tempo Run — Riverside Loop</div>
+          <div class="wd-sub">
+            <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4" stroke-linecap="round"/></svg> Today · 07:14</span>
+            <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-5-7-11a7 7 0 0114 0c0 6-7 11-7 11z" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.5"/></svg> Nice, FR</span>
+            <span class="pill pill--good">fused · 3 sources</span>
+            <span class="pill">Aerobic TE 3.4</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- summary tiles, each showing the resolved source -->
+      <div class="summary">
+        <div><div class="lbl">Distance</div><div class="val">12.4<small> km</small></div><span class="src src--garmin"><span class="src__dot"></span>945 GPS</span></div>
+        <div><div class="lbl">Time</div><div class="val">57:32</div><span class="src src--garmin"><span class="src__dot"></span>945</span></div>
+        <div><div class="lbl">Avg pace</div><div class="val">4:38<small> /km</small></div><span class="src src--stryd"><span class="src__dot"></span>Stryd</span></div>
+        <div><div class="lbl">Avg power</div><div class="val">284<small> W</small></div><span class="src src--stryd"><span class="src__dot"></span>Stryd</span></div>
+        <div><div class="lbl">Avg HR</div><div class="val">162<small> bpm</small></div><span class="src src--helio"><span class="src__dot"></span>Helio</span></div>
+        <div><div class="lbl">Elevation</div><div class="val">+186<small> m</small></div><span class="src src--garmin"><span class="src__dot"></span>945 baro</span></div>
+      </div>
+
+      <div class="layout">
+        <!-- LEFT column -->
+        <div class="grid" style="gap:var(--gap)">
+
+          <!-- map + elevation -->
+          <div class="card card--pad0">
+            <div class="map">
+              <span class="map__chip pill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-5-7-11a7 7 0 0114 0c0 6-7 11-7 11z"/></svg> Riverside Loop · GPS from 945</span>
+              <svg viewBox="0 0 760 300" preserveAspectRatio="xMidYMid slice">
+                <defs>
+                  <linearGradient id="route" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="var(--pace)"/><stop offset="50%" stop-color="var(--accent)"/><stop offset="100%" stop-color="var(--power)"/>
+                  </linearGradient>
+                </defs>
+                <g stroke="var(--border)" stroke-width="1" opacity=".5">
+                  <path d="M0 70 H760 M0 150 H760 M0 230 H760 M120 0 V300 M300 0 V300 M480 0 V300 M640 0 V300"/>
+                </g>
+                <path d="M80 240 C140 200 150 120 230 130 C320 141 330 60 420 70 C520 81 540 150 620 140 C690 131 700 200 690 240"
+                      fill="none" stroke="oklch(70% 0.145 235 / .25)" stroke-width="11" stroke-linecap="round"/>
+                <path d="M80 240 C140 200 150 120 230 130 C320 141 330 60 420 70 C520 81 540 150 620 140 C690 131 700 200 690 240"
+                      fill="none" stroke="url(#route)" stroke-width="4" stroke-linecap="round"/>
+                <circle cx="80" cy="240" r="7" fill="var(--elev)" stroke="var(--bg)" stroke-width="2.5"/>
+                <circle cx="690" cy="240" r="7" fill="var(--hr)" stroke="var(--bg)" stroke-width="2.5"/>
+              </svg>
+            </div>
+            <div style="padding:16px 20px">
+              <div class="card__head" style="margin-bottom:10px"><div class="card__title">Elevation profile</div><div class="card__tools"><span class="tag">+186 m / −172 m</span></div></div>
+              <svg id="elevChart" viewBox="0 0 720 110" preserveAspectRatio="none" style="width:100%;height:110px"></svg>
+            </div>
+          </div>
+
+          <!-- multi-metric chart -->
+          <div class="card">
+            <div class="card__head">
+              <div class="card__title">Heart rate · power · pace<span class="sub">over distance</span></div>
+              <div class="card__tools">
+                <div class="seg" id="metricSeg" style="font-size:11px">
+                  <button class="is-active">All</button><button>HR</button><button>Power</button><button>Pace</button>
+                </div>
+              </div>
+            </div>
+            <svg id="metricChart" viewBox="0 0 720 220" preserveAspectRatio="none" style="width:100%;height:220px"></svg>
+            <div class="legend" style="margin-top:12px;justify-content:center">
+              <i><b style="background:var(--hr)"></b>HR · Helio</i>
+              <i><b style="background:var(--power)"></b>Power · Stryd</i>
+              <i><b style="background:var(--pace)"></b>Pace · Stryd</i>
+            </div>
+          </div>
+
+          <!-- splits -->
+          <div class="card card--pad0 splits">
+            <div class="card__head" style="padding:18px 20px 6px"><div class="card__title">Splits<span class="sub">per kilometre</span></div></div>
+            <table class="tbl">
+              <thead><tr><th>KM</th><th class="num">Pace</th><th class="num">Power</th><th class="num">HR</th><th class="num">Cad</th><th class="num">Elev</th></tr></thead>
+              <tbody id="splitsBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- RIGHT column -->
+        <div class="grid" style="gap:var(--gap)">
+
+          <!-- ===== THE FUSION CORE ===== -->
+          <div class="card" style="border-color:var(--accent-dim)">
+            <div class="card__head">
+              <div class="card__title">Metric sources<span class="sub">multi-device fusion</span></div>
+              <div class="card__tools"><span class="pill pill--good">3 devices</span></div>
+            </div>
+            <p class="faint" style="font-size:12px;margin:-6px 0 14px;line-height:1.5">
+              This effort was recorded by 3 devices. Open Fit keeps every raw stream and resolves the best source <b>per metric</b>. Change any pick below to re-interpret this activity.
+            </p>
+
+            <div id="fusion"></div>
+
+            <hr class="hr-line" style="margin:16px 0 14px">
+            <label style="display:flex;align-items:center;gap:12px;cursor:pointer">
+              <span class="switch"><input type="checkbox" id="retro"><span class="sl"></span></span>
+              <span style="flex:1">
+                <b style="font-size:13px;display:block">Apply retroactively</b>
+                <span class="faint" style="font-size:12px">Re-resolve all 312 past activities with these source priorities</span>
+              </span>
+            </label>
+            <button class="btn" id="saveFusion" style="width:100%;justify-content:center;margin-top:14px">Save as default priority</button>
+          </div>
+
+          <!-- HR zones -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Heart-rate zones<span class="sub">source · Helio</span></div></div>
+            <div class="zone"><div class="zone__k">Z5<b>171+</b></div><div class="zone__bar"><div class="bar"><i style="width:14%;background:var(--hr)"></i></div></div><div class="zone__t">4:58</div></div>
+            <div class="zone"><div class="zone__k">Z4<b>156-170</b></div><div class="zone__bar"><div class="bar"><i style="width:46%;background:var(--cal)"></i></div></div><div class="zone__t">22:41</div></div>
+            <div class="zone"><div class="zone__k">Z3<b>140-155</b></div><div class="zone__bar"><div class="bar"><i style="width:28%;background:var(--cadence)"></i></div></div><div class="zone__t">14:06</div></div>
+            <div class="zone"><div class="zone__k">Z2<b>124-139</b></div><div class="zone__bar"><div class="bar"><i style="width:9%;background:var(--elev)"></i></div></div><div class="zone__t">5:02</div></div>
+            <div class="zone"><div class="zone__k">Z1<b>&lt;124</b></div><div class="zone__bar"><div class="bar"><i style="width:3%;background:var(--accent)"></i></div></div><div class="zone__t">2:44</div></div>
+          </div>
+
+          <!-- derived metrics (algorithm plugins) -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Derived<span class="sub">algorithm plugins</span></div></div>
+            <div class="dev" style="border-color:var(--border)"><div class="dev__b"><b>Training Effect (aerobic)</b><span>recovery-v2.1 · WASM</span></div><div class="batt" style="color:var(--fg);font-weight:700">3.4</div></div>
+            <div class="dev"><div class="dev__b"><b>Estimated VO₂ contribution</b><span>vo2-stryd-v0.9</span></div><div class="batt" style="color:var(--fg);font-weight:700">+0.3</div></div>
+            <div class="dev"><div class="dev__b"><b>Running effectiveness</b><span>re-power-v1.0</span></div><div class="batt" style="color:var(--fg);font-weight:700">0.98</div></div>
+            <div class="dev"><div class="dev__b"><b>Stride power balance</b><span>anomaly-scan-v1.2</span></div><span class="pill pill--good" style="padding:1px 8px">clean</span></div>
+            <a href="#" class="pill" style="margin-top:12px;display:inline-flex">Re-run with another plugin →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="toastMsg">Re-resolved</span></div>
+
+<script src="js/app.js"></script>
+<script>
+  /* ---------- charts ---------- */
+  var N = 80;
+  var elev = OF.walk(N, 13, 40, 6, 0.0).map(function(v,i){ return v + 30*Math.sin(i/9) + 18*Math.sin(i/3.5); });
+  OF.lineChart(document.getElementById('elevChart'), { data: elev, color:'var(--elev)', grid:3, fillOpacity:.32 });
+
+  var hr    = OF.walk(N, 3, 150, 7, 0.18).map(function(v,i){ return Math.min(178, v + 8*Math.sin(i/7)); });
+  var power = OF.walk(N, 21, 280, 26, 0.0).map(function(v,i){ return v + 22*Math.sin(i/6); });
+  var pace  = OF.walk(N, 31, 280, 10, 0.0).map(function(v,i){ return v + 14*Math.sin(i/8); }); // sec/km-ish inverted later
+
+  function drawMetric(which) {
+    var series = [];
+    if (which==='All'||which==='HR')    series.push({ data:hr,    color:'var(--hr)',    width:2.2 });
+    if (which==='All'||which==='Power') series.push({ data:power, color:'var(--power)', width:2.2 });
+    if (which==='All'||which==='Pace')  series.push({ data:pace,  color:'var(--pace)',  width:2,  opacity:.9 });
+    OF.multiChart(document.getElementById('metricChart'), series, { grid:4 });
+  }
+  drawMetric('All');
+  document.getElementById('metricSeg').addEventListener('segchange', function(e){ drawMetric(e.detail.value); });
+
+  /* ---------- splits ---------- */
+  var splits = [
+    [1,'4:42',272,151,182,'+12'],[2,'4:35',289,158,184,'+4'],[3,'4:31',301,163,186,'−8'],
+    [4,'4:40',278,160,183,'+21'],[5,'4:44',268,159,181,'+9'],[6,'4:33',295,164,185,'−14'],
+    [7,'4:29',312,168,187,'−6'],[8,'4:36',286,166,184,'+18'],[9,'4:38',281,165,183,'+2'],
+    [10,'4:41',274,167,182,'+7'],[11,'4:34',298,170,186,'−11'],[12,'4:46',259,161,180,'+5']
+  ];
+  var paces = splits.map(function(s){ return parseInt(s[1].split(':')[0])*60+parseInt(s[1].split(':')[1]); });
+  var pMin = Math.min.apply(null,paces), pMax = Math.max.apply(null,paces);
+  var body = document.getElementById('splitsBody');
+  splits.forEach(function(s){
+    var sec = parseInt(s[1].split(':')[0])*60+parseInt(s[1].split(':')[1]);
+    var w = 100 - ((sec - pMin)/(pMax - pMin))*70 - 15; // faster => wider
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td class="num">'+s[0]+'</td>'+
+      '<td class="num barcell"><b class="mono">'+s[1]+'</b><i style="width:'+w+'%"></i></td>'+
+      '<td class="num mono">'+s[2]+' W</td>'+
+      '<td class="num mono">'+s[3]+'</td>'+
+      '<td class="num mono">'+s[4]+'</td>'+
+      '<td class="num mono faint">'+s[5]+' m</td>';
+    body.appendChild(tr);
+  });
+
+  /* ---------- FUSION engine ---------- */
+  // quality 0-100 per source per metric (demo). null => not available on that device.
+  var SRC = { garmin:{label:'945', cls:'src--garmin'}, stryd:{label:'Stryd', cls:'src--stryd'}, helio:{label:'Helio', cls:'src--helio'} };
+  var METRICS = [
+    { key:'hr',    name:'Heart rate', color:'var(--hr)',    avail:{garmin:74, helio:96},          sel:'helio'  },
+    { key:'power', name:'Power',      color:'var(--power)', avail:{stryd:99},                      sel:'stryd'  },
+    { key:'pace',  name:'Pace',       color:'var(--pace)',  avail:{garmin:88, stryd:95},           sel:'stryd'  },
+    { key:'cad',   name:'Cadence',    color:'var(--cadence)',avail:{garmin:90, stryd:97, helio:82},sel:'stryd'  },
+    { key:'gps',   name:'GPS track',  color:'var(--accent)',avail:{garmin:93},                     sel:'garmin' },
+    { key:'elev',  name:'Elevation',  color:'var(--elev)',  avail:{garmin:91, stryd:70},           sel:'garmin' }
+  ];
+  var DEFAULT_ORDER = ['stryd','helio','garmin']; // shown to illustrate persisted default priority
+
+  var fusion = document.getElementById('fusion');
+  METRICS.forEach(function(m){
+    var row = document.createElement('div'); row.className = 'fusion__row'; row.dataset.metric = m.key;
+    var label = '<div class="fusion__metric"><i style="background:'+m.color+'"></i>'+m.name+'</div>';
+    var picks = '<div class="srcpick">';
+    ['stryd','helio','garmin'].forEach(function(sk){
+      var q = m.avail[sk];
+      var has = q != null;
+      picks += '<button class="srcopt'+(m.sel===sk?' is-sel':'')+'" '+(has?'':'aria-disabled="true" disabled')+
+        ' data-src="'+sk+'"><span class="d" style="background:'+(sk==='stryd'?'var(--power)':sk==='helio'?'var(--hr)':'var(--pace)')+'"></span>'+
+        SRC[sk].label + (has?'<span class="q">'+q+'%</span>':'<span class="q">n/a</span>') + '</button>';
+    });
+    picks += '</div>';
+    row.innerHTML = label + picks;
+    fusion.appendChild(row);
+  });
+
+  function toast(msg){ var t=document.getElementById('toast'); document.getElementById('toastMsg').textContent=msg; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2200); }
+
+  fusion.addEventListener('click', function(e){
+    var b = e.target.closest('.srcopt'); if(!b || b.disabled) return;
+    var row = b.closest('.fusion__row');
+    row.querySelectorAll('.srcopt').forEach(function(x){ x.classList.remove('is-sel'); });
+    b.classList.add('is-sel');
+    var metric = METRICS.find(function(m){return m.key===row.dataset.metric;});
+    metric.sel = b.dataset.src;
+    toast(metric.name + ' → ' + SRC[b.dataset.src].label + ' · activity re-resolved');
+  });
+
+  document.getElementById('retro').addEventListener('change', function(e){
+    if(e.target.checked) toast('Retroactive resolve armed · 312 activities will recompute on save');
+  });
+  document.getElementById('saveFusion').addEventListener('click', function(){
+    var retro = document.getElementById('retro').checked;
+    toast(retro ? 'Saved · re-resolving 312 activities…' : 'Saved as default source priority');
+  });
+</script>
+</body>
+</html>

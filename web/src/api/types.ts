@@ -131,3 +131,30 @@ export interface ImportFileOutcome {
 }
 
 export type ImportResponse = ImportFileOutcome[] | { results: ImportFileOutcome[] };
+
+/** GET /api/version — backend build/version info (tolerant shape). */
+export interface VersionInfo {
+  version: string;
+  commit?: string;
+  build?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * One wellness sample (resting HR, HRV, body battery, sleep, stress …).
+ * The `kind` is free-form so screens can request whatever the backend exposes
+ * (e.g. "resting_hr", "hrv", "body_battery", "sleep"). Tolerant of field drift.
+ */
+export interface WellnessSample {
+  /** ISO date or datetime for the sample. */
+  date: string;
+  value: number;
+  /** Optional secondary value (e.g. sleep stage minutes, range high). */
+  value2?: number;
+  [key: string]: unknown;
+}
+
+export interface WellnessSeries {
+  kind: string;
+  samples: WellnessSample[];
+}

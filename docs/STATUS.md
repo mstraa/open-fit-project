@@ -3,7 +3,10 @@
 _Living doc — current state of the build. Update on every change._
 
 **Last updated:** 2026-05-30
-**Current phase:** Phase 1 (MVP: data column + dashboard) — **DONE & verified end-to-end** ✅
+**Current phase:** Phase 1 MVP done ✅ · **Design system ported** (Garmin-class dark UI from `docs/designs/`) ✅
+
+## Design system (web)
+The `docs/designs/` export (Garmin-Connect-class dark theme, OKLch tokens, per-metric colors) is now the live UI. Canonical CSS = `web/src/theme/app.css` (verbatim); `tokens.css` bridges legacy `--color-*` → design tokens. Shell in `web/src/app/AppShell.tsx` (rail nav + topbar + live health dot + mobile drawer); routes via react-router under `web/src/screens/` (Launcher, Dashboard, Activities, WorkoutDetail, Wellness, Settings, ComingSoon). **Real data**: Activities table + filter, WorkoutDetail (uPlot per-metric charts + MapLibre track + multi-device fusion source picker), Settings per-metric default source priority, Dashboard recent-activities + connected-sources. **Empty states** ("No data yet · Phase N") for future modules (training load, HRV, body battery, rings, wellness trends, device battery). Map is wrapped in `ui/ErrorBoundary` (degrades to "Map unavailable" without WebGL). `npm run build` green; all screens screenshot-verified.
 
 ## Run the MVP
 ```sh

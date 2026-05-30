@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Fit — Settings</title>
+<link rel="stylesheet" href="css/app.css" />
+<style>
+  .settings { display:grid; grid-template-columns:220px 1fr; gap:var(--gap); align-items:start; }
+  .subnav { position:sticky; top:90px; display:flex; flex-direction:column; gap:2px; }
+  .subnav a { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:var(--r-sm); font-size:13.5px; font-weight:550; color:var(--muted); transition:.14s; }
+  .subnav a svg { width:16px; height:16px; opacity:.8; }
+  .subnav a:hover { background:var(--surface-2); color:var(--fg); }
+  .subnav a.is-active { background:var(--accent-ghost); color:var(--fg); }
+  .subnav a.is-active svg { color:var(--accent); }
+
+  .panel { scroll-margin-top:90px; }
+  .panel + .panel { margin-top:var(--gap); }
+  .row { display:flex; align-items:center; gap:16px; padding:15px 0; border-bottom:1px solid var(--border); }
+  .row:last-child { border-bottom:0; }
+  .row__b { flex:1; min-width:0; }
+  .row__b b { font-size:14px; font-weight:600; display:block; }
+  .row__b span { font-size:12.5px; color:var(--faint); }
+
+  .switch { position:relative; width:44px; height:25px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .switch .sl { position:absolute; inset:0; background:var(--surface-3); border:1px solid var(--border); border-radius:99px; transition:.2s; }
+  .switch .sl::before { content:""; position:absolute; width:19px; height:19px; left:2px; top:2px; border-radius:50%; background:var(--muted); transition:.2s; }
+  .switch input:checked + .sl { background:var(--accent); border-color:var(--accent); }
+  .switch input:checked + .sl::before { transform:translateX(19px); background:#04121f; }
+
+  select.inp, input.inp { background:var(--surface-2); border:1px solid var(--border); color:var(--fg); border-radius:9px; padding:8px 12px; font-family:inherit; font-size:13px; }
+  select.inp:focus, input.inp:focus { outline:none; border-color:var(--accent); }
+
+  /* priority drag list */
+  .prio { display:flex; flex-direction:column; gap:8px; }
+  .prio__item { display:flex; align-items:center; gap:12px; padding:11px 14px; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; cursor:grab; transition:.14s; }
+  .prio__item:hover { border-color:var(--border-2); }
+  .prio__item.drag { opacity:.5; }
+  .prio__item.over { border-color:var(--accent); }
+  .prio__n { font-family:var(--font-mono); font-size:12px; color:var(--faint); width:18px; }
+  .prio__grip { color:var(--faint); }
+  .prio__grip svg { width:16px; height:16px; }
+
+  .plug { display:flex; align-items:center; gap:14px; padding:14px 0; border-bottom:1px solid var(--border); }
+  .plug:last-child { border-bottom:0; }
+  .plug__ic { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; flex:none; }
+  .plug__b { flex:1; min-width:0; }
+  .plug__b b { font-size:14px; font-weight:600; }
+  .plug__b span { display:block; font-size:12px; color:var(--faint); }
+
+  .theme-opt { display:flex; gap:12px; }
+  .theme-card { flex:1; border:1px solid var(--border); border-radius:12px; overflow:hidden; cursor:pointer; transition:.14s; }
+  .theme-card.is-sel { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ghost); }
+  .theme-card .sw { height:54px; display:flex; }
+  .theme-card .sw i { flex:1; }
+  .theme-card p { font-size:12px; font-weight:600; padding:8px 10px; text-align:center; }
+
+  @media (max-width:920px){ .settings{grid-template-columns:1fr;} .subnav{position:static;flex-direction:row;overflow-x:auto;} }
+</style>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="app">
+
+  <aside class="rail">
+    <div class="rail__brand">
+      <div class="rail__logo"><svg viewBox="0 0 24 24" fill="none"><path d="M3 13h3l2-7 4 14 3-9 2 2h4" stroke="#04121f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div><div class="rail__name">Open<span>Fit</span></div><div class="rail__sub">self-hosted · cloudless</div></div>
+    </div>
+    <nav class="nav">
+      <a href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</a>
+      <a href="workout-detail.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 7 4-14 3 7h4" stroke-linecap="round" stroke-linejoin="round"/></svg>Activities<span class="nav__badge">312</span></a>
+      <a href="wellness.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z" stroke-linejoin="round"/></svg>Wellness</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>Sleep</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5m0 14h16M8 16V9m4 7V6m4 10v-4" stroke-linecap="round"/></svg>Trends</a>
+      <div class="nav__label">System</div>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z"/><path d="M3 12l2-1m14 1l2-1M12 3v3m0 12v3" stroke-linecap="round"/></svg>Devices &amp; sources</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round"/></svg>Algorithms<span class="nav__badge">7</span></a>
+      <a class="is-active" href="settings.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.7 7.7 0 000-2l2-1.5-2-3.5-2.4 1a7.6 7.6 0 00-1.7-1L15 0h-4l-.3 2.5a7.6 7.6 0 00-1.7 1l-2.4-1-2 3.5L4.6 11a7.7 7.7 0 000 2l-2 1.5 2 3.5 2.4-1a7.6 7.6 0 001.7 1L11 24h4l.3-2.5a7.6 7.6 0 001.7-1l2.4 1 2-3.5z" stroke-linejoin="round"/></svg>Settings</a>
+    </nav>
+    <div class="rail__foot"><div class="userchip"><div class="userchip__av">AC</div><div style="flex:1"><div class="userchip__name">Alex C.</div><div class="userchip__meta">Local · 192.168.1.29</div></div><div class="dot-live"></div></div></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="iconbtn menu-btn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round"/></svg></button>
+      <div><div class="topbar__title">Settings</div><div class="topbar__crumb">Single-user · everything stored on this machine</div></div>
+      <div class="topbar__spacer"></div>
+      <button class="btn" id="saveBtn">Save changes</button>
+    </header>
+
+    <div class="content">
+      <div class="settings">
+
+        <!-- subnav -->
+        <nav class="subnav">
+          <a class="is-active" href="#sources"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3" stroke-linecap="round"/></svg>Sources &amp; fusion</a>
+          <a href="#devices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="3"/><path d="M11 18h2" stroke-linecap="round"/></svg>Devices</a>
+          <a href="#algos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round"/></svg>Algorithms</a>
+          <a href="#data"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/></svg>Data &amp; storage</a>
+          <a href="#appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3" stroke-linecap="round"/></svg>Appearance</a>
+          <a href="#privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" stroke-linejoin="round"/></svg>Privacy</a>
+        </nav>
+
+        <!-- panels -->
+        <div>
+
+          <!-- SOURCES & FUSION -->
+          <section class="panel card" id="sources">
+            <div class="card__head"><div class="card__title">Default source priority<span class="sub">per-metric fusion</span></div></div>
+            <p class="faint" style="font-size:12.5px;margin:-6px 0 16px;line-height:1.55">When several devices record the same metric, Open Fit keeps every raw stream and picks the highest-priority available source. Drag to reorder. Per-activity overrides live on each activity page.</p>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+              <div>
+                <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;display:flex;align-items:center;gap:7px"><i style="width:9px;height:9px;border-radius:3px;background:var(--hr);display:inline-block"></i>Heart rate</div>
+                <div class="prio" data-prio>
+                  <div class="prio__item" draggable="true"><span class="prio__n">1</span><span class="prio__grip"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span><span class="src src--helio"><span class="src__dot"></span>Amazfit Helio</span><span class="tag" style="margin-left:auto">96%</span></div>
+                  <div class="prio__item" draggable="true"><span class="prio__n">2</span><span class="prio__grip"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span><span class="src src--garmin"><span class="src__dot"></span>Forerunner 945</span><span class="tag" style="margin-left:auto">74%</span></div>
+                </div>
+              </div>
+              <div>
+                <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;display:flex;align-items:center;gap:7px"><i style="width:9px;height:9px;border-radius:3px;background:var(--power);display:inline-block"></i>Power &amp; pace</div>
+                <div class="prio" data-prio>
+                  <div class="prio__item" draggable="true"><span class="prio__n">1</span><span class="prio__grip"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span><span class="src src--stryd"><span class="src__dot"></span>Stryd (wind)</span><span class="tag" style="margin-left:auto">99%</span></div>
+                  <div class="prio__item" draggable="true"><span class="prio__n">2</span><span class="prio__grip"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span><span class="src src--garmin"><span class="src__dot"></span>Forerunner 945</span><span class="tag" style="margin-left:auto">88%</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row" style="margin-top:8px">
+              <div class="row__b"><b>Apply changes retroactively</b><span>Re-resolve all 312 stored activities when priority changes</span></div>
+              <label class="switch"><input type="checkbox"><span class="sl"></span></label>
+            </div>
+            <div class="row">
+              <div class="row__b"><b>Auto-merge overlapping recordings</b><span>Cluster recordings by time + sport into one logical activity</span></div>
+              <label class="switch"><input type="checkbox" checked><span class="sl"></span></label>
+            </div>
+          </section>
+
+          <!-- DEVICES -->
+          <section class="panel card" id="devices">
+            <div class="card__head"><div class="card__title">Devices</div><div class="card__tools"><span class="pill pill--good"><span class="dot-live"></span>Gadgetbridge bridge online</span></div></div>
+            <div class="plug"><div class="plug__ic t-pace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="6"/><path d="M12 2v3m0 14v3m10-10h-3M5 12H2" stroke-linecap="round"/></svg></div><div class="plug__b"><b>Garmin Forerunner 945</b><span>BLE via Gadgetbridge · last sync 2 min ago · battery 76%</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div class="plug"><div class="plug__ic t-pow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="plug__b"><b>Stryd (wind)</b><span>Power embedded in 945 activity FIT · no separate sync</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div class="plug"><div class="plug__ic t-hr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z"/></svg></div><div class="plug__b"><b>Amazfit Helio strap</b><span>BLE via Gadgetbridge · streaming HR + HRV · battery 63%</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <hr class="hr-line" style="margin:14px 0">
+            <div class="row"><div class="row__b"><b>Real-time streaming (HR &amp; sleep)</b><span>Ingest continuous samples over WebSocket as they arrive</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div style="margin-top:6px"><button class="btn btn--ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>Pair new device via Gadgetbridge</button></div>
+          </section>
+
+          <!-- ALGORITHMS -->
+          <section class="panel card" id="algos">
+            <div class="card__head"><div class="card__title">Algorithm plugins<span class="sub">sandboxed WASM</span></div><div class="card__tools"><a href="#" class="pill">Community registry →</a></div></div>
+            <div class="plug"><div class="plug__ic t-acc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v6c0 4-3.5 7-8 8-4.5-1-8-4-8-8V7z" stroke-linejoin="round"/></svg></div><div class="plug__b"><b>Recovery / readiness</b><span>readiness-v2.1 · requires HRV, resting HR, sleep</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div class="plug"><div class="plug__ic t-pow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2-5 3 10 2-7 2 4h5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="plug__b"><b>Training load (TSS · CTL · ATL)</b><span>load-power-v1.4 · requires power or HR</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div class="plug"><div class="plug__ic t-cad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2" stroke-linecap="round"/></svg></div><div class="plug__b"><b>Sleep staging &amp; quality</b><span>sleep-helio-v1.0 · requires HR, HRV, motion</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div class="plug"><div class="plug__ic t-hr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 7 4-14 3 7h4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="plug__b"><b>Anomaly scan</b><span>anomaly-scan-v1.2 · flags dropouts &amp; spikes</span></div><label class="switch"><input type="checkbox" checked><span class="sl"></span></label></div>
+            <div class="plug" style="opacity:.7"><div class="plug__ic t-elev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18" stroke-linecap="round"/></svg></div><div class="plug__b"><b>VO₂ max estimator (Stryd)</b><span>vo2-stryd-v0.9 · community · unverified author</span></div><label class="switch"><input type="checkbox"><span class="sl"></span></label></div>
+            <div class="banner" style="margin-top:14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" stroke-linejoin="round"/></svg><span class="muted">Community plugins run sandboxed — no network, capped CPU/memory. Only signed, verified-author plugins enable retroactive recompute by default.</span></div>
+          </section>
+
+          <!-- DATA -->
+          <section class="panel card" id="data">
+            <div class="card__head"><div class="card__title">Data &amp; storage</div></div>
+            <div class="row"><div class="row__b"><b>Deployment tier</b><span>Simple = single binary + SQLite · Full = Docker Compose + Postgres/Timescale</span></div>
+              <div class="seg"><button class="is-active">Simple</button><button>Full</button></div></div>
+            <div class="row"><div class="row__b"><b>Database</b><span>SQLite · 1.8 GB · /var/lib/openfit/ofit.db</span></div><span class="tag">312 activities · 41M samples</span></div>
+            <div class="row"><div class="row__b"><b>Initial backfill import</b><span>One-time .zip / .FIT import for historical data (USB export)</span></div><button class="btn btn--ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 20h16" stroke-linecap="round" stroke-linejoin="round"/></svg>Import .zip</button></div>
+            <div class="row"><div class="row__b"><b>Continuous HR retention</b><span>How long to keep raw high-resolution time-series</span></div>
+              <select class="inp"><option>Forever (recommended)</option><option>2 years</option><option>1 year</option></select></div>
+            <div class="row"><div class="row__b"><b>Export everything</b><span>Full archive — raw recordings + resolved views + derived metrics</span></div><button class="btn btn--ghost">Export archive</button></div>
+          </section>
+
+          <!-- APPEARANCE -->
+          <section class="panel card" id="appearance">
+            <div class="card__head"><div class="card__title">Appearance<span class="sub">themable via design tokens</span></div></div>
+            <div class="theme-opt" style="margin-bottom:18px">
+              <div class="theme-card is-sel"><div class="sw"><i style="background:oklch(15% 0.018 260)"></i><i style="background:oklch(22% 0.022 260)"></i><i style="background:var(--accent)"></i></div><p>Midnight (default)</p></div>
+              <div class="theme-card"><div class="sw"><i style="background:#f6f6f4"></i><i style="background:#fff"></i><i style="background:#2f6df0"></i></div><p>Paper</p></div>
+              <div class="theme-card"><div class="sw"><i style="background:oklch(13% 0.004 60)"></i><i style="background:oklch(19% 0.005 60)"></i><i style="background:oklch(70% 0.175 55)"></i></div><p>Terminal</p></div>
+            </div>
+            <div class="row"><div class="row__b"><b>Accent color</b><span>Used for highlights, charts &amp; primary actions</span></div>
+              <div style="display:flex;gap:8px">
+                <span style="width:26px;height:26px;border-radius:8px;background:var(--accent);box-shadow:0 0 0 2px var(--accent),0 0 0 4px var(--bg)"></span>
+                <span style="width:26px;height:26px;border-radius:8px;background:var(--power)"></span>
+                <span style="width:26px;height:26px;border-radius:8px;background:var(--elev)"></span>
+                <span style="width:26px;height:26px;border-radius:8px;background:var(--cal)"></span>
+              </div></div>
+            <div class="row"><div class="row__b"><b>Units</b><span>Distance, pace &amp; elevation</span></div>
+              <div class="seg"><button class="is-active">Metric</button><button>Imperial</button></div></div>
+            <div class="row"><div class="row__b"><b>Week starts on</b><span></span></div>
+              <select class="inp"><option>Monday</option><option>Sunday</option></select></div>
+          </section>
+
+          <!-- PRIVACY -->
+          <section class="panel card" id="privacy">
+            <div class="card__head"><div class="card__title">Privacy</div><div class="card__tools"><span class="pill pill--good">100% cloudless</span></div></div>
+            <div class="row"><div class="row__b"><b>Cloud connections</b><span>Garmin Connect, Zepp &amp; Stryd PowerCenter are disabled by design</span></div><span class="pill pill--bad" style="opacity:.9">Blocked</span></div>
+            <div class="row"><div class="row__b"><b>Telemetry &amp; analytics</b><span>No usage data ever leaves this server</span></div><label class="switch"><input type="checkbox" disabled><span class="sl"></span></label></div>
+            <div class="row"><div class="row__b"><b>Outbound network</b><span>Only the community algorithm registry, and only when you browse it</span></div><select class="inp"><option>On demand only</option><option>Fully offline</option></select></div>
+            <div class="row"><div class="row__b"><b>License</b><span>AGPLv3 (server) · GPLv3 (mobile) — open source</span></div><a href="#" class="tag">View source</a></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--surface-3);border:1px solid var(--border-2);color:var(--fg);padding:11px 18px;border-radius:11px;font-size:13px;box-shadow:var(--shadow-pop);transition:all .25s;z-index:300;display:flex;gap:10px;align-items:center">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Settings saved locally</span>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  // subnav scrollspy + smooth scroll
+  var links = document.querySelectorAll('.subnav a');
+  links.forEach(function(a){ a.addEventListener('click', function(e){
+    e.preventDefault(); var el = document.querySelector(a.getAttribute('href'));
+    if(el){ window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 84, behavior:'smooth' }); }
+  });});
+  var panels = document.querySelectorAll('.panel');
+  window.addEventListener('scroll', function(){
+    var pos = window.scrollY + 120, cur = panels[0].id;
+    panels.forEach(function(p){ if(p.offsetTop <= pos) cur = p.id; });
+    links.forEach(function(a){ a.classList.toggle('is-active', a.getAttribute('href')==='#'+cur); });
+  }, { passive:true });
+
+  // drag-reorder priority lists
+  document.querySelectorAll('[data-prio]').forEach(function(list){
+    var dragEl = null;
+    list.addEventListener('dragstart', function(e){ dragEl = e.target.closest('.prio__item'); dragEl.classList.add('drag'); });
+    list.addEventListener('dragend', function(){ if(dragEl) dragEl.classList.remove('drag'); renumber(list); });
+    list.addEventListener('dragover', function(e){ e.preventDefault();
+      var t = e.target.closest('.prio__item'); if(!t || t===dragEl) return;
+      var r = t.getBoundingClientRect(); var after = (e.clientY - r.top) > r.height/2;
+      list.insertBefore(dragEl, after ? t.nextSibling : t);
+    });
+  });
+  function renumber(list){ list.querySelectorAll('.prio__item .prio__n').forEach(function(n,i){ n.textContent = i+1; }); toast(); }
+
+  function toast(){ var t=document.getElementById('toast'); t.style.opacity=1; t.style.transform='translateX(-50%) translateY(0)'; clearTimeout(t._t); t._t=setTimeout(function(){ t.style.opacity=0; t.style.transform='translateX(-50%) translateY(20px)'; },1800); }
+  document.getElementById('saveBtn').addEventListener('click', toast);
+</script>
+</body>
+</html>

@@ -1,32 +1,39 @@
 /*
- * Design tokens — the single source of truth for the look & feel.
- * Themes are driven entirely by CSS custom properties so any UI can be re-skinned
- * without touching component code. Light is the default; dark applies via
- * [data-theme="dark"] on <html> (set by the ThemeProvider).
+ * Legacy token bridge.
  *
- * Naming: --color-*, --space-*, --font-*, --radius-*, --size-*.
+ * The canonical design system now lives in ./app.css (the verbatim export of
+ * the Garmin-Connect-class dark theme). This file no longer defines its own
+ * colors; instead it REMAPS the legacy color, space and radius custom
+ * properties that older inline-styled components (charts, SourcePicker,
+ * ImportControl, primitives, the old ActivityDetail) still read, onto the
+ * design tokens so everything renders on-brand until those components are
+ * refactored.
+ *
+ * The design is dark-only and canonical. A light variant is optional/secondary
+ * and intentionally just inherits the same dark mapping for now.
  */
 
 :root,
+[data-theme="dark"],
 [data-theme="light"] {
-  /* Color — surfaces & text */
-  --color-bg: #f7f8fa;
-  --color-surface: #ffffff;
-  --color-surface-alt: #eef0f4;
-  --color-border: #d7dbe2;
-  --color-text: #16191f;
-  --color-text-muted: #5a616e;
+  /* --- surfaces & text → design tokens --- */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--fg);
+  --color-text-muted: var(--muted);
 
-  /* Color — brand & status */
-  --color-accent: #2f6df6;
-  --color-accent-strong: #1f5be0;
-  --color-accent-weak: rgba(47, 109, 246, 0.1);
-  --color-accent-contrast: #ffffff;
-  --color-success: #1a9c5b;
-  --color-warning: #c98a00;
-  --color-danger: #d23b3b;
+  /* --- brand & status → design tokens --- */
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-2);
+  --color-accent-weak: var(--accent-ghost);
+  --color-accent-contrast: var(--on-accent);
+  --color-success: var(--good);
+  --color-warning: var(--warn);
+  --color-danger: var(--bad);
 
-  /* Spacing scale (4px base) */
+  /* --- spacing scale (4px base) — unchanged --- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -34,10 +41,7 @@
   --space-6: 1.5rem;
   --space-8: 2rem;
 
-  /* Typography */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* --- typography: --font-sans/--font-mono already come from app.css --- */
   --font-size-sm: 0.875rem;
   --font-size-base: 1rem;
   --font-size-lg: 1.25rem;
@@ -46,64 +50,23 @@
   --font-weight-bold: 600;
   --line-height-base: 1.5;
 
-  /* Radius & misc — tight/flat (dense WebUI feel) */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --shadow-1: 0 1px 2px rgba(16, 19, 25, 0.06), 0 2px 8px rgba(16, 19, 25, 0.06);
-}
-
-[data-theme="dark"] {
-  /* qBittorrent-WebUI-inspired: near-black layered surfaces, thin #2a2a2a
-   * borders, warm-neutral text — but with a blue accent instead of orange.
-   * Layering: bg (darkest page) < surface (cards) < surface-alt (rows/inputs). */
-  --color-bg: #0a0a0a;
-  --color-surface: #121213;
-  --color-surface-alt: #18181a;
-  --color-border: #2a2a2a;
-  --color-text: #e7e6e3;
-  --color-text-muted: #8c8c8c;
-
-  /* Blue accent family */
-  --color-accent: #3d8bfd;
-  --color-accent-strong: #5b9dff;
-  --color-accent-weak: rgba(61, 139, 253, 0.12);
-  --color-accent-contrast: #ffffff;
-  --color-success: #65d17f;
-  --color-warning: #f0b24d;
-  --color-danger: #ff6b5f;
-
-  /* Flat: lean on borders, not shadows (qbit aesthetic). */
+  /* --- radius → design geometry --- */
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r);
   --shadow-1: none;
 }
 
-/* Base element styling derived from tokens. */
-* {
-  box-sizing: border-box;
-}
-
+/* The design body rules live in app.css; keep #root full-height for the shell. */
 html,
 body,
 #root {
   margin: 0;
   padding: 0;
-  height: 100%;
-}
-
-body {
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-sans);
-  font-size: var(--font-size-base);
-  line-height: var(--line-height-base);
-  -webkit-font-smoothing: antialiased;
-}
-
-::selection {
-  background: var(--color-accent-weak);
+  min-height: 100%;
 }
 
 /* Interactive polish keyed to the accent (works with the inline-styled
- * primitives: we only add transitions, hover border, and focus rings). */
+ * primitives: we only add transitions and focus rings). */
 button,
 a {
   transition:
@@ -112,18 +75,8 @@ a {
     color 0.12s ease,
     opacity 0.12s ease;
 }
-button:not(:disabled):hover {
-  border-color: var(--color-accent) !important;
-}
-a {
-  color: var(--color-accent);
-  text-decoration: none;
-}
-a:hover {
-  color: var(--color-accent-strong);
-}
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -134,8 +87,8 @@ a:hover {
     border-color 0.12s ease;
 }
 .ofit-row:hover {
-  background: var(--color-surface-alt);
-  border-color: var(--color-accent) !important;
+  background: var(--surface-2);
+  border-color: var(--accent) !important;
 }
 
 @keyframes ofit-spin {

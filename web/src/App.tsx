@@ -1,185 +1,90 @@
-import { Suspense, lazy, useEffect, useState } from "react";
-import { ThemeToggle } from "./theme/ThemeToggle";
-import { API_BASE, getHealth } from "./api/client";
-import { Dashboard } from "./views/Dashboard";
+// App router. The web app is a typed client of ofit-api; this file only wires
+// the route table for the design's screens. Each route renders its own screen
+// file under ./screens (the in-shell screens mount the AppShell themselves so
+// each screen owns its topbar title/crumb/actions and active nav).
+
+import { Suspense, lazy } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
+import { Launcher } from "./screens/Launcher";
+import { Dashboard } from "./screens/Dashboard";
+import { Activities } from "./screens/Activities";
+import { Wellness } from "./screens/Wellness";
+import { Settings } from "./screens/Settings";
+import { ComingSoon } from "./screens/ComingSoon";
 import { Spinner } from "./ui/primitives";
 
-// Code-split the detail view: it pulls in uPlot + MapLibre GL, which are heavy.
-const ActivityDetail = lazy(() =>
-  import("./views/ActivityDetail").then((m) => ({ default: m.ActivityDetail })),
+// Code-split the detail screen: it pulls in uPlot + MapLibre GL, which are heavy.
+const WorkoutDetail = lazy(() =>
+  import("./screens/WorkoutDetail").then((m) => ({ default: m.WorkoutDetail })),
 );
 
-const APP_NAME = "Open Fit";
-
-type HealthState =
-  | { kind: "loading" }
-  | { kind: "ok"; status: string }
-  | { kind: "error"; message: string };
-
-type View = { name: "list" } | { name: "detail"; activityId: string };
-
 export function App() {
-  const [health, setHealth] = useState<HealthState>({ kind: "loading" });
-  const [view, setView] = useState<View>({ name: "list" });
-
-  useEffect(() => {
-    let cancelled = false;
-    getHealth()
-      .then((res) => !cancelled && setHealth({ kind: "ok", status: res.status }))
-      .catch((err: unknown) => {
-        if (!cancelled)
-          setHealth({
-            kind: "error",
-            message: err instanceof Error ? err.message : String(err),
-          });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   return (
-    <div
-      style={{
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--color-bg)",
-      }}
-    >
-      {/* Top toolbar */}
-      <header
-        style={{
-          flex: "0 0 auto",
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-4)",
-          padding: "var(--space-2) var(--space-4)",
-          height: "3.25rem",
-          borderBottom: "1px solid var(--color-border)",
-          background: "var(--color-surface)",
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setView({ name: "list" })}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            border: "none",
-            background: "none",
-            color: "var(--color-text)",
-            fontSize: "var(--font-size-lg)",
-            fontWeight: "var(--font-weight-bold)",
-            cursor: "pointer",
-            padding: 0,
-          }}
-        >
-          <span aria-hidden style={{ color: "var(--color-accent)" }}>
-            ◆
-          </span>
-          {APP_NAME}
-        </button>
+    <Routes>
+      {/* index.html is the launcher/overview surface (no rail). */}
+      <Route path="/" element={<Launcher />} />
 
-        {view.name === "detail" && (
-          <span style={{ color: "var(--color-text-muted)", fontSize: "var(--font-size-sm)" }}>
-            / activity
-          </span>
-        )}
-
-        <div style={{ flex: 1 }} />
-        <HealthBadge state={health} />
-        <ThemeToggle />
-      </header>
-
-      {/* Content fills remaining height */}
-      <div style={{ flex: 1, minHeight: 0 }}>
-        {view.name === "list" ? (
-          <Dashboard onOpen={(activityId) => setView({ name: "detail", activityId })} />
-        ) : (
-          <div style={{ height: "100%", overflow: "auto", padding: "var(--space-4)" }}>
-            <Suspense fallback={<Spinner label="Loading charts…" />}>
-              <ActivityDetail
-                activityId={view.activityId}
-                onBack={() => setView({ name: "list" })}
-              />
-            </Suspense>
-          </div>
-        )}
-      </div>
-
-      {/* Bottom status bar (qbit-style) */}
-      <footer
-        style={{
-          flex: "0 0 auto",
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          padding: "var(--space-1) var(--space-4)",
-          borderTop: "1px solid var(--color-border)",
-          background: "var(--color-surface)",
-          color: "var(--color-text-muted)",
-          fontSize: "0.75rem",
-        }}
-      >
-        <StatusDot state={health} />
-        <span>{healthLabel(health)}</span>
-        <span style={{ flex: 1 }} />
-        <span>
-          Backend <code style={{ fontFamily: "var(--font-mono)" }}>{API_BASE}</code>
-        </span>
-      </footer>
-    </div>
-  );
-}
-
-function healthLabel(state: HealthState): string {
-  if (state.kind === "ok") return `connected (${state.status})`;
-  if (state.kind === "error") return "offline";
-  return "connecting…";
-}
-
-function StatusDot({ state }: { state: HealthState }) {
-  const color =
-    state.kind === "ok"
-      ? "var(--color-success)"
-      : state.kind === "error"
-        ? "var(--color-danger)"
-        : "var(--color-text-muted)";
-  return (
-    <span
-      aria-hidden
-      style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: color }}
-    />
-  );
-}
-
-function HealthBadge({ state }: { state: HealthState }) {
-  const color =
-    state.kind === "ok"
-      ? "var(--color-success)"
-      : state.kind === "error"
-        ? "var(--color-danger)"
-        : "var(--color-text-muted)";
-  const label = state.kind === "ok" ? state.status : state.kind === "error" ? "offline" : "checking…";
-  return (
-    <span
-      title={state.kind === "error" ? state.message : `GET /health: ${label}`}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "var(--space-2)",
-        color,
-        fontSize: "var(--font-size-sm)",
-        fontWeight: "var(--font-weight-bold)",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: "currentColor" }}
+      <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/activities" element={<Activities />} />
+      <Route
+        path="/activities/:id"
+        element={
+          <Suspense fallback={<Spinner label="Loading activity…" />}>
+            <WorkoutDetail />
+          </Suspense>
+        }
       />
-      {label}
-    </span>
+      <Route path="/wellness" element={<Wellness />} />
+      <Route path="/settings" element={<Settings />} />
+
+      {/* Nav items without a module yet → generic empty-state screen. */}
+      <Route
+        path="/sleep"
+        element={
+          <ComingSoon
+            title="Sleep"
+            crumb="Sleep staging & overnight recovery"
+            phase="Phase 4"
+            hint="Sleep staging arrives with the wellness ingestion phase."
+          />
+        }
+      />
+      <Route
+        path="/trends"
+        element={
+          <ComingSoon
+            title="Trends"
+            crumb="Long-term fitness & wellness trends"
+            phase="Phase 4"
+            hint="Trend analysis builds on accumulated activity and wellness history."
+          />
+        }
+      />
+      <Route
+        path="/algorithms"
+        element={
+          <ComingSoon
+            title="Algorithms"
+            crumb="Sandboxed plugin algorithms"
+            phase="Phase 5"
+            hint="Recovery, HRV, sleep staging and training load run as versioned WASM plugins."
+          />
+        }
+      />
+      <Route
+        path="/devices"
+        element={
+          <ComingSoon
+            title="Devices & sources"
+            crumb="Connected devices & data sources"
+            phase="Phase 3"
+            hint="BLE ingestion via Gadgetbridge and per-source priority configure here."
+          />
+        }
+      />
+
+      {/* Unknown routes redirect to the launcher. */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

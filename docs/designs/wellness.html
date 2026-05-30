@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Fit — Wellness</title>
+<link rel="stylesheet" href="css/app.css" />
+<style>
+  .sleep-stack { display:flex; height:120px; gap:3px; align-items:flex-end; margin:8px 0 14px; }
+  .sleep-stack .col { flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:2px; }
+  .sleep-stack .col i { border-radius:2px; display:block; }
+  .sleep-leg { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--muted); }
+  .sleep-leg i { display:inline-flex; align-items:center; gap:6px; }
+  .sleep-leg b { width:10px; height:10px; border-radius:3px; }
+  .scoreboard { display:flex; align-items:center; gap:20px; }
+  .scorebig { font-family:var(--font-mono); font-size:46px; font-weight:760; letter-spacing:-0.03em; line-height:1; }
+  .biglist { display:grid; grid-template-columns:1fr 1fr; gap:10px 28px; font-size:13px; }
+  .biglist .r { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid var(--border); }
+  .biglist .r b { font-family:var(--font-mono); }
+  .hband { position:relative; }
+</style>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="app">
+
+  <aside class="rail">
+    <div class="rail__brand">
+      <div class="rail__logo"><svg viewBox="0 0 24 24" fill="none"><path d="M3 13h3l2-7 4 14 3-9 2 2h4" stroke="#04121f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div><div class="rail__name">Open<span>Fit</span></div><div class="rail__sub">self-hosted · cloudless</div></div>
+    </div>
+    <nav class="nav">
+      <a href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</a>
+      <a href="workout-detail.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 7 4-14 3 7h4" stroke-linecap="round" stroke-linejoin="round"/></svg>Activities<span class="nav__badge">312</span></a>
+      <a class="is-active" href="wellness.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z" stroke-linejoin="round"/></svg>Wellness</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>Sleep</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5m0 14h16M8 16V9m4 7V6m4 10v-4" stroke-linecap="round"/></svg>Trends</a>
+      <div class="nav__label">System</div>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z"/><path d="M3 12l2-1m14 1l2-1M12 3v3m0 12v3" stroke-linecap="round"/></svg>Devices &amp; sources</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round"/></svg>Algorithms<span class="nav__badge">7</span></a>
+      <a href="settings.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.7 7.7 0 000-2l2-1.5-2-3.5-2.4 1a7.6 7.6 0 00-1.7-1L15 0h-4l-.3 2.5a7.6 7.6 0 00-1.7 1l-2.4-1-2 3.5L4.6 11a7.7 7.7 0 000 2l-2 1.5 2 3.5 2.4-1a7.6 7.6 0 001.7 1L11 24h4l.3-2.5a7.6 7.6 0 001.7-1l2.4 1 2-3.5z" stroke-linejoin="round"/></svg>Settings</a>
+    </nav>
+    <div class="rail__foot"><div class="userchip"><div class="userchip__av">AC</div><div style="flex:1"><div class="userchip__name">Alex C.</div><div class="userchip__meta">Local · 192.168.1.29</div></div><div class="dot-live"></div></div></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="iconbtn menu-btn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round"/></svg></button>
+      <div><div class="topbar__title">Wellness</div><div class="topbar__crumb">Recovery, sleep &amp; daily health · resolved per metric</div></div>
+      <div class="topbar__spacer"></div>
+      <div class="seg"><button>Day</button><button class="is-active">Week</button><button>Month</button></div>
+    </header>
+
+    <div class="content">
+
+      <!-- recovery readiness banner -->
+      <div class="banner" style="margin-bottom:24px;border-color:oklch(72% 0.16 150 / .4);background:oklch(72% 0.16 150 / .1)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z"/></svg>
+        <div><b style="color:var(--good)">Readiness 84 — ready to train.</b> <span class="muted">HRV in your balanced band, resting HR low, sleep on target. Computed by <span class="tag">readiness-v2.1</span> from Helio + 945 streams.</span></div>
+        <span class="pill pill--good" style="margin-left:auto">Helio HRV</span>
+      </div>
+
+      <!-- stat tiles -->
+      <div class="grid grid--stats" style="margin-bottom:var(--gap)">
+        <div class="card stat"><div class="stat__ico t-hr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z"/></svg></div><div class="stat__label">Resting HR</div><div class="stat__val num">48<small> bpm</small></div><div class="stat__delta down">▼ 2 · 7d avg 49</div></div>
+        <div class="card stat"><div class="stat__ico t-pow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2-5 3 10 2-7 2 4h5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="stat__label">HRV · overnight</div><div class="stat__val num">68<small> ms</small></div><div class="stat__delta flat">▬ balanced (58–74)</div></div>
+        <div class="card stat"><div class="stat__ico t-cad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 109 9" stroke-linecap="round"/><path d="M12 8v4l3 1" stroke-linecap="round"/></svg></div><div class="stat__label">Stress · avg</div><div class="stat__val num">26<small>/100</small></div><div class="stat__delta down">▼ low day</div></div>
+        <div class="card stat"><div class="stat__ico t-acc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M9 8h6" stroke-linecap="round"/></svg></div><div class="stat__label">Body battery</div><div class="stat__val num">82<small>/100</small></div><div class="stat__delta up">▲ +54 overnight</div></div>
+      </div>
+
+      <div class="grid grid--main">
+        <div class="grid" style="gap:var(--gap)">
+
+          <!-- sleep -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Last night<span class="sub">Helio · 7h 42m</span></div><div class="card__tools"><span class="pill pill--good">Score 86</span></div></div>
+            <div class="scoreboard" style="margin-bottom:6px">
+              <div><div class="scorebig" style="color:var(--accent)">86</div><div class="faint" style="font-size:12px;text-align:center;margin-top:4px">sleep score</div></div>
+              <div style="flex:1" class="biglist">
+                <div class="r"><span class="muted">Deep</span><b style="color:var(--accent)">1h 18m</b></div>
+                <div class="r"><span class="muted">Light</span><b style="color:var(--pace)">4h 02m</b></div>
+                <div class="r"><span class="muted">REM</span><b style="color:var(--power)">2h 04m</b></div>
+                <div class="r"><span class="muted">Awake</span><b style="color:var(--muted)">18m</b></div>
+                <div class="r"><span class="muted">Resting HR</span><b>46 bpm</b></div>
+                <div class="r"><span class="muted">Avg SpO₂</span><b>96%</b></div>
+              </div>
+            </div>
+            <div class="sleep-stack" id="hypno"></div>
+            <div class="sleep-leg"><i><b style="background:var(--accent)"></b>Deep</i><i><b style="background:var(--pace)"></b>Light</i><i><b style="background:var(--power)"></b>REM</i><i><b style="background:var(--muted)"></b>Awake</i></div>
+          </div>
+
+          <!-- HRV trend -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">HRV trend<span class="sub">30 days · balanced band shaded</span></div><div class="card__tools"><span class="tag">source · Helio</span></div></div>
+            <svg id="hrvChart" viewBox="0 0 720 180" preserveAspectRatio="none" style="width:100%;height:180px"></svg>
+          </div>
+
+          <!-- body battery 24h -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Body battery<span class="sub">last 24 hours</span></div><div class="card__tools"><span class="pill pill--good">▲ charged 28→82</span></div></div>
+            <svg id="bbChart" viewBox="0 0 720 160" preserveAspectRatio="none" style="width:100%;height:160px"></svg>
+          </div>
+        </div>
+
+        <div class="grid" style="gap:var(--gap)">
+          <!-- resting HR trend -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Resting HR</div><div class="card__tools"><span class="tag">7d</span></div></div>
+            <svg id="rhrChart" viewBox="0 0 360 110" preserveAspectRatio="none" style="width:100%;height:110px"></svg>
+          </div>
+
+          <!-- stress through day -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Stress · today</div></div>
+            <svg id="stressChart" viewBox="0 0 360 130" preserveAspectRatio="none" style="width:100%;height:130px"></svg>
+            <div class="legend" style="margin-top:8px"><i><b style="background:var(--good)"></b>Rest</i><i><b style="background:var(--cadence)"></b>Low</i><i><b style="background:var(--cal)"></b>Medium</i><i><b style="background:var(--hr)"></b>High</i></div>
+          </div>
+
+          <!-- steps week -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Steps · this week</div><div class="card__tools"><span class="tag">avg 9.4k</span></div></div>
+            <svg id="stepsChart" viewBox="0 0 360 130" preserveAspectRatio="none" style="width:100%;height:130px"></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  // hypnogram: 32 segments mapped to stage heights
+  (function(){
+    var stages = ['Awake','REM','Light','Deep'];
+    var colors = { Awake:'var(--muted)', REM:'var(--power)', Light:'var(--pace)', Deep:'var(--accent)' };
+    var heights = { Awake:18, REM:55, Light:80, Deep:118 };
+    var seq = 'LLDDLLRLLLDDLLLRRLLDLLLRRLLLLALL'.split('');
+    var map = { L:'Light', D:'Deep', R:'REM', A:'Awake' };
+    var host = document.getElementById('hypno');
+    seq.forEach(function(c){
+      var st = map[c];
+      var col = document.createElement('div'); col.className='col';
+      var i = document.createElement('i'); i.style.height = heights[st]+'px'; i.style.background = colors[st];
+      col.appendChild(i); host.appendChild(col);
+    });
+  })();
+
+  // HRV with shaded balanced band
+  (function(){
+    var svg = document.getElementById('hrvChart');
+    var data = OF.walk(30, 9, 66, 7, 0.05);
+    var info = OF.lineChart(svg, { data:data, color:'var(--power)', min:45, max:85, grid:4, fillOpacity:.22 });
+    // band 58-74 behind line
+    var band = OF.el('rect', { x:0, y:info.sy(74), width:info.W, height:info.sy(58)-info.sy(74), fill:'var(--good)', opacity:.08 });
+    svg.insertBefore(band, svg.firstChild.nextSibling || null);
+  })();
+
+  // body battery: drains through day, charges overnight
+  (function(){
+    var d = [];
+    var v = 60;
+    for(var i=0;i<48;i++){ var hour=i/2; if(hour<7){ v=Math.min(82, v+ (hour<6?3.2:1)); } else { v=Math.max(20, v-1.7 - (hour>12&&hour<14?6:0)); } d.push(v); }
+    OF.lineChart(document.getElementById('bbChart'), { data:d, color:'var(--accent)', min:10, max:90, grid:3, fillOpacity:.28 });
+  })();
+
+  OF.lineChart(document.getElementById('rhrChart'), { data:OF.walk(7,3,49,2,-0.1), color:'var(--hr)', grid:2, dotLast:true });
+
+  // stress bars colored by band
+  (function(){
+    var vals = OF.walk(24, 4, 30, 18, 0).map(function(v){ return Math.max(4, Math.min(92, v)); });
+    var bars = vals.map(function(v){ var c = v<25?'var(--good)':v<50?'var(--cadence)':v<75?'var(--cal)':'var(--hr)'; return { v:v, color:c }; });
+    OF.barChart(document.getElementById('stressChart'), bars, { bw:0.7, max:100 });
+  })();
+
+  OF.barChart(document.getElementById('stepsChart'), [
+    {label:'M',v:8.2},{label:'T',v:11.4},{label:'W',v:7.1},{label:'T',v:12.8},{label:'F',v:9.8,color:'var(--accent)'},{label:'S',v:6.4,dim:true},{label:'S',v:10.1,dim:true}
+  ], { labels:true, color:'var(--accent-dim)' });
+</script>
+</body>
+</html>

@@ -18,6 +18,9 @@ import type {
   ScalarSample,
   Source,
   StreamKind,
+  VersionInfo,
+  WellnessSample,
+  WellnessSeries,
 } from "./types";
 
 /* ---------------------------------------------------------------- helpers */
@@ -225,4 +228,50 @@ export async function importFiles(files: FileList | File[]): Promise<ImportFileO
   const res = await apiPostForm<ImportResponse>("/api/import", form);
   const arr = Array.isArray(res) ? res : (res?.results ?? []);
   return arr;
+}
+
+/* ------------------------------------------------------------- version */
+
+/** GET /api/version — backend build/version metadata. Tolerant of field drift. */
+export async function getVersion(): Promise<VersionInfo> {
+  const raw = await apiFetch<unknown>("/api/version");
+  const o = (raw ?? {}) as Record<string, unknown>;
+  return {
+    version: str(pick(o, "version", "ver"), "unknown"),
+    commit: (pick(o, "commit", "git_sha", "sha") as string | undefined) || undefined,
+    build: (pick(o, "build", "build_time", "built_at") as string | undefined) || undefined,
+    ...o,
+  };
+}
+
+/* ------------------------------------------------------------ wellness */
+
+/**
+ * GET /api/wellness?kind=...&from=...&to=... — daily wellness series
+ * (resting HR, HRV, body battery, sleep, stress …). No backend data exists yet
+ * for most kinds; this returns an empty series rather than throwing on shapes it
+ * doesn't recognize, so screens render the on-brand empty state.
+ */
+export async function getWellness(
+  kind: string,
+  from?: string,
+  to?: string,
+): Promise<WellnessSeries> {
+  const qs = new URLSearchParams({ kind });
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+  const raw = await apiFetch<unknown>(`/api/wellness?${qs.toString()}`);
+  const arr = Array.isArray(raw)
+    ? raw
+    : ((raw as Record<string, unknown> | null)?.samples as unknown[]) ?? [];
+  const samples: WellnessSample[] = (Array.isArray(arr) ? arr : []).map((s) => {
+    const p = s as Record<string, unknown>;
+    return {
+      date: str(pick(p, "date", "day", "timestamp", "t")),
+      value: num(pick(p, "value", "v")),
+      value2:
+        pick(p, "value2", "v2") !== undefined ? num(pick(p, "value2", "v2")) : undefined,
+    } satisfies WellnessSample;
+  });
+  return { kind, samples };
 }

@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Fit — Dashboard</title>
+<link rel="stylesheet" href="css/app.css" />
+<style>
+  .hero-spark { width: 64px; height: 30px; }
+  .ringset { display: flex; gap: 18px; align-items: center; justify-content: space-around; }
+  .ringitem { text-align: center; }
+  .ringitem svg { display: block; margin: 0 auto 8px; }
+  .ringitem b { font-family: var(--font-mono); font-size: 17px; font-weight: 700; }
+  .ringitem span { display: block; font-size: 11px; color: var(--faint); }
+  .dev { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .dev:last-child { border-bottom: 0; padding-bottom: 0; }
+  .dev__ic { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; flex: none; border: 1px solid var(--border); }
+  .dev__ic svg { width: 18px; height: 18px; color: var(--muted); }
+  .dev__b { flex: 1; min-width: 0; }
+  .dev__b b { font-size: 13px; font-weight: 600; }
+  .dev__b span { display: block; font-size: 11px; color: var(--faint); }
+  .batt { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .wtrend { display: flex; align-items: center; gap: 14px; }
+  .wtrend svg { flex: none; }
+  .wtrend__v { font-family: var(--font-mono); font-size: 22px; font-weight: 700; }
+  .wtrend__l { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="app">
+
+  <!-- ============ RAIL ============ -->
+  <aside class="rail">
+    <div class="rail__brand">
+      <div class="rail__logo">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M3 13h3l2-7 4 14 3-9 2 2h4" stroke="#04121f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div>
+        <div class="rail__name">Open<span>Fit</span></div>
+        <div class="rail__sub">self-hosted · cloudless</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="is-active" href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</a>
+      <a href="workout-detail.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 7 4-14 3 7h4" stroke-linecap="round" stroke-linejoin="round"/></svg>Activities<span class="nav__badge">312</span></a>
+      <a href="wellness.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z" stroke-linejoin="round"/></svg>Wellness</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>Sleep</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5m0 14h16M8 16V9m4 7V6m4 10v-4" stroke-linecap="round"/></svg>Trends</a>
+      <div class="nav__label">System</div>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z"/><path d="M3 12l2-1m14 1l2-1M12 3v3m0 12v3" stroke-linecap="round"/></svg>Devices &amp; sources</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round"/></svg>Algorithms<span class="nav__badge">7</span></a>
+      <a href="settings.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.7 7.7 0 000-2l2-1.5-2-3.5-2.4 1a7.6 7.6 0 00-1.7-1L15 0h-4l-.3 2.5a7.6 7.6 0 00-1.7 1l-2.4-1-2 3.5L4.6 11a7.7 7.7 0 000 2l-2 1.5 2 3.5 2.4-1a7.6 7.6 0 001.7 1L11 24h4l.3-2.5a7.6 7.6 0 001.7-1l2.4 1 2-3.5z" stroke-linejoin="round"/></svg>Settings</a>
+    </nav>
+    <div class="rail__foot">
+      <div class="userchip">
+        <div class="userchip__av">AC</div>
+        <div style="flex:1">
+          <div class="userchip__name">Alex C.</div>
+          <div class="userchip__meta">Local · 192.168.1.29</div>
+        </div>
+        <div class="dot-live" title="Live sync"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="topbar">
+      <button class="iconbtn menu-btn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round"/></svg></button>
+      <div>
+        <div class="topbar__title">Dashboard</div>
+        <div class="topbar__crumb">Friday, May 30 · all data resolved locally</div>
+      </div>
+      <div class="topbar__spacer"></div>
+      <div class="seg" id="rangeSeg">
+        <button>Day</button><button class="is-active">Week</button><button>Month</button><button>Year</button>
+      </div>
+      <button class="iconbtn" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4" stroke-linecap="round"/></svg></button>
+      <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 20h16" stroke-linecap="round" stroke-linejoin="round"/></svg>Import .FIT</button>
+    </header>
+
+    <div class="content">
+
+      <!-- training status banner -->
+      <div class="banner" style="margin-bottom:24px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 7 4-14 3 7h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div>
+          <b>Training status: Productive.</b>
+          <span class="muted">Load is trending up and your fitness is building. Last fused effort drew HR from <span class="src src--helio"><span class="src__dot"></span>Helio</span> and power from <span class="src src--stryd"><span class="src__dot"></span>Stryd</span>.</span>
+        </div>
+        <a href="#" class="pill pill--good" style="margin-left:auto">Optimal · 7d</a>
+      </div>
+
+      <!-- stat tiles -->
+      <div class="grid grid--stats" style="margin-bottom:var(--gap)">
+        <div class="card stat">
+          <div class="stat__ico t-acc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5m0 14h16M8 16V9m4 7V6m4 10v-4" stroke-linecap="round"/></svg></div>
+          <div class="stat__label">Training load · 7d</div>
+          <div class="stat__val num">428</div>
+          <div class="stat__delta up">▲ 12% vs last week</div>
+          <svg class="hero-spark stat__spark" viewBox="0 0 64 30" data-spark="acc"></svg>
+        </div>
+        <div class="card stat">
+          <div class="stat__ico t-hr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z" stroke-linejoin="round"/></svg></div>
+          <div class="stat__label">Resting HR</div>
+          <div class="stat__val num">48 <small>bpm</small></div>
+          <div class="stat__delta down">▼ 2 bpm · improving</div>
+          <svg class="hero-spark stat__spark" viewBox="0 0 64 30" data-spark="hr"></svg>
+        </div>
+        <div class="card stat">
+          <div class="stat__ico t-pow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="stat__label">HRV · overnight</div>
+          <div class="stat__val num">68 <small>ms</small></div>
+          <div class="stat__delta flat">▬ balanced range</div>
+          <svg class="hero-spark stat__spark" viewBox="0 0 64 30" data-spark="hrv"></svg>
+        </div>
+        <div class="card stat">
+          <div class="stat__ico t-elev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M9 8h6" stroke-linecap="round"/></svg></div>
+          <div class="stat__label">Body battery</div>
+          <div class="stat__val num">82<small>/100</small></div>
+          <div class="stat__delta up">▲ recovered overnight</div>
+          <svg class="hero-spark stat__spark" viewBox="0 0 64 30" data-spark="bb"></svg>
+        </div>
+      </div>
+
+      <!-- main grid -->
+      <div class="grid grid--main">
+
+        <!-- LEFT -->
+        <div class="grid" style="gap:var(--gap)">
+
+          <!-- training load chart -->
+          <div class="card">
+            <div class="card__head">
+              <div class="card__title">Training load &amp; fitness<span class="sub">6 weeks</span></div>
+              <div class="card__tools">
+                <div class="legend">
+                  <i><b style="background:var(--accent)"></b>Fitness (CTL)</i>
+                  <i><b style="background:var(--cal)"></b>Fatigue (ATL)</i>
+                  <i><b style="background:var(--elev)"></b>Form (TSB)</i>
+                </div>
+              </div>
+            </div>
+            <svg id="loadChart" viewBox="0 0 720 200" preserveAspectRatio="none" style="width:100%;height:200px"></svg>
+          </div>
+
+          <!-- weekly volume -->
+          <div class="card">
+            <div class="card__head">
+              <div class="card__title">Weekly volume<span class="sub">distance by sport</span></div>
+              <div class="card__tools"><span class="tag">42.8 km this wk</span></div>
+            </div>
+            <svg id="volChart" viewBox="0 0 720 150" preserveAspectRatio="none" style="width:100%;height:150px"></svg>
+          </div>
+
+          <!-- recent activities -->
+          <div class="card card--pad0">
+            <div class="card__head" style="padding:18px 20px 0;margin-bottom:8px">
+              <div class="card__title">Recent activities</div>
+              <div class="card__tools"><a href="#" class="pill">View all 312 →</a></div>
+            </div>
+            <a class="act" href="workout-detail.html">
+              <div class="act__ico t-pace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4l-2 6h4l-3 10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="5" r="1.6" fill="currentColor"/></svg></div>
+              <div class="act__body">
+                <div class="act__name">Tempo Run — Riverside Loop</div>
+                <div class="act__meta"><span>Today · 07:14</span><span class="src src--garmin"><span class="src__dot"></span>945</span><span class="src src--stryd"><span class="src__dot"></span>Stryd</span><span class="src src--helio"><span class="src__dot"></span>Helio</span><span class="pill pill--good" style="padding:1px 7px">fused</span></div>
+              </div>
+              <div class="act__stat"><b>12.4 km</b><span>4:38 /km</span></div>
+              <div class="act__stat"><b>284 W</b><span>avg power</span></div>
+            </a>
+            <a class="act" href="workout-detail.html">
+              <div class="act__ico t-hr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2" stroke-linecap="round"/></svg></div>
+              <div class="act__body">
+                <div class="act__name">Easy Recovery — Zone 2</div>
+                <div class="act__meta"><span>Wed · 18:02</span><span class="src src--garmin"><span class="src__dot"></span>945</span><span class="src src--helio"><span class="src__dot"></span>Helio</span></div>
+              </div>
+              <div class="act__stat"><b>8.1 km</b><span>5:51 /km</span></div>
+              <div class="act__stat"><b>138 bpm</b><span>avg HR</span></div>
+            </a>
+            <a class="act" href="workout-detail.html">
+              <div class="act__ico t-elev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18l6-9 4 5 3-4 5 8z" stroke-linejoin="round"/></svg></div>
+              <div class="act__body">
+                <div class="act__name">Trail — Col de Vence</div>
+                <div class="act__meta"><span>Sun · 09:30</span><span class="src src--garmin"><span class="src__dot"></span>945</span><span class="src src--stryd"><span class="src__dot"></span>Stryd</span><span class="pill" style="padding:1px 7px">2 sources merged</span></div>
+              </div>
+              <div class="act__stat"><b>21.7 km</b><span>+842 m</span></div>
+              <div class="act__stat"><b>5:42 /km</b><span>avg pace</span></div>
+            </a>
+            <a class="act" href="workout-detail.html">
+              <div class="act__ico t-cad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 19V7a6 6 0 0112 0v12" stroke-linecap="round"/><path d="M4 19h16" stroke-linecap="round"/></svg></div>
+              <div class="act__body">
+                <div class="act__name">Interval Session — 6×800m</div>
+                <div class="act__meta"><span>Fri · 06:48</span><span class="src src--garmin"><span class="src__dot"></span>945</span><span class="src src--stryd"><span class="src__dot"></span>Stryd</span></div>
+              </div>
+              <div class="act__stat"><b>10.2 km</b><span>3:58 /km</span></div>
+              <div class="act__stat"><b>312 W</b><span>avg power</span></div>
+            </a>
+          </div>
+        </div>
+
+        <!-- RIGHT -->
+        <div class="grid" style="gap:var(--gap)">
+
+          <!-- today rings -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Today</div><div class="card__tools"><span class="tag">May 30</span></div></div>
+            <div class="ringset">
+              <div class="ringitem">
+                <svg width="74" height="74" viewBox="0 0 74 74" class="ring">
+                  <circle class="ring__bg" cx="37" cy="37" r="30" stroke-width="7"/>
+                  <circle class="ring__fg" cx="37" cy="37" r="30" stroke-width="7" stroke="var(--accent)" data-ring="0.78"/>
+                </svg>
+                <b>9,840</b><span>steps · 78%</span>
+              </div>
+              <div class="ringitem">
+                <svg width="74" height="74" viewBox="0 0 74 74" class="ring">
+                  <circle class="ring__bg" cx="37" cy="37" r="30" stroke-width="7"/>
+                  <circle class="ring__fg" cx="37" cy="37" r="30" stroke-width="7" stroke="var(--cal)" data-ring="0.92"/>
+                </svg>
+                <b>112</b><span>intensity min</span>
+              </div>
+              <div class="ringitem">
+                <svg width="74" height="74" viewBox="0 0 74 74" class="ring">
+                  <circle class="ring__bg" cx="37" cy="37" r="30" stroke-width="7"/>
+                  <circle class="ring__fg" cx="37" cy="37" r="30" stroke-width="7" stroke="var(--elev)" data-ring="0.5"/>
+                </svg>
+                <b>8</b><span>floors</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- wellness mini trends -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Wellness · 7-day</div><div class="card__tools"><a href="wellness.html" class="pill">Open →</a></div></div>
+            <div class="wtrend" style="margin-bottom:16px">
+              <svg width="90" height="40" viewBox="0 0 90 40" data-spark="hr2"></svg>
+              <div><div class="wtrend__v" style="color:var(--hr)">48<span style="font-size:13px;color:var(--faint)"> bpm</span></div><div class="wtrend__l">Resting heart rate</div></div>
+            </div>
+            <hr class="hr-line" style="margin:14px 0">
+            <div class="wtrend" style="margin-bottom:16px">
+              <svg width="90" height="40" viewBox="0 0 90 40" data-spark="hrv2"></svg>
+              <div><div class="wtrend__v" style="color:var(--power)">68<span style="font-size:13px;color:var(--faint)"> ms</span></div><div class="wtrend__l">HRV (overnight avg)</div></div>
+            </div>
+            <hr class="hr-line" style="margin:14px 0">
+            <div class="wtrend">
+              <svg width="90" height="40" viewBox="0 0 90 40" data-spark="stress"></svg>
+              <div><div class="wtrend__v" style="color:var(--cadence)">26<span style="font-size:13px;color:var(--faint)"> avg</span></div><div class="wtrend__l">Stress level</div></div>
+            </div>
+          </div>
+
+          <!-- devices / sources -->
+          <div class="card">
+            <div class="card__head"><div class="card__title">Connected sources</div><div class="card__tools"><span class="pill pill--good"><span class="dot-live"></span>via Gadgetbridge</span></div></div>
+            <div class="dev">
+              <div class="dev__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="6"/><path d="M12 2v3m0 14v3m10-10h-3M5 12H2" stroke-linecap="round"/></svg></div>
+              <div class="dev__b"><b>Garmin Forerunner 945</b><span>last sync 2 min ago · BLE</span></div>
+              <div class="batt">76%</div>
+            </div>
+            <div class="dev">
+              <div class="dev__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="dev__b"><b>Stryd (wind)</b><span>embedded in 945 FIT · power</span></div>
+              <div class="batt">91%</div>
+            </div>
+            <div class="dev">
+              <div class="dev__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 3.5C19 16.5 12 21 12 21z" stroke-linejoin="round"/></svg></div>
+              <div class="dev__b"><b>Amazfit Helio strap</b><span>last sync 5 min ago · BLE</span></div>
+              <div class="batt">63%</div>
+            </div>
+            <hr class="hr-line" style="margin:14px 0 12px">
+            <a href="settings.html" class="btn btn--ghost" style="width:100%;justify-content:center">Manage source priorities</a>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  // sparklines
+  var sp = {
+    acc:   OF.walk(20, 7, 380, 14, 2.4),
+    hr:    OF.walk(20, 3, 52, 2, -0.2),
+    hrv:   OF.walk(20, 9, 66, 8, 0.1),
+    bb:    OF.walk(20, 5, 70, 10, 0.6)
+  };
+  document.querySelectorAll('[data-spark]').forEach(function (s) {
+    var k = s.dataset.spark;
+    var map = { acc:[sp.acc,'var(--accent)'], hr:[sp.hr,'var(--hr)'], hrv:[sp.hrv,'var(--power)'], bb:[sp.bb,'var(--elev)'],
+      hr2:[OF.walk(28,3,49,3,-0.05),'var(--hr)'], hrv2:[OF.walk(28,9,66,9,0.1),'var(--power)'], stress:[OF.walk(28,4,28,12,-0.1),'var(--cadence)'] };
+    if (map[k]) OF.spark(s, map[k][0], map[k][1]);
+  });
+
+  // training load: CTL (fitness) rising, ATL (fatigue) spikier, TSB form
+  (function () {
+    var ctl = OF.walk(42, 11, 60, 3, 0.9);
+    var atl = OF.walk(42, 23, 62, 11, 0.8);
+    var allMin = Math.min.apply(null, ctl.concat(atl)) - 6;
+    var allMax = Math.max.apply(null, ctl.concat(atl)) + 6;
+    var tsb = ctl.map(function (c, i) { return c - atl[i] + 70; });
+    OF.multiChart(document.getElementById('loadChart'), [
+      { data: ctl, color: 'var(--accent)', min: allMin, max: allMax, width: 2.6 },
+      { data: atl, color: 'var(--cal)', min: allMin, max: allMax, width: 2.2, opacity: .9 },
+      { data: tsb, color: 'var(--elev)', min: allMin, max: allMax, width: 1.8, opacity: .7 }
+    ], { grid: 4 });
+  })();
+
+  // weekly volume bars (run/trail/easy mix across 7 weeks)
+  OF.barChart(document.getElementById('volChart'), [
+    { label:'W18', v:31 }, { label:'W19', v:38 }, { label:'W20', v:24, dim:true }, { label:'W21', v:45 },
+    { label:'W22', v:40 }, { label:'W23', v:52 }, { label:'W24', v:42.8, color:'var(--accent)' }
+  ], { labels: true, color: 'var(--accent-dim)' });
+</script>
+</body>
+</html>
