@@ -8,6 +8,8 @@ export interface RecordingTick {
   hr: number;
   cadence: number;
   power: number;
+  altitudeM: number;
+  ascentM: number;
   paused: boolean;
 }
 

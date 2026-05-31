@@ -132,7 +132,7 @@ public class RecordingPlugin extends Plugin {
         RecordingService.setLiveListener(new RecordingService.LiveListener() {
             @Override
             public void onTick(long elapsedMs, double distanceM, double speedMps, int hr,
-                               int cadence, int power, boolean paused) {
+                               int cadence, int power, double altitudeM, double ascentM, boolean paused) {
                 JSObject ev = new JSObject();
                 ev.put("elapsedMs", elapsedMs);
                 ev.put("distanceM", distanceM);
@@ -140,6 +140,8 @@ public class RecordingPlugin extends Plugin {
                 ev.put("hr", hr);
                 ev.put("cadence", cadence);
                 ev.put("power", power);
+                ev.put("altitudeM", altitudeM);
+                ev.put("ascentM", ascentM);
                 ev.put("paused", paused);
                 notifyListeners("tick", ev);
             }

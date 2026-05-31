@@ -56,7 +56,8 @@ public class RecordingService extends Service implements SensorEventListener, Lo
 
     /** Live 1 Hz summary + lifecycle, consumed by RecordingPlugin to update the UI. */
     public interface LiveListener {
-        void onTick(long elapsedMs, double distanceM, double speedMps, int hr, int cadence, int power, boolean paused);
+        void onTick(long elapsedMs, double distanceM, double speedMps, int hr, int cadence,
+                    int power, double altitudeM, double ascentM, boolean paused);
         void onStopped(String sessionDir, long elapsedMs);
     }
     private static volatile LiveListener liveListener;
@@ -97,6 +98,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private double cumDistanceM = 0;
     private double lastSpeedMps = 0;
     private double lastLat = Double.NaN, lastLon = Double.NaN;
+    private double lastAltM = Double.NaN, cumAscentM = 0;
     private int lastCadence = 0, lastPower = 0;
     private long lastFlush = 0;
 
@@ -176,7 +178,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
             LiveListener l = liveListener;
             if (l != null) {
                 l.onTick(snapElapsedMs(), snapDistanceM(), snapSpeedMps(), snapHr(),
-                    snapCadence(), snapPower(), snapPaused());
+                    snapCadence(), snapPower(), snapAltitude(), snapAscent(), snapPaused());
             }
             if (recording && handler != null) handler.postDelayed(this, 1000);
         }
@@ -283,6 +285,10 @@ public class RecordingService extends Service implements SensorEventListener, Lo
         if (!Double.isNaN(lastLat)) {
             cumDistanceM += haversine(lastLat, lastLon, lat, lon);
         }
+        if (loc.hasAltitude()) {
+            if (!Double.isNaN(lastAltM) && alt > lastAltM) cumAscentM += (alt - lastAltM);
+            lastAltM = alt;
+        }
         lastLat = lat;
         lastLon = lon;
         lastSpeedMps = spd;
@@ -388,6 +394,8 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     int snapHr() { return (SystemClock.elapsedRealtime() - latestHrAt) < 8000 ? latestHr : 0; }
     int snapCadence() { return lastCadence; }
     int snapPower() { return lastPower; }
+    double snapAltitude() { return Double.isNaN(lastAltM) ? 0 : lastAltM; }
+    double snapAscent() { return cumAscentM; }
 
     // --- helpers ---
     private static String f(float v) {
