@@ -25,6 +25,9 @@ export interface NativeStatus {
 
 export interface OpenFitBlePlugin {
   echo(options: { value: string }): Promise<{ value: string; available: boolean }>;
+  /** Hand the native side the server base + session token so it can POST samples
+   *  itself (survives screen-lock, when the WebView JS is suspended). */
+  configure(options: { apiBase: string; token: string }): Promise<void>;
   startScan(): Promise<void>;
   stopScan(): Promise<void>;
   connect(options: {

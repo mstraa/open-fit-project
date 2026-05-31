@@ -31,8 +31,14 @@ import com.getcapacitor.annotation.PermissionCallback;
 
 import org.openfit.app.huami.HuamiSession;
 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * OpenFit native BLE plugin. Two modes:
@@ -77,6 +83,12 @@ public class OpenFitBlePlugin extends Plugin {
 
     private final ArrayDeque<Runnable> opQueue = new ArrayDeque<>();
     private boolean opInFlight = false;
+
+    // Native ingest (survives screen-lock; the WebView JS is suspended then).
+    private final ExecutorService ingestExec = Executors.newSingleThreadExecutor();
+    private String apiBase;
+    private String authToken;
+    private long lastIngest = 0;
 
     private static UUID uuid16(String s) {
         return UUID.fromString("0000" + s + "-0000-1000-8000-00805f9b34fb");
@@ -208,6 +220,13 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("connect permission: " + e.getMessage());
             return;
         }
+        // Keep the process alive in the background so the connection + ingest
+        // survive a screen lock (needed for workout recording).
+        try {
+            BleForegroundService.start(getContext(), "Connected — streaming wellness");
+        } catch (Exception e) {
+            Log.w(TAG, "foreground service start failed: " + e.getMessage());
+        }
         call.resolve();
     }
 
@@ -236,6 +255,10 @@ public class OpenFitBlePlugin extends Plugin {
             gatt = null;
         }
         connectedId = null;
+        try {
+            BleForegroundService.stop(getContext());
+        } catch (Exception ignored) {
+        }
     }
 
     private void emitStatus(String status, String message) {
@@ -253,6 +276,48 @@ public class OpenFitBlePlugin extends Plugin {
         ev.put("value", value);
         ev.put("ts", System.currentTimeMillis());
         notifyListeners("sample", ev);
+        nativeIngest(kind, value); // POST natively so it keeps flowing when locked
+    }
+
+    /** JS hands us the server base + session token so we can POST samples even
+     *  when the WebView is suspended (screen locked / app backgrounded). */
+    @PluginMethod
+    public void configure(PluginCall call) {
+        apiBase = call.getString("apiBase");
+        authToken = call.getString("token");
+        call.resolve();
+    }
+
+    /** POST one sample to {apiBase}/api/wellness, throttled, off the BLE thread. */
+    private void nativeIngest(String kind, double value) {
+        final String base = apiBase;
+        if (base == null || base.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (now - lastIngest < 900) return;
+        lastIngest = now;
+        final String tok = authToken;
+        ingestExec.execute(() -> {
+            HttpURLConnection c = null;
+            try {
+                URL url = new URL(base + "/api/wellness");
+                c = (HttpURLConnection) url.openConnection();
+                c.setConnectTimeout(4000);
+                c.setReadTimeout(4000);
+                c.setRequestMethod("POST");
+                c.setRequestProperty("Content-Type", "application/json");
+                if (tok != null && !tok.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + tok);
+                c.setDoOutput(true);
+                String body = "[{\"kind\":\"" + kind + "\",\"value\":" + value + "}]";
+                try (OutputStream os = c.getOutputStream()) {
+                    os.write(body.getBytes(StandardCharsets.UTF_8));
+                }
+                c.getResponseCode();
+            } catch (Exception e) {
+                Log.w(TAG, "native ingest failed: " + e.getMessage());
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        });
     }
 
     // --------------------------------------------------- serialized op queue

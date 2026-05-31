@@ -139,9 +139,10 @@ function Sparkline({
   const span = max - min || 1;
   const stepX = vals.length > 1 ? viewW / (vals.length - 1) : viewW;
   const sy = (v: number) => height - ((v - min) / span) * (height - 12) - 6;
-  const pts = vals.map((v, i) => `${(i * stepX).toFixed(1)},${sy(v).toFixed(1)}`);
-  const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p}`).join(" ");
-  const area = `M0,${height} L${line.slice(1)} L${viewW},${height} Z`;
+  const pts = vals.map((v, i) => ({ x: i * stepX, y: sy(v) }));
+  const line = smoothLine(pts);
+  const lastX = pts.length ? pts[pts.length - 1].x : viewW;
+  const area = `${line} L${lastX.toFixed(1)},${height} L0,${height} Z`;
   const gid = `sl-${Math.round(min)}-${Math.round(max)}-${vals.length}`;
   return (
     <svg
@@ -158,9 +159,28 @@ function Sparkline({
         </linearGradient>
       </defs>
       <path d={area} fill={`url(#${gid})`} />
-      <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+      <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
+}
+
+/** Catmull-Rom → cubic-bézier smoothing for a soft, rounded line through points. */
+function smoothLine(pts: { x: number; y: number }[]): string {
+  if (pts.length === 0) return "";
+  if (pts.length === 1) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
 }
 
 /* ------------------------------------------------ stat-tile glyphs (design) */
@@ -244,13 +264,12 @@ function LiveCard() {
   const span = max - min || 1;
   const w = 220;
   const h = 40;
-  const path = values
-    .map((v, i) => {
-      const x = values.length > 1 ? (i / (values.length - 1)) * w : 0;
-      const y = h - ((v - min) / span) * h;
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
+  const path = smoothLine(
+    values.map((v, i) => ({
+      x: values.length > 1 ? (i / (values.length - 1)) * w : 0,
+      y: h - ((v - min) / span) * (h - 6) - 3,
+    })),
+  );
 
   return (
     <div
@@ -273,7 +292,7 @@ function LiveCard() {
         style={{ flex: "1 1 120px", minWidth: 120, maxWidth: "100%", height: h }}
         aria-hidden
       >
-        {path && <path d={path} fill="none" stroke="var(--hr)" strokeWidth={2} />}
+        {path && <path d={path} fill="none" stroke="var(--hr)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />}
       </svg>
       <span
         className={live.connected ? "pill pill--good" : "pill"}

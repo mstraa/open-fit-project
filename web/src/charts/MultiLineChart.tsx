@@ -91,7 +91,8 @@ function MultiLineChartImpl({ x, series, height = 220, unit = "" }: MultiLineCha
         ...series.map((s) => ({
           label: s.label,
           stroke: resolveCssColor(s.stroke, axisColor),
-          width: 2,
+          width: 2.5,
+          paths: uPlot.paths.spline?.(),
           points: { show: false },
         })),
       ],

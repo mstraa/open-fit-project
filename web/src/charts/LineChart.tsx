@@ -166,7 +166,9 @@ function LineChartImpl({
         {
           label,
           stroke: strokeColor,
-          width: 2,
+          width: 2.5,
+          // Smooth (spline) line with rounded joins/caps for a softer look.
+          paths: uPlot.paths.spline?.(),
           points: { show: false },
           value: (_u, v) => (v == null ? "—" : fmtVal(v)),
         },

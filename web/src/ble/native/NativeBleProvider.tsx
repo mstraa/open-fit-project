@@ -17,7 +17,7 @@ import {
 } from "react";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { OpenFitBle, type NativeScanResult, type NativeStatus } from "./OpenFitBle";
-import { ingestWellness } from "../../api/endpoints";
+import { API_BASE, getToken } from "../../api/client";
 import { isNativeApp } from "../../gadgetbridge/autoImportConfig";
 
 export type NativeConnStatus = "idle" | "scanning" | "connecting" | "connected" | "reconnecting" | "error";
@@ -75,7 +75,6 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     device: loadSaved(),
   }));
   const subs = useRef<PluginListenerHandle[]>([]);
-  const lastPush = useRef(0);
   const userDisconnect = useRef(false);
   const deviceRef = useRef<SavedDevice | null>(state.device);
   deviceRef.current = state.device;
@@ -85,6 +84,9 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     userDisconnect.current = false;
     setState((s) => ({ ...s, status: "connecting", device: d, message: undefined }));
     try {
+      // Give the native side the server URL + token so it can POST samples even
+      // while the screen is locked (the WebView/JS is suspended then).
+      await OpenFitBle.configure({ apiBase: API_BASE, token: getToken() }).catch(() => undefined);
       await OpenFitBle.connect(
         d.type === "huami"
           ? { deviceId: d.deviceId, deviceType: "huami", authKey: d.authKey }
@@ -127,14 +129,9 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
           }
         }),
         OpenFitBle.addListener("sample", (e) => {
-          if (e.kind === "heart_rate") {
-            setState((s) => ({ ...s, hr: Math.round(e.value) }));
-            const now = Date.now();
-            if (now - lastPush.current > 900) {
-              lastPush.current = now;
-              void ingestWellness([{ kind: "heart_rate", value: e.value }]).catch(() => undefined);
-            }
-          }
+          // Native side POSTs to /api/wellness (so it survives screen-lock); here
+          // we only mirror the latest HR for the UI.
+          if (e.kind === "heart_rate") setState((s) => ({ ...s, hr: Math.round(e.value) }));
         }),
       ]);
       if (!alive) {
