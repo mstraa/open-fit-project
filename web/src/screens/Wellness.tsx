@@ -299,6 +299,76 @@ function BarChart({
   );
 }
 
+/** Format an axis tick: a clock hour for ≤2-day (hourly) spans, a calendar day
+ *  for longer (daily) spans. Day buckets are stored at UTC midnight, so label
+ *  them in UTC to keep the calendar date correct. */
+function fmtTick(t: number, daily: boolean): string {
+  const d = new Date(t);
+  if (daily) return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  return `${String(d.getHours()).padStart(2, "0")}:00`;
+}
+
+interface Tick {
+  frac: number;
+  label: string;
+}
+
+/** ~4 evenly-spaced ticks across bucketed data (first, thirds, last). */
+function bandTicks(buckets: Bucket[], daily: boolean): Tick[] {
+  const n = buckets.length;
+  if (!n) return [];
+  const idxs = n <= 2 ? [0, n - 1] : [0, Math.round((n - 1) / 3), Math.round((2 * (n - 1)) / 3), n - 1];
+  return [...new Set(idxs)].map((i) => ({ frac: n > 1 ? i / (n - 1) : 0, label: fmtTick(buckets[i].t, daily) }));
+}
+
+/** One weekday tick centered under each daily bar. */
+function barTicks(bars: DayTotal[]): Tick[] {
+  const n = bars.length;
+  return bars.map((b, i) => ({
+    frac: (i + 0.5) / n,
+    label: new Date(b.t).toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" }),
+  }));
+}
+
+/** A thin x-axis row: labels positioned by fraction of the chart width. */
+function Axis({ ticks }: { ticks: Tick[] }) {
+  return (
+    <div style={{ position: "relative", height: 14, marginTop: 6 }} aria-hidden>
+      {ticks.map((t, i) => (
+        <span
+          key={i}
+          style={{
+            position: "absolute",
+            left: `${t.frac * 100}%`,
+            transform: t.frac <= 0.001 ? "none" : t.frac >= 0.999 ? "translateX(-100%)" : "translateX(-50%)",
+            fontSize: 10,
+            color: "var(--muted)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {t.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Tiny key explaining the shaded min/max band vs the mean line. */
+function BandLegend({ color }: { color: string }) {
+  return (
+    <div style={{ display: "flex", gap: 16, alignItems: "center", fontSize: 10, color: "var(--muted)", margin: "0 0 8px" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <span style={{ width: 16, height: 9, borderRadius: 2, background: color, opacity: 0.22 }} />
+        min–max range
+      </span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <span style={{ width: 16, height: 2.5, borderRadius: 2, background: color }} />
+        average
+      </span>
+    </div>
+  );
+}
+
 /** Compact number: 13381 → "13,381"; small values keep one decimal. */
 function fmtNum(v: number, big = false): string {
   if (!Number.isFinite(v)) return "—";
@@ -360,11 +430,13 @@ function MetricChart({
           ]}
         />
         <BarChart bars={bars} color={color} height={height} />
+        <Axis ticks={barTicks(bars)} />
       </>
     );
   }
 
-  const buckets = bucketize(sorted, chooseBucketMs(sorted));
+  const bucketMs = chooseBucketMs(sorted);
+  const buckets = bucketize(sorted, bucketMs);
   if (!buckets.length) return null;
   const vals = sorted.map((s) => s.value);
   const min = Math.min(...vals);
@@ -379,7 +451,9 @@ function MetricChart({
           { label: "Max", value: fmtNum(max), unit },
         ]}
       />
+      <BandLegend color={color} />
       <BandChart buckets={buckets} color={color} height={height} />
+      <Axis ticks={bandTicks(buckets, bucketMs > HOUR_MS)} />
     </>
   );
 }
