@@ -571,6 +571,53 @@ pub async fn dedup_zepp_summaries(
     Ok(Json(DedupResponse { deleted }))
 }
 
+/// `POST /api/maintenance/remap-zepp-sports` — re-derive the sport of every
+/// already-imported Zepp **summary** activity from its stored raw type code
+/// (`metadata.zepp_type`) using the current mapping, fixing both the recording
+/// and its activity in place. Idempotent. Returns `{ updated }`.
+#[utoipa::path(post, path = "/api/maintenance/remap-zepp-sports", responses((status = 200, body = RemapResponse)))]
+pub async fn remap_zepp_sports(State(state): State<AppState>) -> Result<Json<RemapResponse>, ApiError> {
+    let recs = state.db.list_recordings().await.map_err(internal)?;
+    let acts = state.db.list_activities().await.map_err(internal)?;
+
+    // Correct sport per summary recording id, from its raw zepp_type.
+    let mut correct_for: std::collections::HashMap<uuid::Uuid, ofit_core::Sport> = std::collections::HashMap::new();
+    let mut updated = 0usize;
+    for r in &recs {
+        if !r.metadata.get("summary_only").and_then(|v| v.as_bool()).unwrap_or(false) {
+            continue;
+        }
+        let Some(zt) = r.metadata.get("zepp_type").and_then(|v| v.as_i64()) else {
+            continue;
+        };
+        let correct = ofit_ingest::zepp::map_sport(zt);
+        correct_for.insert(r.id, correct);
+        if correct != r.sport {
+            state.db.update_recording_sport(r.id, correct).await.map_err(internal)?;
+            updated += 1;
+        }
+    }
+
+    // Fix each summary-only activity's sport to match its (single) recording.
+    for a in &acts {
+        let derived = a
+            .recording_ids
+            .iter()
+            .find_map(|rid| correct_for.get(rid).copied());
+        let all_summary = !a.recording_ids.is_empty()
+            && a.recording_ids.iter().all(|rid| correct_for.contains_key(rid));
+        if let (true, Some(sport)) = (all_summary, derived) {
+            if sport != a.sport {
+                let mut fixed = a.clone();
+                fixed.sport = sport;
+                state.db.upsert_activity(&fixed).await.map_err(internal)?;
+            }
+        }
+    }
+
+    Ok(Json(RemapResponse { updated }))
+}
+
 /// `POST /api/import/zepp` — upload a **zipped** Zepp/Amazfit app export; extract
 /// the continuous wellness (all-day HR, sleep staging, daily steps/calories,
 /// weight) and ingest it, attributed to one Zepp source for the account. The

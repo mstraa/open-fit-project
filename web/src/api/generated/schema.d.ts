@@ -318,6 +318,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/maintenance/remap-zepp-sports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/maintenance/remap-zepp-sports` — re-derive the sport of every
+         *     already-imported Zepp **summary** activity from its stored raw type code
+         *     (`metadata.zepp_type`) using the current mapping, fixing both the recording
+         *     and its activity in place. Idempotent. Returns `{ updated }`.
+         */
+        post: operations["remap_zepp_sports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/preferences": {
         parameters: {
             query?: never;
@@ -774,6 +796,11 @@ export interface components {
             source_id: string;
             /** @description Human-readable source name. */
             source_name: string;
+        };
+        /** @description Response of `POST /api/maintenance/remap-zepp-sports`. */
+        RemapResponse: {
+            /** @description Number of summary recordings whose sport was corrected. */
+            updated: number;
         };
         /**
          * @description Response of `DELETE /api/activities/{id}/recordings/{recording_id}`.
@@ -1436,6 +1463,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DedupResponse"];
+                };
+            };
+        };
+    };
+    remap_zepp_sports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemapResponse"];
                 };
             };
         };

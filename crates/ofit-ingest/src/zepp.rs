@@ -193,16 +193,16 @@ fn parse_sport(text: &str, out: &mut Vec<ZeppWorkout>) {
     }
 }
 
-/// Map Zepp/Huami sport-type codes to the canonical [`Sport`]. Only the codes we
-/// are confident about are mapped; everything else is `Other` (the raw code is
-/// preserved in the recording metadata).
-fn map_sport(code: i64) -> Sport {
+/// Map Zepp/Huami sport-type codes to the canonical [`Sport`]. Verified against
+/// real exports by average speed: type 1 ≈ 10.7 km/h (run), type 6 ≈ 4.1 km/h
+/// (walk), type 9 ≈ 17.6 km/h (cycling). The raw code is preserved in the
+/// recording metadata so this mapping can be re-derived later.
+pub fn map_sport(code: i64) -> Sport {
     match code {
-        1 | 8 => Sport::Running,      // outdoor run / treadmill
-        6 | 10 => Sport::Cycling,     // outdoor / indoor cycling
-        9 => Sport::Walking,          // walking
-        52 => Sport::Swimming,        // pool/open-water
-        _ => Sport::Other,
+        1 | 8 => Sport::Running,  // outdoor run / treadmill
+        6 => Sport::Walking,      // walking (~4 km/h)
+        9 | 10 => Sport::Cycling, // outdoor / indoor cycling (~17 km/h)
+        _ => Sport::Other,        // 16/52/59/111/130 etc. are no-GPS indoor efforts
     }
 }
 

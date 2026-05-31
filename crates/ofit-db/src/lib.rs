@@ -396,6 +396,17 @@ impl Db {
 
     // ---- Phase 1: dedup/fusion persistence + read-side queries ----
 
+    /// Update just the `sport` of a stored recording (e.g. re-deriving a Zepp
+    /// summary's sport from its raw type code after a mapping fix).
+    pub async fn update_recording_sport(&self, id: Uuid, sport: ofit_core::Sport) -> Result<()> {
+        sqlx::query(&self.p("UPDATE raw_recordings SET sport = ? WHERE id = ?"))
+            .bind(serde_plain(&sport))
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Whether a recording with this exact `content_hash` already exists (the
     /// exact-dedup check the import pipeline runs before persisting).
     pub async fn recording_exists_by_hash(&self, content_hash: &str) -> Result<bool> {

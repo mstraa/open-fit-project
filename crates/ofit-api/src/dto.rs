@@ -343,6 +343,13 @@ pub struct DedupResponse {
     pub deleted: usize,
 }
 
+/// Response of `POST /api/maintenance/remap-zepp-sports`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RemapResponse {
+    /// Number of summary recordings whose sport was corrected.
+    pub updated: usize,
+}
+
 /// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a
 /// JSON text frame — the real-time fan-out of the ingest path to the dashboard.
 #[derive(Debug, Clone, Serialize, ToSchema)]
