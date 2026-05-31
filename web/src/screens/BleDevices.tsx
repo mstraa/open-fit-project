@@ -200,14 +200,14 @@ function NativeBleCard() {
           </div>
           {device.type === "huami" && status === "connected" && (
             <div className="card stat" style={{ justifyContent: "center", gap: 10 }}>
-              <div className="stat__label">Stored data (M2 beta)</div>
-              <button type="button" className="btn" disabled={syncing} onClick={() => void sync(2)}>
-                {syncing ? "Syncing…" : "Sync last 2 days"}
+              <div className="stat__label">Stored data</div>
+              <button type="button" className="btn" disabled={syncing} onClick={() => void sync()}>
+                {syncing ? "Syncing…" : "Sync now"}
               </button>
               <span className="faint" style={{ fontSize: 10.5 }}>
-                {message && (syncing || message.startsWith("sync") || message.startsWith("fetch"))
+                {message && (syncing || message.startsWith("sync") || message.startsWith("fetch") || message.startsWith("auto"))
                   ? message
-                  : "Pulls steps + per-minute HR from the strap."}
+                  : "Auto-syncs on connect · pulls only new steps + per-minute HR & sleep."}
               </span>
             </div>
           )}

@@ -15,6 +15,7 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.BluetoothStatusCodes;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -101,6 +102,13 @@ public class OpenFitBlePlugin extends Plugin {
     private String apiBase;
     private String authToken;
     private long lastIngest = 0;
+
+    // M2 stored-data sync: a per-device watermark so each sync pulls only NEW data
+    // (the device keeps ~40 days). First sync (no watermark) pulls the full window.
+    private static final long DEFAULT_WINDOW_MS = 40L * 24 * 3600 * 1000;
+    private static final long SYNC_OVERLAP_MS = 10L * 60 * 1000;        // re-pull last 10 min (idempotent)
+    private static final long AUTO_SYNC_MIN_INTERVAL_MS = 20L * 60 * 1000; // throttle auto-sync on (re)connect
+    private long maxFetchedTs = 0L;                                      // newest ts seen this sync → next watermark
 
     private static UUID uuid16(String s) {
         return UUID.fromString("0000" + s + "-0000-1000-8000-00805f9b34fb");
@@ -315,29 +323,67 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("already syncing");
             return;
         }
+        // Explicit sinceMillis forces a window; otherwise pull from the watermark
+        // (or the full 40-day window the first time).
         Double sinceD = call.getDouble("sinceMillis");
-        long since = sinceD != null
-            ? sinceD.longValue()
-            : System.currentTimeMillis() - 2L * 24 * 3600 * 1000;
+        long since = sinceD != null ? sinceD.longValue() : computeSince(connectedId);
+        beginSync(since);
+        call.resolve();
+    }
+
+    /** Recover if a fetch stalls (e.g. the link drops mid-sync). Cancelled on done. */
+    private final Runnable fetchWatchdog = () -> {
+        if (fetchInProgress) {
+            fetchInProgress = false;
+            flushFetchBatch();
+            emitStatus("ready", "sync timed out");
+            if (huami != null) huami.enableHeartRate();
+        }
+    };
+
+    /** Start a stored-data fetch from {@code since} (pauses live HR, resumes on done). */
+    private void beginSync(long since) {
+        if (huami == null || fetchInProgress) return;
         fetchInProgress = true;
-        // Watchdog: if the fetch stalls (e.g. the link drops mid-sync), recover.
-        main.postDelayed(() -> {
-            if (fetchInProgress) {
-                fetchInProgress = false;
-                flushFetchBatch();
-                emitStatus("ready", "sync timed out");
-                if (huami != null) huami.enableHeartRate();
-            }
-        }, 30_000);
+        maxFetchedTs = 0L;
         synchronized (fetchBatch) {
             fetchBatch.clear();
         }
+        main.removeCallbacks(fetchWatchdog);
+        // A first-time 40-day pull is far larger than an incremental one — be generous.
+        main.postDelayed(fetchWatchdog, 180_000);
         huami.startActivityFetch(since);
-        call.resolve();
+    }
+
+    /** Lower bound for the next sync: the saved watermark (minus a small overlap),
+     *  clamped to the device's ~40-day retention; full window if never synced. */
+    private long computeSince(String deviceId) {
+        long now = System.currentTimeMillis();
+        long floor = now - DEFAULT_WINDOW_MS;
+        long wm = deviceId != null ? prefs().getLong("wm_" + deviceId, 0L) : 0L;
+        return wm <= 0 ? floor : Math.max(floor, wm - SYNC_OVERLAP_MS);
+    }
+
+    /** Auto-sync shortly after a (re)connect, throttled so reconnect storms don't
+     *  thrash. With the watermark, a no-new-data sync returns near-instantly. */
+    private void maybeAutoSync() {
+        long now = System.currentTimeMillis();
+        if (now - prefs().getLong("last_autosync", 0L) < AUTO_SYNC_MIN_INTERVAL_MS) return;
+        main.postDelayed(() -> {
+            if (huami == null || fetchInProgress || connectedId == null) return;
+            prefs().edit().putLong("last_autosync", System.currentTimeMillis()).apply();
+            emitStatus("connected", "auto-syncing stored data…");
+            beginSync(computeSince(connectedId));
+        }, 4000);
+    }
+
+    private SharedPreferences prefs() {
+        return getContext().getSharedPreferences("ofit_ble", Context.MODE_PRIVATE);
     }
 
     /** Accumulate a fetched historical sample; flush in batches of 1000. */
     private void addFetchSample(String kind, double value, long tsMillis) {
+        if (tsMillis > maxFetchedTs) maxFetchedTs = tsMillis;
         synchronized (fetchBatch) {
             fetchBatch.add("{\"kind\":\"" + kind + "\",\"value\":" + value
                 + ",\"ts\":\"" + RFC3339.format(new java.util.Date(tsMillis)) + "\"}");
@@ -670,6 +716,7 @@ public class OpenFitBlePlugin extends Plugin {
                         if (activityControlChar != null) enqueueNotify(activityControlChar);
                         if (activityDataChar != null) enqueueNotify(activityDataChar);
                         huami.enableHeartRate();
+                        maybeAutoSync(); // zero-tap incremental pull of stored data
                     });
                 }
 
@@ -696,9 +743,17 @@ public class OpenFitBlePlugin extends Plugin {
                 @Override
                 public void onFetchDone(boolean ok) {
                     fetchInProgress = false;
+                    main.removeCallbacks(fetchWatchdog);
                     flushFetchBatch();
+                    final boolean gotData = maxFetchedTs > 0;
+                    // Advance the watermark so the next sync only pulls newer data.
+                    if (ok && gotData && connectedId != null) {
+                        prefs().edit().putLong("wm_" + connectedId, maxFetchedTs).apply();
+                    }
                     main.post(() -> {
-                        emitStatus("ready", ok ? "sync complete" : "sync failed");
+                        // "sync complete" signals the UI to reload (new data landed);
+                        // "sync up to date" finishes quietly so auto-sync isn't noisy.
+                        emitStatus("ready", !ok ? "sync failed" : gotData ? "sync complete" : "sync up to date");
                         if (huami != null) huami.enableHeartRate(); // resume live HR
                     });
                 }

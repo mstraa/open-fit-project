@@ -115,10 +115,14 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
         }),
         OpenFitBle.addListener("status", (e: NativeStatus) => {
           if (e.status === "connected" || e.status === "ready") {
-            const done = e.message === "sync complete" || e.message === "sync failed";
+            const done =
+              e.message === "sync complete" ||
+              e.message === "sync up to date" ||
+              e.message === "sync failed" ||
+              e.message === "sync timed out";
             setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
-            // A completed sync wrote new history — reload so the wellness views
-            // (which fetch on mount) pick it up.
+            // Only a sync that wrote NEW history reloads (so the wellness views,
+            // which fetch on mount, pick it up); "up to date" finishes quietly.
             if (e.message === "sync complete") {
               window.setTimeout(() => window.location.reload(), 1500);
             }
@@ -184,11 +188,14 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     [open],
   );
 
-  const sync = useCallback(async (days = 2) => {
+  // Incremental by default: the native side pulls from its per-device watermark
+  // (only NEW data), or the full 40-day window the first time. Pass `days` to
+  // force a specific window (e.g. a manual full re-sync).
+  const sync = useCallback(async (days?: number) => {
     if (!available) return;
     setState((s) => ({ ...s, syncing: true, message: "Syncing stored data…" }));
     try {
-      await OpenFitBle.syncNow({ sinceMillis: Date.now() - days * 86_400_000 });
+      await OpenFitBle.syncNow(days ? { sinceMillis: Date.now() - days * 86_400_000 } : {});
     } catch (e) {
       setState((s) => ({ ...s, syncing: false, message: `sync error: ${e instanceof Error ? e.message : String(e)}` }));
     }
