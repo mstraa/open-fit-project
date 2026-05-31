@@ -372,9 +372,12 @@ export async function getWellness(
   if (from) qs.set("from", from);
   if (to) qs.set("to", to);
   const raw = await apiFetch<unknown>(`/api/wellness?${qs.toString()}`);
+  // The backend returns `{ kind, points: [{ ts, value, source_id }] }`.
+  // (Older shapes used `samples`; accept either so we never silently empty out.)
+  const o = raw as Record<string, unknown> | null;
   const arr = Array.isArray(raw)
     ? raw
-    : ((raw as Record<string, unknown> | null)?.samples as unknown[]) ?? [];
+    : ((o?.points as unknown[]) ?? (o?.samples as unknown[]) ?? []);
   const samples: WellnessSample[] = (Array.isArray(arr) ? arr : []).map((s) => {
     const p = s as Record<string, unknown>;
     return {
