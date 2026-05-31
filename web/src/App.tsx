@@ -11,6 +11,7 @@ import { Wellness } from "./screens/Wellness";
 import { Settings } from "./screens/Settings";
 import { Algorithms } from "./screens/Algorithms";
 import { Sleep } from "./screens/Sleep";
+import { GadgetbridgeAutoImportRunner } from "./gadgetbridge/useGadgetbridgeAutoImport";
 import { Spinner } from "./ui/primitives";
 
 // Code-split the detail screen: it pulls in uPlot + MapLibre GL, which are heavy.
@@ -25,7 +26,10 @@ const BleDevices = lazy(() =>
 
 export function App() {
   return (
-    <Routes>
+    <>
+      {/* Hourly Gadgetbridge auto-import scheduler (native app only; renders null). */}
+      <GadgetbridgeAutoImportRunner />
+      <Routes>
       {/* App opens directly to the dashboard (no separate launcher page). */}
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
@@ -55,6 +59,7 @@ export function App() {
 
       {/* Unknown routes redirect to the dashboard. */}
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
-    </Routes>
+      </Routes>
+    </>
   );
 }

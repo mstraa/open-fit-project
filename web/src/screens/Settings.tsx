@@ -24,6 +24,8 @@ import { useHealth } from "../hooks/useHealth";
 import { useTheme, type Theme } from "../theme/ThemeProvider";
 import { API_BASE } from "../api/client";
 import { listSources, listPreferences, putPreference, getVersion } from "../api/endpoints";
+import { GadgetbridgeImportCard, ZeppImportCard } from "../ui/ImportCards";
+import { GadgetbridgeAutoImportCard } from "../gadgetbridge/GadgetbridgeAutoImportCard";
 import { CHART_METRICS, metricLabel } from "../ui/format";
 import type {
   MetricSourcePreference,
@@ -79,6 +81,15 @@ const SUBNAV: SubLink[] = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
         <rect x="7" y="2" width="10" height="20" rx="3" />
         <path d="M11 18h2" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: "imports",
+    label: "Imports & sync",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+        <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
   },
@@ -396,10 +407,22 @@ export function Settings() {
               <Link to="/devices" className="btn">
                 Scan for BLE devices →
               </Link>
-              <Link to="/wellness" className="btn btn--ghost">
-                Import from Gadgetbridge →
-              </Link>
+              <a href="#imports" className="btn btn--ghost">
+                Imports &amp; sync →
+              </a>
             </div>
+          </section>
+
+          {/* IMPORTS & SYNC — Gadgetbridge auto-import + manual GB/Zepp imports */}
+          <section className="panel card" id="imports">
+            <div className="card__head">
+              <div className="card__title">
+                Imports &amp; sync<span className="sub">wellness · workouts · cloudless</span>
+              </div>
+            </div>
+            <GadgetbridgeAutoImportCard />
+            <GadgetbridgeImportCard />
+            <ZeppImportCard />
           </section>
 
           {/* ALGORITHMS — EMPTY (no plugin backend yet) */}

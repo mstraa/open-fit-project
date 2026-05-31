@@ -8,15 +8,16 @@
 // 7-day wellness mini-trends — renders the module styled per design with an
 // on-brand <EmptyState> ("No data yet · Phase N"). NEVER fake numbers.
 
-import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
+import { useEffect, useState, type ReactNode, type SVGProps } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../app/AppShell";
-import { ImportIcon, SearchIcon, ActivitiesIcon, WellnessIcon } from "../app/icons";
+import { SearchIcon, WellnessIcon } from "../app/icons";
 import { Seg } from "../ui/Seg";
 import { EmptyState } from "../ui/EmptyState";
+import { ReadinessSection } from "../ui/ReadinessSection";
 import { useActivities } from "../hooks/useActivities";
 import { useTrainingLoad, hasTrainingLoad } from "../hooks/useTrainingLoad";
-import { importFiles, listSources, getWellness } from "../api/endpoints";
+import { listSources, getWellness } from "../api/endpoints";
 import type { Source, Sport, WellnessKind } from "../api/types";
 import type { TrainingLoadResponseDto } from "../api/schema";
 import { MultiLineChart, type MultiSeries } from "../charts/MultiLineChart";
@@ -181,7 +182,7 @@ function shortDay(iso: string): string {
 
 export function Dashboard() {
   const [range, setRange] = useState<Range>("week");
-  const { activities, reload } = useActivities();
+  const { activities } = useActivities();
   const tl = useTrainingLoad();
   const tlData = tl.kind === "ok" ? tl.data : null;
   const tlReady = tlData ? hasTrainingLoad(tlData) : false;
@@ -200,12 +201,11 @@ export function Dashboard() {
           <button type="button" className="iconbtn" aria-label="Search">
             <SearchIcon />
           </button>
-          <ImportButton onImported={reload} />
         </>
       }
     >
       {/* training status / readiness banner — bound to the analytics engine. */}
-      <ReadinessBanner data={tlData} ready={tlReady} />
+      <ReadinessSection data={tlData} />
 
       {/* stat tiles — training load / resting HR / HRV / body battery */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>
@@ -370,67 +370,6 @@ function latest<T>(arr: T[]): T | undefined {
   return arr.length ? arr[arr.length - 1] : undefined;
 }
 
-/** Readiness banner: shows the 0–100 readiness score when available, else the
- * on-brand "compute the analytics engine" prompt. */
-function ReadinessBanner({
-  data,
-  ready,
-}: {
-  data: TrainingLoadResponseDto | null;
-  ready: boolean;
-}) {
-  const hasReadiness =
-    data != null && data.readiness_available && data.readiness != null;
-
-  if (hasReadiness) {
-    const score = Math.round(data!.readiness as number);
-    const tone = score >= 66 ? "good" : score >= 40 ? "warn" : "bad";
-    const word = score >= 66 ? "Ready" : score >= 40 ? "Moderate" : "Take it easy";
-    return (
-      <div className="banner" style={{ marginBottom: 24 }}>
-        <ActivitiesIcon />
-        <div>
-          <b>Readiness · {word}</b>
-          <span className="muted">
-            {" "}
-            HRV + resting-HR trend vs your personal baseline.
-            {data!.hrv_rmssd != null
-              ? ` HRV ${Math.round(data!.hrv_rmssd)} ms.`
-              : ""}
-          </span>
-        </div>
-        <span
-          className={`pill pill--${tone}`}
-          style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}
-        >
-          {score}/100
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="banner" style={{ marginBottom: 24 }}>
-      <ActivitiesIcon />
-      <div>
-        <b>Training status</b>
-        <span className="muted">
-          {" "}
-          {ready
-            ? "Readiness needs overnight HRV + resting-HR; CTL/ATL/TSB are shown below."
-            : "Fused training load, fitness/fatigue balance and form land once the analytics engine has run."}
-        </span>
-      </div>
-      <Link
-        to="/algorithms"
-        className="pill"
-        style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}
-      >
-        Recompute →
-      </Link>
-    </div>
-  );
-}
 
 /** "Training load · 7d" tile = latest ATL (acute / fatigue, 7-day EWMA). */
 function TrainingLoadTile({
@@ -659,51 +598,6 @@ function ConnectedSources() {
         Manage source priorities
       </Link>
     </section>
-  );
-}
-
-/* --------------------------------------------------------- import button */
-// Reuses the import flow (importFiles → reload) behind the design's topbar .btn,
-// via a hidden multi-file input. Same network path as views/ImportControl.
-
-function ImportButton({ onImported }: { onImported: () => void }) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setBusy(true);
-    try {
-      await importFiles(files);
-      onImported();
-    } catch {
-      /* surfaced elsewhere; the topbar button stays quiet on failure */
-    } finally {
-      setBusy(false);
-      if (inputRef.current) inputRef.current.value = "";
-    }
-  };
-
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept=".fit,.gpx,.tcx"
-        hidden
-        onChange={(e) => handleFiles(e.target.files)}
-      />
-      <button
-        type="button"
-        className="btn"
-        disabled={busy}
-        onClick={() => inputRef.current?.click()}
-      >
-        <ImportIcon />
-        {busy ? "Importing…" : "Import .FIT"}
-      </button>
-    </>
   );
 }
 

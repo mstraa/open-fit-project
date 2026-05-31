@@ -48,6 +48,7 @@
   --r-lg: 14px;
   --gap:  18px;
   --rail: 244px;
+  --topbar-h: 64px; /* shared height so the rail brand block + topbar borders align */
 
   --shadow-pop: 0 18px 50px -16px oklch(2% 0.02 260 / 0.85);
 }
@@ -61,7 +62,10 @@ html { -webkit-text-size-adjust: 100%; }
    Clamp the shell containers; use overflow-x:clip on inner ones so the sticky
    topbar keeps working (overflow:hidden creates a scroll container that breaks
    position:sticky). */
-html, body { max-width: 100%; overflow-x: hidden; }
+/* overflow-x:clip (not hidden) — `hidden` makes html/body a scroll container,
+   which silently breaks `position:sticky` on the rail + topbar. `clip` guards
+   horizontal overflow without that side-effect, so the menu/header stay pinned. */
+html, body { max-width: 100%; overflow-x: clip; }
 #root { max-width: 100%; overflow-x: clip; }
 .app  { max-width: 100%; overflow-x: clip; }
 .main { min-width: 0; max-width: 100%; overflow-x: clip; }
@@ -96,7 +100,8 @@ button { font-family: inherit; cursor: pointer; }
 }
 .rail__brand {
   display: flex; align-items: center; gap: 10px;
-  padding: 16px 16px 14px; border-bottom: 1px solid var(--border);
+  height: var(--topbar-h); padding: 0 16px; flex: none;
+  border-bottom: 1px solid var(--border); box-sizing: border-box;
 }
 .rail__logo {
   width: 30px; height: 30px; border-radius: var(--r-sm);
@@ -144,7 +149,8 @@ button { font-family: inherit; cursor: pointer; }
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar {
   display: flex; align-items: center; gap: 14px;
-  padding: 14px 28px; border-bottom: 1px solid var(--border);
+  height: var(--topbar-h); padding: 0 28px; box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 20;
   background: oklch(15% 0.018 260 / 0.88);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -307,7 +313,7 @@ button { font-family: inherit; cursor: pointer; }
   .app { grid-template-columns: 1fr; }
   .rail { position: fixed; left: 0; top: 0; z-index: 200; width: 244px; transform: translateX(-100%); transition: transform .2s; }
   .rail.is-open { transform: none; box-shadow: var(--shadow-pop); }
-  .topbar { padding: 12px 16px; }
+  .topbar { padding: 0 16px; }
   .content { padding: 16px 16px 44px; }
   .menu-btn { display: grid !important; }
 }
@@ -321,7 +327,7 @@ button { font-family: inherit; cursor: pointer; }
 @media (max-width: 440px) {
   :root { --gap: 12px; }
   .content { padding: 12px 12px 40px; }
-  .topbar { padding: 10px 12px; gap: 8px; }
+  .topbar { padding: 0 12px; gap: 8px; }
   .grid--stats { grid-template-columns: 1fr 1fr; }
   .card { padding: 14px; }
 }

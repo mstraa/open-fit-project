@@ -515,7 +515,15 @@ function DetailBody({
           <SummaryTile label="Distance" value={(detail.summary.distance_m / 1000).toFixed(2)} suffix=" km" />
         )}
         {detail.summary && detail.summary.avg_pace_s_per_m > 0 && (
-          <SummaryTile label="Avg pace" value={formatPaceMinKm(detail.summary.avg_pace_s_per_m)} suffix=" /km" />
+          speedModeFor(sport) === "kmh" ? (
+            <SummaryTile
+              label="Avg speed"
+              value={(3.6 / detail.summary.avg_pace_s_per_m).toFixed(1)}
+              suffix=" km/h"
+            />
+          ) : (
+            <SummaryTile label="Avg pace" value={formatPaceMinKm(detail.summary.avg_pace_s_per_m)} suffix=" /km" />
+          )
         )}
         {detail.summary && detail.summary.calories_kcal > 0 && (
           <SummaryTile label="Calories" value={Math.round(detail.summary.calories_kcal).toString()} suffix=" kcal" />

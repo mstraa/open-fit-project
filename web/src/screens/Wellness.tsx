@@ -9,12 +9,13 @@
 // samples for this account/hardware it falls back to the on-brand empty state
 // (never fake numbers).
 
-import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
+import { useEffect, useState, type ReactNode, type SVGProps } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
+import { ReadinessSection } from "../ui/ReadinessSection";
 import { Seg } from "../ui/Seg";
-import { getWellness, getTrainingLoad, getDerived, importGadgetbridge, importZepp } from "../api/endpoints";
+import { getWellness, getTrainingLoad, getDerived } from "../api/endpoints";
 import type { WellnessSample } from "../api/types";
 import type { TrainingLoadResponseDto } from "../api/schema";
 import { useWellnessLive } from "../hooks/useWellnessLive";
@@ -232,136 +233,6 @@ function StatTile({
 
 /* ------------------------------------------------------------------ screen */
 
-/** Import wellness from a Gadgetbridge export DB (HR / stress / steps / resting HR).
- * The file input opens the OS picker on web AND inside the Capacitor app. */
-function GadgetbridgeCard() {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const onFile = async (f: File | undefined) => {
-    if (!f) return;
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      const r = await importGadgetbridge(f);
-      const perDevice = r.devices
-        .map((d) => `${d.device}: ${d.ingested.toLocaleString()} (${d.by_kind.map((k) => k.kind).join(", ")})`)
-        .join(" · ");
-      setResult(`Imported ${r.ingested.toLocaleString()} readings — ${perDevice}.`);
-      setTimeout(() => window.location.reload(), 1600);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      if (inputRef.current) inputRef.current.value = "";
-    }
-  };
-
-  return (
-    <div className="card" style={{ marginBottom: 24 }}>
-      <div className="card__head">
-        <div className="card__title">
-          Import from Gadgetbridge<span className="sub">export DB · cloudless</span>
-        </div>
-      </div>
-      <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
-        In Gadgetbridge → <b>Database management → Export DB</b>, then upload the file here to
-        ingest heart rate, stress, steps and resting HR.
-      </p>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".db,application/octet-stream,application/x-sqlite3"
-        style={{ display: "none" }}
-        disabled={busy}
-        onChange={(e) => void onFile(e.target.files?.[0])}
-      />
-      <button type="button" className="btn" disabled={busy} onClick={() => inputRef.current?.click()}>
-        {busy ? "Importing…" : "Choose Gadgetbridge DB"}
-      </button>
-      {result && (
-        <div className="pill pill--good" style={{ marginTop: 12, justifyContent: "flex-start" }}>
-          {result}
-        </div>
-      )}
-      {error && (
-        <div className="pill pill--bad" style={{ marginTop: 12, justifyContent: "flex-start" }}>
-          {error}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Import a zipped Zepp/Amazfit app export (all-day HR, sleep staging, steps,
- *  calories, weight). One account → one Zepp source; re-uploading replaces. */
-function ZeppCard() {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const onFile = async (f: File | undefined) => {
-    if (!f) return;
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      const r = await importZepp(f);
-      const breakdown = r.by_kind.map((k) => `${k.count.toLocaleString()} ${k.kind}`).join(" · ");
-      const acts = r.activities_imported ? ` + ${r.activities_imported} workouts → Activities` : "";
-      const dups = r.activities_skipped_dup + r.duplicate_summaries_removed;
-      const deduped = dups ? ` (skipped ${dups} that duplicate your .fit imports)` : "";
-      setResult(`Imported ${r.ingested.toLocaleString()} readings into ${r.source} — ${breakdown}${acts}${deduped}.`);
-      setTimeout(() => window.location.reload(), 1800);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      if (inputRef.current) inputRef.current.value = "";
-    }
-  };
-
-  return (
-    <div className="card" style={{ marginBottom: 24 }}>
-      <div className="card__head">
-        <div className="card__title">
-          Import from Zepp / Amazfit<span className="sub">app export · cloudless</span>
-        </div>
-      </div>
-      <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
-        In the Zepp app → <b>Profile → Settings → About → Export data</b>, then zip the exported
-        folder and upload it here to ingest all-day heart rate, sleep staging (→ sleep score),
-        daily steps &amp; calories, and weight.
-      </p>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".zip,application/zip"
-        style={{ display: "none" }}
-        disabled={busy}
-        onChange={(e) => void onFile(e.target.files?.[0])}
-      />
-      <button type="button" className="btn" disabled={busy} onClick={() => inputRef.current?.click()}>
-        {busy ? "Importing…" : "Choose Zepp export (.zip)"}
-      </button>
-      {result && (
-        <div className="pill pill--good" style={{ marginTop: 12, justifyContent: "flex-start" }}>
-          {result}
-        </div>
-      )}
-      {error && (
-        <div className="pill pill--bad" style={{ marginTop: 12, justifyContent: "flex-start" }}>
-          {error}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** Live real-time card: current HR from the wellness WebSocket + a sparkline. */
 function LiveCard() {
   const live = useWellnessLive();
@@ -419,57 +290,6 @@ function LiveCard() {
         />
         {live.connected ? "streaming" : "waiting for stream"}
       </span>
-    </div>
-  );
-}
-
-/** Recovery readiness banner — the 0–100 score from the `readiness` algorithm
- *  (HRV + resting-HR vs your baseline), or a prompt when it can't be computed. */
-function ReadinessBanner() {
-  const [tl, setTl] = useState<TrainingLoadResponseDto | null>(null);
-  useEffect(() => {
-    let alive = true;
-    getTrainingLoad().then((d) => alive && setTl(d));
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const ready = tl?.readiness_available && tl.readiness != null;
-  const score = ready ? Math.round(tl!.readiness as number) : null;
-  const word =
-    score == null ? "" : score >= 75 ? "Primed" : score >= 55 ? "Balanced" : score >= 35 ? "Strained" : "Depleted";
-  const tint = score == null ? "t-acc" : score >= 55 ? "t-pace" : score >= 35 ? "t-cad" : "t-hr";
-
-  return (
-    <div className="banner" style={{ marginBottom: 24, alignItems: "center" }}>
-      {ready ? (
-        <div className={`stat__ico ${tint}`} style={{ marginBottom: 0 }}>
-          <HeartGlyph />
-        </div>
-      ) : (
-        <HeartGlyph />
-      )}
-      <div>
-        <b>Readiness{ready ? ` · ${word}` : ""}</b>{" "}
-        <span className="muted">
-          {ready ? (
-            <>
-              HRV + resting-HR vs your personal baseline.
-              {tl!.hrv_rmssd != null ? ` HRV ${Math.round(tl!.hrv_rmssd)} ms` : ""}
-              {tl!.hrv_baseline != null ? ` (baseline ${Math.round(tl!.hrv_baseline)} ms).` : "."}
-            </>
-          ) : (
-            "Needs overnight HRV + resting HR — import a Gadgetbridge DB or Zepp export, then Recompute on the Algorithms screen."
-          )}
-        </span>
-      </div>
-      {ready && (
-        <span className="num" style={{ marginLeft: "auto", fontSize: 30, fontWeight: 800 }}>
-          {score}
-          <small style={{ fontSize: 13, opacity: 0.6 }}> /100</small>
-        </span>
-      )}
     </div>
   );
 }
@@ -586,6 +406,15 @@ export function Wellness() {
   const [range, setRange] = useState<Range>("week");
   const { series } = useWellness(range);
 
+  const [tl, setTl] = useState<TrainingLoadResponseDto | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getTrainingLoad().then((d) => alive && setTl(d));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const rhr = latest(series.resting_heart_rate);
   const hrv = latest(series.hrv);
   const stress = mean(series.stress);
@@ -599,15 +428,13 @@ export function Wellness() {
         <Seg options={RANGES} value={range} onChange={setRange} aria-label="Date range" />
       }
     >
-      {/* recovery readiness banner — fed by the Phase-3 readiness algorithm */}
-      <ReadinessBanner />
+      {/* recovery readiness — shared section (same on the Dashboard) */}
+      <ReadinessSection data={tl} />
 
       {/* live real-time feed (WebSocket) */}
       <LiveCard />
 
       {/* import wellness from a Gadgetbridge export DB (works on web + the app) */}
-      <GadgetbridgeCard />
-      <ZeppCard />
 
       {/* stat tiles — latest values from the resolved wellness series */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>
