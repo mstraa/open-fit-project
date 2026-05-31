@@ -91,6 +91,16 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
+/// Extract a `token` value from a URL query string (for WebSocket auth, which
+/// can't send an Authorization header). Session tokens are URL-safe.
+fn query_token(query: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "token")
+        .map(|(_, v)| v.to_string())
+}
+
 async fn issue_session(state: &AppState, user_id: uuid::Uuid) -> Result<String, (StatusCode, String)> {
     let token = new_token();
     let expires = Utc::now() + chrono::Duration::days(SESSION_DAYS);
@@ -221,6 +231,15 @@ pub async fn require_auth(
     // 1) Session via cookie OR bearer token (the mobile app uses bearer).
     if resolve_user(&state, req.headers()).await.is_some() {
         return next.run(req).await;
+    }
+    // 1b) Session token in the query string — WebSocket handshakes can't carry an
+    //     Authorization header, so `/api/wellness/live?token=<session>` uses this.
+    if let Some(tok) = req.uri().query().and_then(query_token) {
+        if matches!(state.db.session_user(&tok).await, Ok(Some(_)))
+            || state.token.as_deref() == Some(tok.as_str())
+        {
+            return next.run(req).await;
+        }
     }
     // 2) Static service token (optional, for curl/automation).
     if let Some(expected) = state.token.as_deref() {

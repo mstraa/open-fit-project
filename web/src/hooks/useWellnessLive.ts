@@ -2,7 +2,7 @@
 // sample per kind plus a short rolling buffer (for sparklines), and reconnects.
 
 import { useEffect, useRef, useState } from "react";
-import { API_BASE } from "../api/client";
+import { API_BASE, getToken } from "../api/client";
 import type { WellnessKind } from "../api/types";
 
 export interface LiveSample {
@@ -25,9 +25,13 @@ const MAX_BUFFER = 120;
 function wsUrl(): string {
   // Absolute API base → ws(s) of the same host. Relative (same-origin) → build
   // from the page origin so vite's WS proxy (dev) / ofit-api (prod) handles it.
-  if (API_BASE) return `${API_BASE.replace(/^http/, "ws")}/api/wellness/live`;
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/wellness/live`;
+  const base = API_BASE
+    ? `${API_BASE.replace(/^http/, "ws")}/api/wellness/live`
+    : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/wellness/live`;
+  // WebSocket handshakes can't send an Authorization header — pass the session
+  // token as a query param (the server accepts ?token= for the live WS).
+  const token = getToken();
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 export function useWellnessLive(): WellnessLive {
