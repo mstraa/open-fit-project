@@ -22,12 +22,12 @@ use axum::{
 };
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use ofit_analytics::{
-    builtin_algorithms, ActivityInput, AnalyticsInput, MetricSeries, RunnableAlgorithm,
-    WellnessPoint as AnWellnessPoint,
+    builtin_algorithms, daily_resting_hr, ActivityInput, AnalyticsInput, MetricSeries,
+    RunnableAlgorithm, WellnessPoint as AnWellnessPoint,
 };
 use ofit_core::{
-    resolve_activity_view, AlgorithmInput, AlgorithmSpec, DerivedSubject, Sample, StreamKind,
-    WellnessKind,
+    resolve_activity_view, AlgorithmInput, AlgorithmSpec, DerivedSubject, Sample, SourceKind,
+    StreamKind, WellnessKind, WellnessSample,
 };
 use ofit_plugins::{PluginHost, SandboxLimits};
 use serde::{Deserialize, Serialize};
@@ -188,6 +188,54 @@ pub async fn recompute(
 ) -> Result<Json<RecomputeResponse>, ApiError> {
     let input = build_analytics_input(&state).await?;
     let computed_at = Utc::now();
+
+    // Derive a daily resting HR from the per-minute HR feed and fill any day that
+    // has HR but no resting-HR reading yet — e.g. fresh BLE-synced days the Zepp
+    // export doesn't cover. Upserted under a stable "Computed" source (idempotent
+    // via the (source,kind,ts) unique index), so it never duplicates or clobbers
+    // an imported resting HR for the same day.
+    {
+        let hr: Vec<(DateTime<Utc>, f64)> = input
+            .wellness
+            .iter()
+            .filter(|w| w.kind == WellnessKind::HeartRate)
+            .map(|w| (w.ts, w.value))
+            .collect();
+        let have_rhr: std::collections::HashSet<NaiveDate> = input
+            .wellness
+            .iter()
+            .filter(|w| w.kind == WellnessKind::RestingHeartRate)
+            .map(|w| w.ts.date_naive())
+            .collect();
+        let missing: Vec<(NaiveDate, f64)> = daily_resting_hr(&hr)
+            .into_iter()
+            .filter(|(date, _)| !have_rhr.contains(date))
+            .collect();
+        if !missing.is_empty() {
+            let src = state
+                .db
+                .ensure_source(SourceKind::Unknown, "Computed")
+                .await
+                .map_err(internal)?;
+            let samples: Vec<WellnessSample> = missing
+                .into_iter()
+                .filter_map(|(date, value)| {
+                    let ndt = date.and_hms_opt(0, 0, 0)?;
+                    Some(WellnessSample::scalar(
+                        src,
+                        WellnessKind::RestingHeartRate,
+                        value,
+                        Utc.from_utc_datetime(&ndt),
+                    ))
+                })
+                .collect();
+            state
+                .db
+                .insert_wellness_samples(&samples)
+                .await
+                .map_err(internal)?;
+        }
+    }
 
     // Run every algorithm (sync) and collect owned outputs *before* any await, so
     // the non-`Send` boxed trait objects are not held across the persist awaits.
