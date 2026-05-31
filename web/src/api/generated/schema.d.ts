@@ -255,6 +255,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/import/gadgetbridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/import/gadgetbridge` — upload an exported Gadgetbridge SQLite DB;
+         *     extract continuous wellness (HR / steps / stress + a derived daily resting HR)
+         *     and ingest it, attributed to a Gadgetbridge source named after the device.
+         */
+        post: operations["import_gadgetbridge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/preferences": {
         parameters: {
             query?: never;
@@ -521,6 +542,24 @@ export interface components {
             points: components["schemas"]["DerivedPoint"][];
             /** @description Producing algorithm version. */
             version: string;
+        };
+        /** @description One device's ingest result within a Gadgetbridge import. */
+        GadgetbridgeDeviceResult: {
+            /** @description Per-kind breakdown. */
+            by_kind: components["schemas"]["WellnessKindCount"][];
+            /** @description Device name (becomes the source name). */
+            device: string;
+            /** @description Readings ingested for this device. */
+            ingested: number;
+            /** @description Manufacturer, if recorded. */
+            manufacturer?: string | null;
+        };
+        /** @description Response of `POST /api/import/gadgetbridge` (the DB can hold many devices). */
+        GadgetbridgeImportResponse: {
+            /** @description Per-device results. */
+            devices: components["schemas"]["GadgetbridgeDeviceResult"][];
+            /** @description Total readings ingested across all devices. */
+            ingested: number;
         };
         /**
          * @description Liveness payload. Reports the DB backend in use so the simple/full tier is
@@ -897,7 +936,12 @@ export interface components {
          *     a single numeric column for high-rate streaming.
          * @enum {string}
          */
-        WellnessKind: "heart_rate" | "sleep_stage" | "resting_heart_rate" | "hrv" | "stress" | "body_battery" | "respiration" | "sp_o2";
+        WellnessKind: "heart_rate" | "sleep_stage" | "resting_heart_rate" | "hrv" | "stress" | "body_battery" | "respiration" | "sp_o2" | "steps";
+        /** @description Count of ingested readings of one wellness kind. */
+        WellnessKindCount: {
+            count: number;
+            kind: components["schemas"]["WellnessKind"];
+        };
         /** @description One wellness trend sample. */
         WellnessPoint: {
             /**
@@ -1243,6 +1287,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportResponse"];
+                };
+            };
+        };
+    };
+    import_gadgetbridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GadgetbridgeImportResponse"];
                 };
             };
         };

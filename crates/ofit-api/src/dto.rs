@@ -279,17 +279,26 @@ pub struct WellnessKindCount {
     pub count: usize,
 }
 
-/// Response of `POST /api/import/gadgetbridge`.
+/// One device's ingest result within a Gadgetbridge import.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct GadgetbridgeImportResponse {
-    /// Device name from the Gadgetbridge DB (becomes the source name).
+pub struct GadgetbridgeDeviceResult {
+    /// Device name (becomes the source name).
     pub device: String,
     /// Manufacturer, if recorded.
     pub manufacturer: Option<String>,
-    /// Total wellness readings ingested.
+    /// Readings ingested for this device.
     pub ingested: usize,
     /// Per-kind breakdown.
     pub by_kind: Vec<WellnessKindCount>,
+}
+
+/// Response of `POST /api/import/gadgetbridge` (the DB can hold many devices).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct GadgetbridgeImportResponse {
+    /// Per-device results.
+    pub devices: Vec<GadgetbridgeDeviceResult>,
+    /// Total readings ingested across all devices.
+    pub ingested: usize,
 }
 
 /// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a

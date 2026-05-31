@@ -291,12 +291,18 @@ export async function ingestWellness(
   return apiSend<{ ingested: number }>("/api/wellness", "POST", items);
 }
 
-/** Per-kind ingest count from POST /api/import/gadgetbridge. */
-export interface GadgetbridgeImportResult {
+/** One device's result from POST /api/import/gadgetbridge. */
+export interface GadgetbridgeDeviceResult {
   device: string;
   manufacturer?: string | null;
   ingested: number;
   by_kind: { kind: string; count: number }[];
+}
+
+/** Response of POST /api/import/gadgetbridge (the DB can hold many devices). */
+export interface GadgetbridgeImportResult {
+  devices: GadgetbridgeDeviceResult[];
+  ingested: number;
 }
 
 /** Upload an exported Gadgetbridge SQLite DB → ingest its wellness. */

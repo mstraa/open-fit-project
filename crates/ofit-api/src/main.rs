@@ -95,6 +95,7 @@ struct Version {
         dto::ImportResponse,
         dto::ImportFileResult,
         dto::GadgetbridgeImportResponse,
+        dto::GadgetbridgeDeviceResult,
         dto::WellnessKindCount,
         dto::SourceDto,
         dto::ActivitySummary,

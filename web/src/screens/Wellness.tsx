@@ -202,9 +202,11 @@ function GadgetbridgeCard() {
     setResult(null);
     try {
       const r = await importGadgetbridge(f);
-      const breakdown = r.by_kind.map((k) => `${k.count.toLocaleString()} ${k.kind}`).join(" · ");
-      setResult(`Imported ${r.ingested.toLocaleString()} readings from ${r.device} — ${breakdown}.`);
-      setTimeout(() => window.location.reload(), 1400);
+      const perDevice = r.devices
+        .map((d) => `${d.device}: ${d.ingested.toLocaleString()} (${d.by_kind.map((k) => k.kind).join(", ")})`)
+        .join(" · ");
+      setResult(`Imported ${r.ingested.toLocaleString()} readings — ${perDevice}.`);
+      setTimeout(() => window.location.reload(), 1600);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

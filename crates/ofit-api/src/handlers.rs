@@ -451,42 +451,47 @@ pub async fn import_gadgetbridge(
     let _ = tokio::fs::remove_file(&tmp).await;
     let imp = parsed.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
 
-    let source_id = state
-        .db
-        .ensure_source(SourceKind::Gadgetbridge, &imp.device_name)
-        .await
-        .map_err(internal)?;
+    let mut results: Vec<GadgetbridgeDeviceResult> = Vec::new();
+    let mut total = 0usize;
 
-    // Idempotent: a re-import of this device's export replaces, not duplicates.
-    state.db.delete_wellness_for_source(source_id).await.map_err(internal)?;
+    // One source per device (Helio, 945, …); each import is idempotent per source.
+    for dev in &imp.devices {
+        let source_id = state
+            .db
+            .ensure_source(SourceKind::Gadgetbridge, &dev.name)
+            .await
+            .map_err(internal)?;
+        state.db.delete_wellness_for_source(source_id).await.map_err(internal)?;
 
-    let mut counts: std::collections::HashMap<ofit_core::WellnessKind, usize> = std::collections::HashMap::new();
-    let samples: Vec<ofit_core::WellnessSample> = imp
-        .readings
-        .iter()
-        .map(|r| {
-            *counts.entry(r.kind).or_default() += 1;
-            ofit_core::WellnessSample::scalar(source_id, r.kind, r.value, r.ts)
-        })
-        .collect();
+        let mut counts: std::collections::HashMap<ofit_core::WellnessKind, usize> = std::collections::HashMap::new();
+        let samples: Vec<ofit_core::WellnessSample> = dev
+            .readings
+            .iter()
+            .map(|r| {
+                *counts.entry(r.kind).or_default() += 1;
+                ofit_core::WellnessSample::scalar(source_id, r.kind, r.value, r.ts)
+            })
+            .collect();
+        for chunk in samples.chunks(5_000) {
+            state.db.insert_wellness_samples(chunk).await.map_err(internal)?;
+        }
 
-    // Chunk the (potentially tens of thousands of) inserts.
-    for chunk in samples.chunks(5_000) {
-        state.db.insert_wellness_samples(chunk).await.map_err(internal)?;
+        let mut by_kind: Vec<WellnessKindCount> = counts
+            .into_iter()
+            .map(|(kind, count)| WellnessKindCount { kind, count })
+            .collect();
+        by_kind.sort_by(|a, b| b.count.cmp(&a.count));
+
+        total += samples.len();
+        results.push(GadgetbridgeDeviceResult {
+            device: dev.name.clone(),
+            manufacturer: dev.manufacturer.clone(),
+            ingested: samples.len(),
+            by_kind,
+        });
     }
 
-    let mut by_kind: Vec<WellnessKindCount> = counts
-        .into_iter()
-        .map(|(kind, count)| WellnessKindCount { kind, count })
-        .collect();
-    by_kind.sort_by(|a, b| b.count.cmp(&a.count));
-
-    Ok(Json(GadgetbridgeImportResponse {
-        device: imp.device_name,
-        manufacturer: imp.manufacturer,
-        ingested: samples.len(),
-        by_kind,
-    }))
+    Ok(Json(GadgetbridgeImportResponse { devices: results, ingested: total }))
 }
 
 /// `POST /api/wellness` — batch-ingest continuous wellness samples (the
