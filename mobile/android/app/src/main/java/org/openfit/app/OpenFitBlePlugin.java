@@ -291,19 +291,28 @@ public class OpenFitBlePlugin extends Plugin {
                     opComplete();
                     return;
                 }
+                // Pick the write type the characteristic actually supports. The
+                // Huami chunked-write char typically advertises WRITE_NO_RESPONSE.
+                int props = c.getProperties();
+                int writeType = (props & BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                    ? BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
                 boolean ok;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    int r = gatt.writeCharacteristic(c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                    int r = gatt.writeCharacteristic(c, value, writeType);
                     ok = r == BluetoothStatusCodes.SUCCESS;
                     if (!ok) Log.w(TAG, "writeCharacteristic " + c.getUuid() + " failed code=" + r);
                 } else {
                     c.setValue(value);
-                    c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                    c.setWriteType(writeType);
                     ok = gatt.writeCharacteristic(c);
                     if (!ok) Log.w(TAG, "writeCharacteristic(legacy) " + c.getUuid() + " returned false");
                 }
-                Log.i(TAG, "write " + c.getUuid() + " len=" + value.length + " ok=" + ok);
-                if (!ok) opComplete(); // else → onCharacteristicWrite → opComplete()
+                Log.i(TAG, "write " + c.getUuid() + " len=" + value.length + " wt=" + writeType + " props=0x" + Integer.toHexString(props) + " ok=" + ok);
+                // For write-without-response, onCharacteristicWrite still fires; if
+                // it somehow doesn't, the queue would stall — but DEFAULT/NO_RESPONSE
+                // both deliver the callback on Android.
+                if (!ok) opComplete();
             } catch (SecurityException e) {
                 opComplete();
             }
@@ -393,11 +402,13 @@ public class OpenFitBlePlugin extends Plugin {
 
         @Override
         public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor descriptor, int status) {
+            Log.i(TAG, "onDescriptorWrite " + descriptor.getCharacteristic().getUuid() + " status=" + status);
             opComplete();
         }
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+            Log.i(TAG, "onCharacteristicWrite " + c.getUuid() + " status=" + status);
             opComplete();
         }
 
@@ -406,6 +417,7 @@ public class OpenFitBlePlugin extends Plugin {
         public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
             byte[] v = c.getValue();
             UUID u = c.getUuid();
+            Log.i(TAG, "notif " + u + " len=" + (v != null ? v.length : -1));
             if (CHUNK_READ.equals(u)) {
                 if (huami != null) huami.onChunkedRead(v);
             } else if (HR_MEASUREMENT.equals(u)) {
@@ -457,6 +469,8 @@ public class OpenFitBlePlugin extends Plugin {
             emitStatus("error", "Zepp-OS chunked-transfer characteristics not found");
             return;
         }
+        Log.i(TAG, "huami chars: write props=0x" + Integer.toHexString(chunkWriteChar.getProperties())
+            + " read props=0x" + Integer.toHexString(chunkReadChar.getProperties()));
         // Negotiate a large MTU first; the session starts in onMtuChanged.
         boolean requested = false;
         try {
