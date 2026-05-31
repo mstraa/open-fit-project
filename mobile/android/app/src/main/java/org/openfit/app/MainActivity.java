@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         // Register the native BLE plugin (direct-device port — see docs/NATIVE-BLE-PORT.md)
         // BEFORE the bridge initializes.
         registerPlugin(OpenFitBlePlugin.class);
+        registerPlugin(RecordingPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

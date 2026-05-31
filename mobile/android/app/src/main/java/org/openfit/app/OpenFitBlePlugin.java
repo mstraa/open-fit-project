@@ -305,6 +305,10 @@ public class OpenFitBlePlugin extends Plugin {
         ev.put("ts", System.currentTimeMillis());
         notifyListeners("sample", ev);
         nativeIngest(kind, value); // POST natively so it keeps flowing when locked
+        // Feed live HR into an in-progress workout recording.
+        if ("heart_rate".equals(kind) && RecordingService.isRecording()) {
+            RecordingService.feedHeartRate((int) Math.round(value));
+        }
     }
 
     /** JS hands us the server base + session token so we can POST samples even

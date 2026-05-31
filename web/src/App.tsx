@@ -7,6 +7,7 @@ import { Suspense, lazy, useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Dashboard } from "./screens/Dashboard";
 import { Activities } from "./screens/Activities";
+import { Workout } from "./screens/Workout";
 import { Wellness } from "./screens/Wellness";
 import { Settings } from "./screens/Settings";
 import { Algorithms } from "./screens/Algorithms";
@@ -43,6 +44,7 @@ export function App() {
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
       <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/record" element={<Workout />} />
       <Route path="/activities" element={<Activities />} />
       <Route
         path="/activities/:id"

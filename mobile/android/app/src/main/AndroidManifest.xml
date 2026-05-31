@@ -41,6 +41,11 @@
             android:name=".BleForegroundService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <!-- Workout recording: GPS + IMU + bike BLE while the screen is locked. -->
+        <service
+            android:name=".RecordingService"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice" />
     </application>
 
     <!-- Permissions -->
@@ -53,9 +58,13 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- Location: foreground (GPS workout tracking) + background (record with the
+         screen locked). NOT capped — the workout recorder needs it on Android 11-14. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <!-- Read Gadgetbridge's hourly auto-export file for the auto-import feature.
          MANAGE_EXTERNAL_STORAGE ("All files access") is granted in system settings
@@ -66,5 +75,7 @@
     <!-- Background streaming / workout recording (foreground service + its notification). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>

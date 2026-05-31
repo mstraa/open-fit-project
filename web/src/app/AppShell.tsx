@@ -113,6 +113,16 @@ function Rail({ open }: { open: boolean }) {
 
       <nav className="nav">
         <NavItem to="/dashboard" icon={<DashboardIcon />} label="Dashboard" />
+        <NavItem
+          to="/record"
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+              <circle cx="12" cy="12" r="9" />
+              <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+            </svg>
+          }
+          label="Record"
+        />
         <NavItem to="/activities" icon={<ActivitiesIcon />} label="Activities" badge={activityBadge} />
         <NavItem to="/wellness" icon={<WellnessIcon />} label="Wellness" />
         <NavItem to="/sleep" icon={<SleepIcon />} label="Sleep" />
