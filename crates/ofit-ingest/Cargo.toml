@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ofit-core.workspace = true
 ofit-db.workspace = true
+sqlx.workspace = true
 fitparser.workspace = true
 gpx.workspace = true
 quick-xml.workspace = true

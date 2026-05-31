@@ -60,6 +60,8 @@ pub enum WellnessKind {
     Respiration,
     /// SpO2 / blood-oxygen (%).
     SpO2,
+    /// Steps in the sample interval (count).
+    Steps,
 }
 
 /// One continuous wellness reading.

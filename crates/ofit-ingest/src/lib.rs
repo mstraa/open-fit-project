@@ -32,11 +32,13 @@ use uuid::Uuid;
 
 mod builder;
 mod fit;
+pub mod gadgetbridge;
 mod gpx;
 mod pipeline;
 mod tcx;
 
 pub use builder::RecordingBuilder;
+pub use gadgetbridge::{read_db as read_gadgetbridge_db, GadgetbridgeImport, GbError, WellnessReading};
 pub use pipeline::{import_bytes_path, import_path, ImportOutcome, PipelineError};
 
 /// Errors raised while importing a file.

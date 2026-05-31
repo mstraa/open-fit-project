@@ -419,6 +419,73 @@ pub async fn wellness(
     }))
 }
 
+/// `POST /api/import/gadgetbridge` — upload an exported Gadgetbridge SQLite DB;
+/// extract continuous wellness (HR / steps / stress + a derived daily resting HR)
+/// and ingest it, attributed to a Gadgetbridge source named after the device.
+#[utoipa::path(
+    post, path = "/api/import/gadgetbridge",
+    responses((status = 200, body = GadgetbridgeImportResponse))
+)]
+pub async fn import_gadgetbridge(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<GadgetbridgeImportResponse>, ApiError> {
+    // Read the first uploaded file part.
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("multipart error: {e}")))?
+    {
+        if let Ok(b) = field.bytes().await {
+            data = Some(b.to_vec());
+            break;
+        }
+    }
+    let bytes = data.ok_or_else(|| err(StatusCode::BAD_REQUEST, "no file uploaded".to_string()))?;
+
+    // SQLite must read from a file; stage the upload in a temp file.
+    let tmp = std::env::temp_dir().join(format!("ofit-gb-{}.db", uuid::Uuid::new_v4()));
+    tokio::fs::write(&tmp, &bytes).await.map_err(internal)?;
+    let parsed = ofit_ingest::read_gadgetbridge_db(&tmp).await;
+    let _ = tokio::fs::remove_file(&tmp).await;
+    let imp = parsed.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+
+    let source_id = state
+        .db
+        .ensure_source(SourceKind::Gadgetbridge, &imp.device_name)
+        .await
+        .map_err(internal)?;
+
+    let mut counts: std::collections::HashMap<ofit_core::WellnessKind, usize> = std::collections::HashMap::new();
+    let samples: Vec<ofit_core::WellnessSample> = imp
+        .readings
+        .iter()
+        .map(|r| {
+            *counts.entry(r.kind).or_default() += 1;
+            ofit_core::WellnessSample::scalar(source_id, r.kind, r.value, r.ts)
+        })
+        .collect();
+
+    // Chunk the (potentially tens of thousands of) inserts.
+    for chunk in samples.chunks(5_000) {
+        state.db.insert_wellness_samples(chunk).await.map_err(internal)?;
+    }
+
+    let mut by_kind: Vec<WellnessKindCount> = counts
+        .into_iter()
+        .map(|(kind, count)| WellnessKindCount { kind, count })
+        .collect();
+    by_kind.sort_by(|a, b| b.count.cmp(&a.count));
+
+    Ok(Json(GadgetbridgeImportResponse {
+        device: imp.device_name,
+        manufacturer: imp.manufacturer,
+        ingested: samples.len(),
+        by_kind,
+    }))
+}
+
 /// `POST /api/wellness` — batch-ingest continuous wellness samples (the
 /// streaming/relay write path). Persists them and fans each out live to the
 /// `/api/wellness/live` subscribers.

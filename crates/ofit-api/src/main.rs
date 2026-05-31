@@ -75,6 +75,7 @@ struct Version {
         auth::logout,
         auth::me,
         handlers::import,
+        handlers::import_gadgetbridge,
         handlers::list_sources,
         handlers::list_activities,
         handlers::get_activity,
@@ -93,6 +94,8 @@ struct Version {
         Version,
         dto::ImportResponse,
         dto::ImportFileResult,
+        dto::GadgetbridgeImportResponse,
+        dto::WellnessKindCount,
         dto::SourceDto,
         dto::ActivitySummary,
         dto::ActivityDetail,
@@ -191,6 +194,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/import",
             post(handlers::import).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+        )
+        .route(
+            "/import/gadgetbridge",
+            post(handlers::import_gadgetbridge).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
         )
         .route("/sources", get(handlers::list_sources))
         .route("/activities", get(handlers::list_activities))

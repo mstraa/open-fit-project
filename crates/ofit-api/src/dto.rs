@@ -272,6 +272,26 @@ pub struct WellnessIngestResponse {
     pub ingested: usize,
 }
 
+/// Count of ingested readings of one wellness kind.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct WellnessKindCount {
+    pub kind: WellnessKind,
+    pub count: usize,
+}
+
+/// Response of `POST /api/import/gadgetbridge`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct GadgetbridgeImportResponse {
+    /// Device name from the Gadgetbridge DB (becomes the source name).
+    pub device: String,
+    /// Manufacturer, if recorded.
+    pub manufacturer: Option<String>,
+    /// Total wellness readings ingested.
+    pub ingested: usize,
+    /// Per-kind breakdown.
+    pub by_kind: Vec<WellnessKindCount>,
+}
+
 /// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a
 /// JSON text frame — the real-time fan-out of the ingest path to the dashboard.
 #[derive(Debug, Clone, Serialize, ToSchema)]
