@@ -158,7 +158,9 @@ function NativeBleCard() {
       </div>
       <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
         Direct device sync, no Gadgetbridge. Standard HR works on any strap / watch in <b>Broadcast HR</b>;
-        for the <b>Helio (Zepp-OS)</b>, paste its 32-hex auth key, then connect with <b>Zepp-OS</b>.
+        for the <b>Helio (Zepp-OS)</b>, paste its 32-hex auth key, then connect with <b>Zepp-OS</b>.{" "}
+        <b>First unpair the Helio in Android → Bluetooth settings</b> so it doesn&apos;t fight the Zepp app
+        for the connection.
       </p>
 
       <label style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 12 }}>
