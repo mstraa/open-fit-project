@@ -116,59 +116,43 @@ export function BleProvider({ children }: { children: ReactNode }) {
     setState((s) => (s.status === "connected" ? { ...s, live: { ...liveRef.current } } : s));
   }, []);
 
-  // Subscribe to whatever standard services the device exposes. We first
-  // DISCOVER the GATT services so we can tell the difference between "connected
-  // and streaming" and "connected but the device speaks a proprietary protocol"
-  // (e.g. the Amazfit Helio, which exposes no standard HR service to third-party
-  // apps). Returns the number of standard measurement services we subscribed to.
+  // Subscribe to whatever standard measurement services the device exposes. We
+  // ATTEMPT all three directly (this is what works for the Helio — its HR
+  // service is readable even though getServices() reports it in a form that's
+  // awkward to match), and return how many subscriptions actually succeeded so
+  // the caller can show a helpful message only when truly nothing is readable.
   const subscribe = useCallback(
     async (client: BleClient, id: string): Promise<number> => {
-      // Enumerate services (best-effort; Web Bluetooth may not support it).
-      let advertised: string[] | null = null;
-      try {
-        const services = await client.getServices(id);
-        advertised = services.map((s) => s.uuid.toLowerCase());
-      } catch {
-        advertised = null; // unknown → just try subscribing to each
-      }
-      const offers = (svc: string) => advertised === null || advertised.includes(svc);
-
       let subscribed = 0;
-      if (offers(HR_SERVICE)) {
-        try {
-          await client.startNotifications(id, HR_SERVICE, HR_MEASUREMENT, (v) => {
-            liveRef.current.hr = parseHr(v);
-            emitLive();
-            pushHr(liveRef.current.hr);
-          });
-          subscribed++;
-        } catch {
-          /* HR present but unsubscribable */
-        }
+      try {
+        await client.startNotifications(id, HR_SERVICE, HR_MEASUREMENT, (v) => {
+          liveRef.current.hr = parseHr(v);
+          emitLive();
+          pushHr(liveRef.current.hr);
+        });
+        subscribed++;
+      } catch {
+        /* no readable HR service */
       }
-      if (offers(CP_SERVICE)) {
-        try {
-          await client.startNotifications(id, CP_SERVICE, CP_MEASUREMENT, (v) => {
-            liveRef.current.power = parsePower(v);
-            emitLive();
-          });
-          subscribed++;
-        } catch {
-          /* no power */
-        }
+      try {
+        await client.startNotifications(id, CP_SERVICE, CP_MEASUREMENT, (v) => {
+          liveRef.current.power = parsePower(v);
+          emitLive();
+        });
+        subscribed++;
+      } catch {
+        /* no power */
       }
-      if (offers(RSC_SERVICE)) {
-        try {
-          await client.startNotifications(id, RSC_SERVICE, RSC_MEASUREMENT, (v) => {
-            const { speed, cadence } = parseRsc(v);
-            liveRef.current.speed = speed;
-            liveRef.current.cadence = cadence;
-            emitLive();
-          });
-          subscribed++;
-        } catch {
-          /* no RSC */
-        }
+      try {
+        await client.startNotifications(id, RSC_SERVICE, RSC_MEASUREMENT, (v) => {
+          const { speed, cadence } = parseRsc(v);
+          liveRef.current.speed = speed;
+          liveRef.current.cadence = cadence;
+          emitLive();
+        });
+        subscribed++;
+      } catch {
+        /* no RSC */
       }
       return subscribed;
     },
@@ -197,26 +181,19 @@ export function BleProvider({ children }: { children: ReactNode }) {
         }
       });
       const subscribed = await subscribe(client, dev.deviceId);
-      if (subscribed === 0) {
-        // Connected, but the device exposes no standard HR/power/cadence service
-        // we can read — almost always a proprietary-protocol device (Helio, full
-        // Garmin). Disconnect and point the user at the export-DB path.
-        userDisconnectRef.current = true;
-        try {
-          await client.disconnect(dev.deviceId);
-        } catch {
-          /* ignore */
-        }
-        setState({
-          status: "error",
-          found: [],
-          live: {},
-          device: dev,
-          message: `Connected to ${dev.name}, but it advertises no standard Bluetooth heart-rate / power / cadence service — it uses a proprietary protocol (the Amazfit Helio and full Garmin do). Use the Zepp or Gadgetbridge export import for this device instead.`,
-        });
-        return;
-      }
-      setState({ status: "connected", found: [], live: { ...liveRef.current }, device: dev });
+      // Stay connected regardless (notifications can also start a beat late). When
+      // nothing subscribed, show a soft hint rather than tearing the link down —
+      // a hard disconnect here is what was wrongly killing the readable Helio.
+      setState({
+        status: "connected",
+        found: [],
+        live: { ...liveRef.current },
+        device: dev,
+        message:
+          subscribed === 0
+            ? `Connected — no standard HR/power/cadence data yet. If readings don't appear, this device (e.g. a full Garmin) may use a proprietary protocol; use the Zepp/Gadgetbridge export for it.`
+            : undefined,
+      });
     },
     [ble, subscribe],
   );

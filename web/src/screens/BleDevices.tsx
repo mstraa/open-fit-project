@@ -57,7 +57,7 @@ export function BleDevices() {
       </div>
 
       {live_ && device ? (
-        <ConnectedView name={device.name} live={live} reconnecting={status === "reconnecting"} />
+        <ConnectedView name={device.name} live={live} reconnecting={status === "reconnecting"} note={message} />
       ) : status === "connecting" ? (
         <EmptyState label={`Connecting to ${device?.name ?? "device"}…`} />
       ) : status === "error" ? (
@@ -117,7 +117,17 @@ function DeviceList({ found, onConnect }: { found: Found[]; onConnect: (d: Found
   );
 }
 
-function ConnectedView({ name, live, reconnecting }: { name: string; live: Live; reconnecting: boolean }) {
+function ConnectedView({
+  name,
+  live,
+  reconnecting,
+  note,
+}: {
+  name: string;
+  live: Live;
+  reconnecting: boolean;
+  note?: string;
+}) {
   return (
     <>
       <div className="card" style={{ marginBottom: "var(--gap)", display: "flex", alignItems: "center", gap: 12 }}>
@@ -125,6 +135,11 @@ function ConnectedView({ name, live, reconnecting }: { name: string; live: Live;
         <b>{name}</b>
         <span className="muted">{reconnecting ? "reconnecting…" : "streaming live → wellness"}</span>
       </div>
+      {note && (
+        <div className="banner" style={{ marginBottom: "var(--gap)" }}>
+          <span className="muted">{note}</span>
+        </div>
+      )}
       <div className="grid grid--stats">
         <LiveTile tint="t-hr" label="Heart rate" value={live.hr} unit="bpm" />
         <LiveTile tint="t-pow" label="Power" value={live.power} unit="W" />
