@@ -147,7 +147,10 @@ public class HuamiSession implements Huami2021Handler {
                         cmd[0] = 0x05;
                         System.arraycopy(enc1, 0, cmd, 1, 16);
                         System.arraycopy(enc2, 0, cmd, 17, 16);
-                        write(EP_AUTH, cmd, true);
+                        // The auth endpoint is TRANSPORT-unencrypted (Gadgetbridge's
+                        // ZeppOsAuthenticationService is super(support, false)); the
+                        // AES here is purely the app-level random proof.
+                        write(EP_AUTH, cmd, false);
                     }
                 } catch (Exception e) {
                     listener.onAuthFailed("AES encryption failed: " + e.getMessage());
@@ -169,11 +172,12 @@ public class HuamiSession implements Huami2021Handler {
         Log.w(TAG, "unknown auth byte " + String.format("0x%02x", payload[1]));
     }
 
-    /** Enable realtime HR (after the standard 0x2A37 notify is on) + keepalive. */
+    /** Enable realtime HR (after the standard 0x2A37 notify is on) + keepalive.
+     *  ZeppOsHeartRateService is also super(support, false) → transport-plaintext. */
     public void enableHeartRate() {
         if (realtimeStarted) return;
         realtimeStarted = true;
-        write(EP_HEART_RATE, new byte[]{CMD_REALTIME_SET, MODE_START}, true);
+        write(EP_HEART_RATE, new byte[]{CMD_REALTIME_SET, MODE_START}, false);
         scheduleContinue();
     }
 
@@ -181,7 +185,7 @@ public class HuamiSession implements Huami2021Handler {
         handler.removeCallbacksAndMessages(null);
         handler.postDelayed(() -> {
             if (!realtimeStarted) return;
-            write(EP_HEART_RATE, new byte[]{CMD_REALTIME_SET, MODE_CONTINUE}, true);
+            write(EP_HEART_RATE, new byte[]{CMD_REALTIME_SET, MODE_CONTINUE}, false);
             scheduleContinue();
         }, 1000L);
     }
