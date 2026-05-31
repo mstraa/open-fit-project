@@ -44,6 +44,11 @@ pub struct Credentials {
 #[derive(Serialize, ToSchema)]
 pub struct Me {
     pub username: String,
+    /// The session token, returned on login/setup so non-cookie clients (the
+    /// mobile app, which is cross-origin to the LAN server) can authenticate via
+    /// `Authorization: Bearer <token>`. `null` on `/me`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 /* -------------------------------------------------------------- helpers */
@@ -130,7 +135,7 @@ pub async fn setup(
     let token = issue_session(&state, id).await?;
     Ok((
         [(header::SET_COOKIE, session_cookie(&token))],
-        Json(Me { username: body.username.trim().to_string() }),
+        Json(Me { username: body.username.trim().to_string(), token: Some(token) }),
     )
         .into_response())
 }
@@ -152,37 +157,56 @@ pub async fn login(
     let token = issue_session(&state, id).await?;
     Ok((
         [(header::SET_COOKIE, session_cookie(&token))],
-        Json(Me { username: body.username.trim().to_string() }),
+        Json(Me { username: body.username.trim().to_string(), token: Some(token) }),
     )
         .into_response())
 }
 
-/// `POST /api/auth/logout` — end the current session.
+/// `POST /api/auth/logout` — end the current session (cookie or bearer).
 #[utoipa::path(post, path = "/api/auth/logout", responses((status = 200)))]
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(token) = cookie_token(&headers) {
+    if let Some(token) = cookie_token(&headers).or_else(|| bearer_token(&headers).map(str::to_string)) {
         let _ = state.db.delete_session(&token).await;
     }
     ([(header::SET_COOKIE, clear_cookie())], StatusCode::OK).into_response()
 }
 
-/// `GET /api/auth/me` — the current account, or 401.
+/// `GET /api/auth/me` — the current account, or 401. Accepts cookie or bearer.
 #[utoipa::path(get, path = "/api/auth/me", responses((status = 200, body = Me), (status = 401)))]
 pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Me>, StatusCode> {
-    let token = cookie_token(&headers).ok_or(StatusCode::UNAUTHORIZED)?;
-    let user_id = state
-        .db
-        .session_user(&token)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let user_id = resolve_user(&state, &headers).await.ok_or(StatusCode::UNAUTHORIZED)?;
     let username = state
         .db
         .username_of(user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    Ok(Json(Me { username }))
+    Ok(Json(Me { username, token: None }))
+}
+
+/// Bearer token from the `Authorization` header, if present.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+/// Resolve the authenticated user from a session **cookie** or a **Bearer**
+/// session token (the mobile app uses the latter, being cross-origin).
+async fn resolve_user(state: &AppState, headers: &HeaderMap) -> Option<uuid::Uuid> {
+    if let Some(t) = cookie_token(headers) {
+        if let Ok(Some(uid)) = state.db.session_user(&t).await {
+            return Some(uid);
+        }
+    }
+    if let Some(t) = bearer_token(headers) {
+        if let Ok(Some(uid)) = state.db.session_user(t).await {
+            return Some(uid);
+        }
+    }
+    None
 }
 
 /* ------------------------------------------------------------ middleware */
@@ -194,20 +218,13 @@ pub async fn require_auth(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    // 1) Session cookie.
-    if let Some(token) = cookie_token(req.headers()) {
-        if matches!(state.db.session_user(&token).await, Ok(Some(_))) {
-            return next.run(req).await;
-        }
+    // 1) Session via cookie OR bearer token (the mobile app uses bearer).
+    if resolve_user(&state, req.headers()).await.is_some() {
+        return next.run(req).await;
     }
-    // 2) Service token (optional, for curl/automation).
+    // 2) Static service token (optional, for curl/automation).
     if let Some(expected) = state.token.as_deref() {
-        let presented = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-        if presented == Some(expected) {
+        if bearer_token(req.headers()) == Some(expected) {
             return next.run(req).await;
         }
     }

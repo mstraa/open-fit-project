@@ -176,7 +176,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** `POST /api/auth/logout` — end the current session. */
+        /** `POST /api/auth/logout` — end the current session (cookie or bearer). */
         post: operations["logout"];
         delete?: never;
         options?: never;
@@ -191,7 +191,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** `GET /api/auth/me` — the current account, or 401. */
+        /** `GET /api/auth/me` — the current account, or 401. Accepts cookie or bearer. */
         get: operations["me"];
         put?: never;
         post?: never;
@@ -582,6 +582,12 @@ export interface components {
             value: number;
         };
         Me: {
+            /**
+             * @description The session token, returned on login/setup so non-cookie clients (the
+             *     mobile app, which is cross-origin to the LAN server) can authenticate via
+             *     `Authorization: Bearer <token>`. `null` on `/me`.
+             */
+            token?: string | null;
             username: string;
         };
         /** @description A metric→source preference as exposed to the client. */

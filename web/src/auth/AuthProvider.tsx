@@ -11,8 +11,24 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { apiFetch, apiSend, ApiError } from "../api/client";
+import {
+  apiFetch,
+  apiSend,
+  ApiError,
+  API_BASE,
+  setApiBase,
+  setToken,
+  clearToken,
+} from "../api/client";
 import { LogoMark } from "../app/icons";
+
+/** Running inside the Capacitor native shell (the Android app)? */
+function isNative(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean((window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.())
+  );
+}
 
 interface AuthValue {
   username: string;
@@ -30,6 +46,7 @@ export function useAuth(): AuthValue {
 
 type Gate =
   | { kind: "loading" }
+  | { kind: "connect" }
   | { kind: "setup" }
   | { kind: "login" }
   | { kind: "authed"; username: string };
@@ -51,8 +68,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setGate({ kind: "login" });
       }
     } catch {
-      // API unreachable — let the app render so it can show its own offline state.
-      setGate({ kind: "authed", username: "" });
+      // API unreachable. On the mobile app (or once a server URL is configured)
+      // prompt to (re)connect to the self-hosted server; on web with the default
+      // relative base, let the app render and show its own offline state.
+      if (isNative() || API_BASE) {
+        setGate({ kind: "connect" });
+      } else {
+        setGate({ kind: "authed", username: "" });
+      }
     }
   }, []);
 
@@ -66,11 +89,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
+    clearToken();
     setGate({ kind: "login" });
   }, []);
 
   if (gate.kind === "loading") {
     return <AuthShell>Loading…</AuthShell>;
+  }
+  if (gate.kind === "connect") {
+    return <ConnectForm />;
   }
   if (gate.kind === "setup" || gate.kind === "login") {
     return <AuthForm mode={gate.kind} onDone={resolve} />;
@@ -113,7 +140,13 @@ function AuthForm({ mode, onDone }: { mode: "setup" | "login"; onDone: () => voi
     setError(null);
     try {
       const path = mode === "setup" ? "/api/auth/setup" : "/api/auth/login";
-      await apiSend(path, "POST", { username, password });
+      const res = await apiSend<{ username: string; token?: string }>(path, "POST", {
+        username,
+        password,
+      });
+      // Store the session token so the cross-origin mobile app can use Bearer auth
+      // (web also stores it harmlessly; it primarily relies on the cookie).
+      if (res?.token) setToken(res.token);
       onDone();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) setError("Invalid username or password.");
@@ -191,6 +224,62 @@ function AuthForm({ mode, onDone }: { mode: "setup" | "login"; onDone: () => voi
 
         <button type="submit" className="btn" disabled={busy} style={{ justifyContent: "center" }}>
           {busy ? "…" : isSetup ? "Create account" : "Sign in"}
+        </button>
+      </form>
+    </AuthShell>
+  );
+}
+
+/** Mobile/offline: point the app at your self-hosted ofit-api on the LAN. */
+function ConnectForm() {
+  const [url, setUrl] = useState(API_BASE || "http://192.168.1.29:8087");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setApiBase(url);
+    // The base is read at module load, so reload to apply it, then re-resolve.
+    window.location.reload();
+  };
+  return (
+    <AuthShell>
+      <form
+        onSubmit={submit}
+        className="card"
+        style={{ width: "min(380px, 92vw)", display: "flex", flexDirection: "column", gap: "var(--space-4)" }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="rail__logo" style={{ width: 34, height: 34, display: "grid", placeItems: "center" }}>
+            <LogoMark />
+          </span>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>
+              Open<span style={{ color: "var(--accent)" }}>Fit</span>
+            </div>
+            <div className="faint" style={{ fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              self-hosted · cloudless
+            </div>
+          </div>
+        </div>
+        <div>
+          <h1 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Connect to your server</h1>
+          <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
+            Enter the address of your self-hosted Open Fit server on your network.
+          </p>
+        </div>
+        <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+          <span className="muted">Server URL</span>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            placeholder="http://192.168.1.29:8087"
+            required
+            style={inputStyle}
+          />
+        </label>
+        <button type="submit" className="btn" style={{ justifyContent: "center" }}>
+          Connect
         </button>
       </form>
     </AuthShell>

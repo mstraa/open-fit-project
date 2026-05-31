@@ -6,15 +6,54 @@
 
 import type { HealthDto } from "./schema";
 
+const STORAGE_BASE = "ofit_api_base";
+const STORAGE_TOKEN = "ofit_token";
+
+function stored(key: string): string {
+  try {
+    return (typeof localStorage !== "undefined" && localStorage.getItem(key)) || "";
+  } catch {
+    return "";
+  }
+}
+
 /**
- * Base URL of the ofit-api backend.
- * Defaults to **relative** (same-origin): in `npm run dev` vite proxies /health,
- * /api and /api-docs (incl. the WebSocket) to ofit-api, and in production the app
- * is served by ofit-api itself — both same-origin, so session cookies + the live
- * WS work without CORS. Set `VITE_API_BASE` only when the web is served from a
- * different origin than the API.
+ * Base URL of the ofit-api backend, in priority order:
+ *  1. a runtime-configured base (localStorage `ofit_api_base`) — the **mobile app**
+ *     sets this to your LAN server (e.g. http://192.168.1.29:8087);
+ *  2. build-time `VITE_API_BASE`;
+ *  3. **relative** (same-origin) — the default for web (dev proxy / prod served by
+ *     ofit-api), so cookies + the live WS work without CORS.
  */
-export const API_BASE: string = import.meta.env.VITE_API_BASE ?? "";
+export const API_BASE: string = stored(STORAGE_BASE) || (import.meta.env.VITE_API_BASE ?? "");
+
+/** Persist the API base (mobile "connect to your server"). Caller reloads. */
+export function setApiBase(url: string): void {
+  try {
+    localStorage.setItem(STORAGE_BASE, url.trim().replace(/\/+$/, ""));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Bearer session token for non-cookie clients (the cross-origin mobile app). */
+export function getToken(): string {
+  return stored(STORAGE_TOKEN);
+}
+export function setToken(token: string): void {
+  try {
+    localStorage.setItem(STORAGE_TOKEN, token);
+  } catch {
+    /* ignore */
+  }
+}
+export function clearToken(): void {
+  try {
+    localStorage.removeItem(STORAGE_TOKEN);
+  } catch {
+    /* ignore */
+  }
+}
 
 export class ApiError extends Error {
   constructor(
@@ -32,10 +71,15 @@ export async function apiFetch<T>(
   init?: RequestInit,
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+  const token = getToken();
   const res = await fetch(url, {
-    // Send/receive the session cookie (cross-origin in the dev split).
+    // Cookie auth for same-origin web; Bearer token for the cross-origin mobile app.
     credentials: "include",
-    headers: { Accept: "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
     ...init,
   });
   if (!res.ok) {
