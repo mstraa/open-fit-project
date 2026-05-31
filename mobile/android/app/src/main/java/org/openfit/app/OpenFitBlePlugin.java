@@ -14,12 +14,17 @@ import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.BluetoothStatusCodes;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+
+import androidx.core.app.NotificationCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -312,6 +317,21 @@ public class OpenFitBlePlugin extends Plugin {
         call.resolve();
     }
 
+    /** Offline-buffer status for the UI: how many samples are queued, the cap, and
+     *  the file size. (Read on the ingest thread so the count stays consistent.) */
+    @PluginMethod
+    public void getOutboxStatus(PluginCall call) {
+        ingestExec.execute(() -> {
+            ensureOutboxCount();
+            java.io.File f = outboxFile();
+            JSObject r = new JSObject();
+            r.put("count", outboxCount);
+            r.put("maxLines", OUTBOX_MAX_LINES);
+            r.put("bytes", f.exists() ? f.length() : 0);
+            call.resolve(r);
+        });
+    }
+
     /** Pull stored wellness since `sinceMillis` (default: 2 days) from the Helio. */
     private boolean fetchInProgress = false;
 
@@ -439,7 +459,11 @@ public class OpenFitBlePlugin extends Plugin {
 
     // ---- ingest with an offline outbox (all file access on the single ingestExec) ----
 
-    private static final int OUTBOX_MAX_LINES = 200_000; // ~2 days of 1 Hz HR
+    private static final int OUTBOX_MAX_LINES = 300_000; // ~3.5 days of 1 Hz HR
+    private static final double OUTBOX_WARN_FRACTION = 0.75; // notify "connect to LAN" here
+    private static final String BUFFER_CHANNEL = "ofit_buffer";
+    private static final int BUFFER_NOTIF_ID = 4243;
+    private int outboxCount = -1; // in-memory line count (lazy-loaded); -1 = unknown
 
     /** POST the samples; if the server is unreachable, append them to a local outbox
      *  to flush on reconnect, so nothing is lost off-network (e.g. a workout away
@@ -482,7 +506,12 @@ public class OpenFitBlePlugin extends Plugin {
         return new java.io.File(getContext().getFilesDir(), "ofit_outbox.jsonl");
     }
 
+    private void ensureOutboxCount() {
+        if (outboxCount < 0) outboxCount = readOutbox().size();
+    }
+
     private void appendOutbox(java.util.List<String> samples) {
+        ensureOutboxCount();
         try (java.io.FileWriter w = new java.io.FileWriter(outboxFile(), true)) {
             for (String s : samples) {
                 w.write(s);
@@ -492,11 +521,19 @@ public class OpenFitBlePlugin extends Plugin {
             Log.w(TAG, "outbox append failed: " + e.getMessage());
             return;
         }
-        if (outboxFile().length() > 12_000_000) { // cap unbounded offline growth
+        outboxCount += samples.size();
+        if (outboxCount > OUTBOX_MAX_LINES) { // drop oldest, keep the most recent window
             java.util.List<String> lines = readOutbox();
-            if (lines.size() > OUTBOX_MAX_LINES) {
-                writeOutbox(new java.util.ArrayList<>(lines.subList(lines.size() - OUTBOX_MAX_LINES, lines.size())));
-            }
+            java.util.List<String> keep = new java.util.ArrayList<>(
+                lines.subList(Math.max(0, lines.size() - OUTBOX_MAX_LINES), lines.size()));
+            writeOutbox(keep);
+            outboxCount = keep.size();
+        }
+        // Warn once when crossing the high-water mark so the user can get on the LAN.
+        if (outboxCount >= OUTBOX_MAX_LINES * OUTBOX_WARN_FRACTION
+            && !prefs().getBoolean("buf_warned", false)) {
+            prefs().edit().putBoolean("buf_warned", true).apply();
+            postBufferWarning(outboxCount);
         }
     }
 
@@ -514,9 +551,42 @@ public class OpenFitBlePlugin extends Plugin {
         if (sent == 0) return;
         if (sent >= lines.size()) {
             f.delete();
+            outboxCount = 0;
             Log.i(TAG, "outbox flushed " + sent + " buffered samples");
         } else {
             writeOutbox(new java.util.ArrayList<>(lines.subList(sent, lines.size())));
+            outboxCount = lines.size() - sent;
+        }
+        // Clear the warning (+ its notification) once we're well back under the mark.
+        if (outboxCount < OUTBOX_MAX_LINES * 0.5 && prefs().getBoolean("buf_warned", false)) {
+            prefs().edit().putBoolean("buf_warned", false).apply();
+            NotificationManager nm = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(BUFFER_NOTIF_ID);
+        }
+    }
+
+    /** Notify the user that the offline buffer is filling up — connect to the LAN. */
+    private void postBufferWarning(int count) {
+        try {
+            NotificationManager nm = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm.getNotificationChannel(BUFFER_CHANNEL) == null) {
+                NotificationChannel ch = new NotificationChannel(
+                    BUFFER_CHANNEL, "Offline buffer", NotificationManager.IMPORTANCE_DEFAULT);
+                ch.setDescription("Warns when offline health data is piling up and needs syncing.");
+                nm.createNotificationChannel(ch);
+            }
+            int pct = (int) (100L * count / OUTBOX_MAX_LINES);
+            Notification n = new NotificationCompat.Builder(getContext(), BUFFER_CHANNEL)
+                .setContentTitle("OpenFit — offline buffer " + pct + "% full")
+                .setContentText(count + " readings are waiting. Connect to your network to back them up.")
+                .setSmallIcon(getContext().getApplicationInfo().icon)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .build();
+            nm.notify(BUFFER_NOTIF_ID, n);
+        } catch (Exception e) {
+            Log.w(TAG, "buffer warning failed: " + e.getMessage());
         }
     }
 

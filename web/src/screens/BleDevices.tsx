@@ -14,11 +14,13 @@
 // Works in the Android app (Capacitor BLE) and in Chrome (Web Bluetooth). All
 // BLE is verified on-device — there is no BLE in CI.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
 import { useNativeBle } from "../ble/native/NativeBleProvider";
+import { OpenFitBle } from "../ble/native/OpenFitBle";
+import { isNativeApp } from "../gadgetbridge/autoImportConfig";
 
 export function BleDevices() {
   const { status, found, live, device, message, steps, scan, connect, disconnect } = useBle();
@@ -106,6 +108,7 @@ export function BleDevices() {
       )}
 
       <NativeBleCard />
+      <OutboxCard />
     </AppShell>
   );
 }
@@ -117,6 +120,82 @@ const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
  *  Zepp-OS / Huami (Helio) — auth handshake + encrypted transport → live HR.
  *  Added devices live in the app-global NativeBleProvider: they keep streaming
  *  across screens and auto-reconnect on drop. Android app only. */
+/** Format remaining-capacity hours as a friendly duration. */
+function fmtHeadroom(hours: number): string {
+  if (hours >= 48) return `~${Math.round(hours / 24)} days`;
+  if (hours >= 1) return `~${Math.round(hours)} h`;
+  return `~${Math.round(hours * 60)} min`;
+}
+
+function BufStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="stat__label">{label}</div>
+      <div className="num" style={{ fontSize: 16, fontWeight: 700 }}>{value}</div>
+    </div>
+  );
+}
+
+/** Offline-buffer status: how much off-network data is queued on the phone, its
+ *  size, and how much streaming headroom is left before the (300k) cap. Polls the
+ *  native plugin. Android app only. */
+function OutboxCard() {
+  const [s, setS] = useState<{ count: number; maxLines: number; bytes: number } | null>(null);
+  useEffect(() => {
+    if (!isNativeApp()) return;
+    let alive = true;
+    const poll = () =>
+      OpenFitBle.getOutboxStatus()
+        .then((r) => alive && setS(r))
+        .catch(() => undefined);
+    poll();
+    const id = window.setInterval(poll, 8000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+  if (!isNativeApp() || !s) return null;
+
+  const pct = s.maxLines > 0 ? Math.min(100, (s.count / s.maxLines) * 100) : 0;
+  const mb = s.bytes / 1_000_000;
+  const empty = s.count === 0;
+  const warn = pct >= 75;
+  const headroomH = Math.max(0, s.maxLines - s.count) / 3600; // at ~1 Hz HR
+  const barColor = empty ? "var(--good)" : warn ? "var(--cal)" : "var(--accent)";
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card__head">
+        <div className="card__title">
+          Offline buffer<span className="sub">on-device safety net</span>
+        </div>
+        <div className="card__tools">
+          <span className={`pill ${empty ? "pill--good" : ""}`}>
+            {empty ? "all backed up" : `${Math.round(pct)}% full`}
+          </span>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: "0 0 12px" }}>
+        Readings captured while off your network are saved here and uploaded automatically when you reconnect.
+      </p>
+      <div style={{ height: 10, borderRadius: 999, background: "var(--surface-2, #1a1d28)", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: barColor, transition: "width .3s" }} />
+      </div>
+      <div style={{ display: "flex", gap: 24, marginTop: 12, flexWrap: "wrap" }}>
+        <BufStat label="Buffered" value={`${s.count.toLocaleString()} / ${s.maxLines.toLocaleString()}`} />
+        <BufStat label="Size" value={`${mb < 0.1 ? mb.toFixed(2) : mb.toFixed(1)} MB`} />
+        <BufStat label={empty ? "Status" : "Headroom"} value={empty ? "Empty" : `${fmtHeadroom(headroomH)} of HR`} />
+      </div>
+      {warn && (
+        <p style={{ fontSize: 12, color: "var(--cal)", marginTop: 12, fontWeight: 600 }}>
+          Buffer is {Math.round(pct)}% full — connect to your network to back up the data.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function NativeBleCard() {
   const { status, found, hr, message, device, syncing, available, scan, addAndConnect, forget, sync } = useNativeBle();
   const [authKey, setAuthKey] = useState<string>(() => {

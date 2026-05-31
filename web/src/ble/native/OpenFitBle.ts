@@ -40,6 +40,8 @@ export interface OpenFitBlePlugin {
   disconnect(): Promise<void>;
   /** Pull the connected Zepp-OS device's stored wellness since `sinceMillis`. */
   syncNow(options: { sinceMillis?: number }): Promise<void>;
+  /** Offline-buffer status: queued sample count, the cap, and file size in bytes. */
+  getOutboxStatus(): Promise<{ count: number; maxLines: number; bytes: number }>;
   addListener(event: "scanResult", cb: (e: NativeScanResult) => void): Promise<PluginListenerHandle>;
   addListener(event: "sample", cb: (e: NativeSample) => void): Promise<PluginListenerHandle>;
   addListener(event: "status", cb: (e: NativeStatus) => void): Promise<PluginListenerHandle>;
