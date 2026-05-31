@@ -78,35 +78,6 @@ export function BleDevices() {
     return apiRef.current;
   }, []);
 
-  const scan = useCallback(async () => {
-    try {
-      const client = await ble();
-      const found: Found[] = [];
-      setState({ kind: "scanning", found });
-      await client.requestLEScan({}, (r) => {
-        const id = r.device.deviceId;
-        if (found.some((f) => f.deviceId === id)) return;
-        found.push({
-          deviceId: id,
-          name: r.device.name || r.localName || "(unnamed)",
-          rssi: r.rssi,
-          services: (r.uuids ?? []).map((u) => u.toLowerCase()),
-        });
-        setState({ kind: "scanning", found: [...found] });
-      });
-      setTimeout(async () => {
-        try {
-          await client.stopLEScan();
-        } catch {
-          /* ignore */
-        }
-        setState({ kind: "scanned", found: [...found].sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999)) });
-      }, 8000);
-    } catch (e) {
-      setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
-    }
-  }, [ble]);
-
   const connect = useCallback(
     async (dev: Found) => {
       try {
@@ -163,6 +134,47 @@ export function BleDevices() {
     [ble],
   );
 
+  const scan = useCallback(async () => {
+    try {
+      const client = await ble();
+      // Native (Android) supports a continuous scan → list everything nearby.
+      const found: Found[] = [];
+      setState({ kind: "scanning", found });
+      await client.requestLEScan({}, (r) => {
+        const id = r.device.deviceId;
+        if (found.some((f) => f.deviceId === id)) return;
+        found.push({
+          deviceId: id,
+          name: r.device.name || r.localName || "(unnamed)",
+          rssi: r.rssi,
+          services: (r.uuids ?? []).map((u) => u.toLowerCase()),
+        });
+        setState({ kind: "scanning", found: [...found] });
+      });
+      setTimeout(async () => {
+        try {
+          await client.stopLEScan();
+        } catch {
+          /* ignore */
+        }
+        setState({ kind: "scanned", found: [...found].sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999)) });
+      }, 8000);
+    } catch {
+      // Desktop Chrome (Web Bluetooth) has no continuous scan → use the OS
+      // device picker (filtered to the HR service) and connect directly.
+      try {
+        const client = await ble();
+        const device = await client.requestDevice({
+          services: [HR_SERVICE],
+          optionalServices: [CP_SERVICE, RSC_SERVICE],
+        });
+        await connect({ deviceId: device.deviceId, name: device.name || "(device)", services: [HR_SERVICE] });
+      } catch (e) {
+        setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  }, [ble, connect]);
+
   const disconnect = useCallback(async () => {
     const client = apiRef.current;
     if (client && connectedId.current) {
@@ -218,10 +230,27 @@ export function BleDevices() {
       ) : state.kind === "scanning" ? (
         <EmptyState label="Scanning for nearby devices…" />
       ) : (
-        <EmptyState
-          label="No devices yet"
-          hint="Tap “Scan for BLE devices”. We’ll list what’s nearby and which standard services (HR / power / cadence) each exposes."
-        />
+        <div
+          className="card"
+          style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, padding: 32, textAlign: "center" }}
+        >
+          <div className="stat__ico t-acc" style={{ width: 44, height: 44 }}>
+            <BleIcon />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>No devices yet</div>
+            <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0", maxWidth: 360 }}>
+              Scan to list nearby Bluetooth devices and which standard services (heart rate /
+              power / cadence) each exposes, then connect to stream live.
+            </p>
+          </div>
+          <button type="button" className="btn" onClick={() => void scan()} style={{ padding: "10px 18px" }}>
+            <BleIcon /> Scan for BLE devices
+          </button>
+          <span className="faint" style={{ fontSize: 11 }}>
+            Requires Bluetooth (the Android app, or Chrome with Web Bluetooth).
+          </span>
+        </div>
       )}
     </AppShell>
   );

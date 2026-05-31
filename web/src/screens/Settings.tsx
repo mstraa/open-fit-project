@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "../app/AppShell";
+import { Link } from "react-router-dom";
 import { EmptyState } from "../ui/EmptyState";
 import { useHealth } from "../hooks/useHealth";
 import { useTheme, type Theme } from "../theme/ThemeProvider";
@@ -381,16 +382,24 @@ export function Settings() {
             ) : null}
           </section>
 
-          {/* DEVICES — EMPTY (no device backend yet) */}
+          {/* DEVICES — link to the BLE scanner + Gadgetbridge import */}
           <section className="panel card" id="devices">
             <div className="card__head">
               <div className="card__title">Devices</div>
             </div>
-            <EmptyState
-              label="No data yet"
-              phase="Phase 5"
-              hint="Live device pairing, battery and sync status arrive with the Gadgetbridge bridge. Registered import sources appear under Sources & fusion above."
-            />
+            <p className="muted" style={{ fontSize: 12.5, margin: "0 0 14px" }}>
+              Connect a sensor live over Bluetooth, or import from Gadgetbridge — both stream
+              into your wellness data. Registered import sources appear under Sources &amp; fusion
+              above.
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Link to="/devices" className="btn">
+                Scan for BLE devices →
+              </Link>
+              <Link to="/wellness" className="btn btn--ghost">
+                Import from Gadgetbridge →
+              </Link>
+            </div>
           </section>
 
           {/* ALGORITHMS — EMPTY (no plugin backend yet) */}
