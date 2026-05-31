@@ -320,7 +320,15 @@ public class OpenFitBlePlugin extends Plugin {
             ? sinceD.longValue()
             : System.currentTimeMillis() - 2L * 24 * 3600 * 1000;
         fetchInProgress = true;
-        main.postDelayed(() -> fetchInProgress = false, 90_000); // failsafe
+        // Watchdog: if the fetch stalls (e.g. the link drops mid-sync), recover.
+        main.postDelayed(() -> {
+            if (fetchInProgress) {
+                fetchInProgress = false;
+                flushFetchBatch();
+                emitStatus("ready", "sync timed out");
+                if (huami != null) huami.enableHeartRate();
+            }
+        }, 30_000);
         synchronized (fetchBatch) {
             fetchBatch.clear();
         }
@@ -689,7 +697,10 @@ public class OpenFitBlePlugin extends Plugin {
                 public void onFetchDone(boolean ok) {
                     fetchInProgress = false;
                     flushFetchBatch();
-                    main.post(() -> emitStatus("ready", ok ? "sync complete" : "sync failed"));
+                    main.post(() -> {
+                        emitStatus("ready", ok ? "sync complete" : "sync failed");
+                        if (huami != null) huami.enableHeartRate(); // resume live HR
+                    });
                 }
             }
         );

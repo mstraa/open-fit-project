@@ -28,6 +28,7 @@ public class HuamiSession implements Huami2021Handler {
     private static final byte CMD_PUB_KEY = 0x04;
     private static final byte CMD_SESSION_KEY = 0x05;
     private static final byte CMD_REALTIME_SET = 0x04;
+    private static final byte MODE_STOP = 0x00;
     private static final byte MODE_START = 0x01;
     private static final byte MODE_CONTINUE = 0x02;
 
@@ -92,9 +93,19 @@ public class HuamiSession implements Huami2021Handler {
             });
     }
 
-    /** Start pulling stored ACTIVITY (steps + HR/minute) since {@code sinceMillis}. */
+    /** Start pulling stored ACTIVITY (steps + HR/minute) since {@code sinceMillis}.
+     *  Pauses the realtime-HR stream first so the device handles one job at a time. */
     public void startActivityFetch(long sinceMillis) {
+        pauseHeartRate();
         fetch.startActivity(sinceMillis);
+    }
+
+    /** Stop the realtime-HR stream + its keepalive (resume with enableHeartRate). */
+    public void pauseHeartRate() {
+        if (!realtimeStarted) return;
+        realtimeStarted = false;
+        handler.removeCallbacksAndMessages(null);
+        write(EP_HEART_RATE, new byte[]{CMD_REALTIME_SET, MODE_STOP}, false);
     }
 
     /** Plugin supplies the raw-write callback for the activity-control char 0x0004. */
