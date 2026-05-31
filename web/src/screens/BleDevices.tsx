@@ -17,6 +17,7 @@
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
+import { useNativeBle } from "../ble/native/useNativeBle";
 
 export function BleDevices() {
   const { status, found, live, device, message, steps, scan, connect, disconnect } = useBle();
@@ -102,7 +103,80 @@ export function BleDevices() {
           </span>
         </div>
       )}
+
+      <NativeBleCard />
     </AppShell>
+  );
+}
+
+/** M0 of the direct-device port: exercises the NATIVE BluetoothGatt plugin
+ *  (docs/NATIVE-BLE-PORT.md) over the standard Heart Rate service. The Helio +
+ *  Garmin protocols (M1+) build on this same native path. Android app only. */
+function NativeBleCard() {
+  const { status, found, hr, message, deviceName, available, scan, connect, disconnect } = useNativeBle();
+  if (!available) return null;
+  const live = status === "connected" || status === "connecting";
+
+  return (
+    <div className="card" style={{ marginTop: 24 }}>
+      <div className="card__head">
+        <div className="card__title">
+          Native BLE<span className="sub">direct GATT · M0 (beta)</span>
+        </div>
+        <div className="card__tools">
+          {live ? (
+            <button type="button" className="btn btn--ghost" onClick={() => void disconnect()}>
+              Disconnect
+            </button>
+          ) : (
+            <button type="button" className="btn" disabled={status === "scanning"} onClick={() => void scan()}>
+              {status === "scanning" ? "Scanning…" : "Native scan"}
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
+        Reads heart rate over the new native path (the backbone for direct Helio / Garmin sync).
+        Put your watch in <b>Broadcast HR</b> mode, or any standard HR strap.
+      </p>
+
+      {status === "connected" ? (
+        <div className="grid grid--stats">
+          <div className="card stat">
+            <div className="stat__ico t-hr">
+              <BleIcon />
+            </div>
+            <div className="stat__label">{deviceName ?? "Device"} · heart rate</div>
+            <div className="stat__val num" style={{ fontSize: 26 }}>
+              {hr ?? "—"} <small>bpm</small>
+            </div>
+          </div>
+        </div>
+      ) : status === "error" ? (
+        <div className="pill pill--bad" style={{ justifyContent: "flex-start" }}>{message}</div>
+      ) : found.length > 0 ? (
+        <div className="card card--pad0">
+          {found.map((d) => (
+            <div key={d.deviceId} className="dev" style={{ padding: "12px 16px" }}>
+              <div className="dev__b">
+                <b>{d.name}</b>
+                <span>{d.rssi} dBm</span>
+              </div>
+              <button type="button" className="btn btn--ghost" onClick={() => void connect(d)}>
+                Connect
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="faint" style={{ fontSize: 11 }}>
+          {status === "scanning" ? "Scanning…" : "Tap Native scan to list devices."}
+        </span>
+      )}
+      {message && status === "connected" && (
+        <span className="faint" style={{ fontSize: 11, display: "block", marginTop: 8 }}>{message}</span>
+      )}
+    </div>
   );
 }
 

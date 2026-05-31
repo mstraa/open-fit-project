@@ -1,0 +1,37 @@
+// TS interface for the native OpenFitBle Capacitor plugin (Android, Java). M0 of
+// the direct-device port — see docs/NATIVE-BLE-PORT.md. The plugin owns a native
+// BluetoothGatt connection + a serialized GATT op queue and streams events back.
+
+import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+
+export interface NativeScanResult {
+  deviceId: string;
+  name: string;
+  rssi: number;
+}
+
+export interface NativeSample {
+  deviceId: string;
+  kind: string; // e.g. "heart_rate"
+  value: number;
+  ts: number; // epoch ms
+}
+
+export interface NativeStatus {
+  deviceId: string | null;
+  status: "connected" | "disconnected" | "ready" | "error";
+  message?: string;
+}
+
+export interface OpenFitBlePlugin {
+  echo(options: { value: string }): Promise<{ value: string; available: boolean }>;
+  startScan(): Promise<void>;
+  stopScan(): Promise<void>;
+  connect(options: { deviceId: string }): Promise<void>;
+  disconnect(): Promise<void>;
+  addListener(event: "scanResult", cb: (e: NativeScanResult) => void): Promise<PluginListenerHandle>;
+  addListener(event: "sample", cb: (e: NativeSample) => void): Promise<PluginListenerHandle>;
+  addListener(event: "status", cb: (e: NativeStatus) => void): Promise<PluginListenerHandle>;
+}
+
+export const OpenFitBle = registerPlugin<OpenFitBlePlugin>("OpenFitBle");
