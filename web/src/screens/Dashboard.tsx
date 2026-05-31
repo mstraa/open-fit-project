@@ -18,7 +18,7 @@ import { ReadinessSection } from "../ui/ReadinessSection";
 import { useActivities } from "../hooks/useActivities";
 import { useTrainingLoad, hasTrainingLoad } from "../hooks/useTrainingLoad";
 import { listSources, getWellness } from "../api/endpoints";
-import type { Source, Sport, WellnessKind } from "../api/types";
+import type { ActivitySummary, Source, Sport, WellnessKind } from "../api/types";
 import type { TrainingLoadResponseDto } from "../api/schema";
 import { MultiLineChart, type MultiSeries } from "../charts/MultiLineChart";
 import { formatDuration, sportLabel } from "../ui/format";
@@ -255,19 +255,8 @@ export function Dashboard() {
             )}
           </section>
 
-          {/* weekly volume chart */}
-          <section className="card">
-            <div className="card__head">
-              <h2 className="card__title">
-                Weekly volume<span className="sub">distance by sport</span>
-              </h2>
-            </div>
-            <EmptyState
-              label="No data yet"
-              phase="Phase 4"
-              hint="Per-week distance by sport is aggregated from resolved activity streams."
-            />
-          </section>
+          {/* weekly volume chart — REAL DATA (time by sport, last 8 weeks) */}
+          <WeeklyVolumeCard activities={activities} />
 
           {/* recent activities — REAL DATA */}
           <section className="card card--pad0">
@@ -324,34 +313,11 @@ export function Dashboard() {
 
         {/* RIGHT column */}
         <div className="grid" style={{ gap: "var(--gap)" }}>
-          {/* today rings */}
-          <section className="card">
-            <div className="card__head">
-              <h2 className="card__title">Today</h2>
-            </div>
-            <EmptyState
-              label="No data yet"
-              phase="Phase 3"
-              hint="Steps, intensity minutes and floors stream from wellness ingestion."
-            />
-          </section>
+          {/* today — REAL DATA (steps so far today) */}
+          <TodayCard />
 
-          {/* wellness 7-day mini trends */}
-          <section className="card">
-            <div className="card__head">
-              <h2 className="card__title">Wellness · 7-day</h2>
-              <div className="card__tools">
-                <Link to="/wellness" className="pill">
-                  Open →
-                </Link>
-              </div>
-            </div>
-            <EmptyState
-              label="No data yet"
-              phase="Phase 3"
-              hint="Resting HR, HRV and stress trends arrive with wellness ingestion."
-            />
-          </section>
+          {/* wellness 7-day mini trends — REAL DATA */}
+          <Wellness7Card />
 
           {/* connected sources — REAL DATA */}
           <ConnectedSources />
@@ -451,6 +417,294 @@ function TrainingLoadChart({ data }: { data: TrainingLoadResponseDto }) {
 
 /** Latest value of a continuous wellness kind (resting HR, body battery, …).
  * Shows the most recent reading when present; falls back to the empty state. */
+/* --------------------------------------------------- weekly volume (time) */
+// The activity list carries duration + sport (distance isn't resolved per-row),
+// so "weekly volume" is training TIME by sport over the last 8 weeks — always
+// available and meaningful across every sport (distance is 0 for strength/yoga).
+
+const SPORT_COLOR: Record<Sport, string> = {
+  running: "var(--pace)",
+  cycling: "var(--power)",
+  swimming: "var(--accent)",
+  walking: "var(--cadence)",
+  strength: "var(--hr)",
+  other: "var(--elev)",
+};
+
+/** Monday-anchored week key (YYYY-MM-DD of that week's Monday, in local time). */
+function weekMondayISO(d: Date): string {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (x.getDay() + 6) % 7; // 0 = Monday
+  x.setDate(x.getDate() - dow);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
+
+function WeeklyVolumeCard({ activities }: { activities: ActivitySummary[] }) {
+  const WEEKS = 8;
+  // Build the last 8 Monday week-keys (oldest → newest).
+  const weeks: string[] = [];
+  {
+    const d = new Date();
+    d.setDate(d.getDate() - (((d.getDay() + 6) % 7))); // back to this Monday
+    for (let i = 0; i < WEEKS; i++) {
+      weeks.unshift(weekMondayISO(d));
+      d.setDate(d.getDate() - 7);
+    }
+  }
+  const idx = new Map(weeks.map((w, i) => [w, i]));
+  const perWeek: Map<Sport, number>[] = weeks.map(() => new Map());
+  const sportsPresent = new Set<Sport>();
+  for (const a of activities) {
+    const i = idx.get(weekMondayISO(new Date(a.started_at)));
+    if (i === undefined) continue;
+    perWeek[i].set(a.sport, (perWeek[i].get(a.sport) ?? 0) + a.duration_secs);
+    sportsPresent.add(a.sport);
+  }
+  const totals = perWeek.map((m) => [...m.values()].reduce((x, y) => x + y, 0));
+  const maxTotal = Math.max(...totals, 1);
+  const hasAny = totals.some((t) => t > 0);
+
+  const fmtWeek = (iso: string) => {
+    const [, m, day] = iso.split("-");
+    return `${day}/${m}`;
+  };
+
+  return (
+    <section className="card">
+      <div className="card__head">
+        <h2 className="card__title">
+          Weekly volume<span className="sub">training time by sport · 8 weeks</span>
+        </h2>
+        <div className="card__tools">
+          <div className="legend">
+            {[...sportsPresent].map((s) => (
+              <i key={s}>
+                <b style={{ background: SPORT_COLOR[s] }} />
+                {sportLabel(s)}
+              </i>
+            ))}
+          </div>
+        </div>
+      </div>
+      {!hasAny ? (
+        <EmptyState
+          label="No data yet"
+          hint="Per-week training time by sport, aggregated from your activities."
+        />
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 170, padding: "8px 0 0" }}>
+            {weeks.map((w, i) => {
+              const m = perWeek[i];
+              const total = totals[i];
+              const entries = [...m.entries()].sort((a, b) => b[1] - a[1]);
+              return (
+                <div key={w} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      height: `${(total / maxTotal) * 100}%`,
+                      minHeight: total > 0 ? 3 : 0,
+                      borderRadius: 5,
+                      overflow: "hidden",
+                    }}
+                    title={`${fmtWeek(w)} · ${formatDuration(total)}`}
+                  >
+                    {entries.map(([sport, sec]) => (
+                      <div key={sport} style={{ height: `${(sec / total) * 100}%`, background: SPORT_COLOR[sport] }} />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+            {weeks.map((w) => (
+              <span key={w} style={{ flex: 1, textAlign: "center", fontSize: 10, color: "var(--muted)" }}>
+                {fmtWeek(w)}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------- today (steps) */
+
+/** Today's step count, summed from the per-minute feed since local midnight
+ *  (falls back to a daily-total snapshot if one exists). Rendered as a ring
+ *  toward a 10k goal. */
+function TodayCard() {
+  const [steps, setSteps] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    getWellness("steps", start.toISOString())
+      .then((s) => {
+        if (!alive) return;
+        let incr = 0;
+        let snap = 0;
+        for (const x of s.samples) {
+          if (x.date.slice(11, 19) === "00:00:00") snap = Math.max(snap, x.value);
+          else incr += x.value;
+        }
+        setSteps(Math.round(Math.max(incr, snap)));
+        setLoaded(true);
+      })
+      .catch(() => alive && setLoaded(true));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const goal = 10000;
+  const pct = steps != null ? Math.min(1, steps / goal) : 0;
+  const r = 46;
+  const circ = 2 * Math.PI * r;
+
+  return (
+    <section className="card">
+      <div className="card__head">
+        <h2 className="card__title">Today</h2>
+      </div>
+      {!loaded ? (
+        <EmptyState label="Loading…" compact />
+      ) : steps == null || steps === 0 ? (
+        <EmptyState label="No steps yet today" hint="Steps stream in from your connected strap." compact />
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "6px 2px" }}>
+          <svg width="116" height="116" viewBox="0 0 116 116" aria-hidden style={{ flex: "0 0 auto" }}>
+            <circle cx="58" cy="58" r={r} fill="none" stroke="var(--surface-2, #1a1d28)" strokeWidth="10" />
+            <circle
+              cx="58"
+              cy="58"
+              r={r}
+              fill="none"
+              stroke="var(--accent)"
+              strokeWidth="10"
+              strokeLinecap="round"
+              strokeDasharray={circ}
+              strokeDashoffset={circ * (1 - pct)}
+              transform="rotate(-90 58 58)"
+            />
+            <text x="58" y="54" textAnchor="middle" className="num" style={{ fontSize: 22, fontWeight: 800, fill: "var(--fg)" }}>
+              {(steps / 1000).toFixed(steps >= 10000 ? 0 : 1)}k
+            </text>
+            <text x="58" y="72" textAnchor="middle" style={{ fontSize: 10, fill: "var(--muted)" }}>
+              steps
+            </text>
+          </svg>
+          <div>
+            <div className="num" style={{ fontSize: 26, fontWeight: 800 }}>
+              {steps.toLocaleString()}
+            </div>
+            <div className="stat__label" style={{ marginTop: 2 }}>
+              {Math.round(pct * 100)}% of {goal.toLocaleString()} goal
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------ wellness 7-day mini trends */
+
+/** A tiny no-axis sparkline (latest-value label rendered by the caller). */
+function MiniSpark({ values, color }: { values: number[]; color: string }) {
+  if (values.length < 2) return <div style={{ width: 90, height: 28 }} />;
+  const w = 90;
+  const h = 28;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const pts = values
+    .map((v, i) => `${((i / (values.length - 1)) * w).toFixed(1)},${(h - ((v - min) / span) * (h - 4) - 2).toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden style={{ flex: "0 0 auto" }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MiniTrendRow({
+  kind,
+  label,
+  unit,
+  color,
+}: {
+  kind: WellnessKind;
+  label: string;
+  unit: string;
+  color: string;
+}) {
+  const [vals, setVals] = useState<number[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const from = new Date(Date.now() - 8 * 86_400_000).toISOString();
+    getWellness(kind, from)
+      .then((s) => {
+        if (!alive) return;
+        const sorted = [...s.samples].sort((a, b) => a.date.localeCompare(b.date)).map((x) => x.value);
+        // thin to <= 60 points for a clean mini line
+        const stride = Math.max(1, Math.ceil(sorted.length / 60));
+        setVals(sorted.filter((_, i) => i % stride === 0));
+        setLoaded(true);
+      })
+      .catch(() => alive && setLoaded(true));
+    return () => {
+      alive = false;
+    };
+  }, [kind]);
+
+  const latest = vals.length ? vals[vals.length - 1] : null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 0", borderBottom: "1px solid var(--border, #1c2030)" }}>
+      <div style={{ minWidth: 78 }}>
+        <div className="stat__label">{label}</div>
+        <div className="num" style={{ fontSize: 17, fontWeight: 700 }}>
+          {latest != null ? Math.round(latest) : "—"}
+          {latest != null ? <small style={{ fontSize: 10, opacity: 0.5, marginLeft: 2 }}>{unit}</small> : null}
+        </div>
+      </div>
+      <div style={{ marginLeft: "auto" }}>
+        {loaded && vals.length >= 2 ? (
+          <MiniSpark values={vals} color={color} />
+        ) : (
+          <span className="faint" style={{ fontSize: 10.5 }}>{loaded ? "no data" : "…"}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Wellness7Card() {
+  return (
+    <section className="card">
+      <div className="card__head">
+        <h2 className="card__title">Wellness · 7-day</h2>
+        <div className="card__tools">
+          <Link to="/wellness" className="pill">
+            Open →
+          </Link>
+        </div>
+      </div>
+      <div style={{ marginTop: 2 }}>
+        <MiniTrendRow kind="resting_heart_rate" label="Resting HR" unit="bpm" color="var(--hr)" />
+        <MiniTrendRow kind="hrv" label="HRV" unit="ms" color="var(--power)" />
+        <MiniTrendRow kind="stress" label="Stress" unit="" color="var(--cal)" />
+      </div>
+    </section>
+  );
+}
+
 function WellnessLatestTile({
   kind,
   label,
