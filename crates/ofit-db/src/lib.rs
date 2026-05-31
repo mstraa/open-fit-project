@@ -73,6 +73,20 @@ impl Db {
             .connect(database_url)
             .await?;
 
+        // SQLite: enable WAL so readers (dashboard/wellness queries) don't block
+        // on the continuous live-wellness writes, and a busy-timeout so they wait
+        // instead of erroring. WAL is persistent for the file; the others are
+        // best-effort per-connection. (Postgres ignores these — guarded by backend.)
+        if backend == Backend::Sqlite {
+            for pragma in [
+                "PRAGMA journal_mode=WAL",
+                "PRAGMA busy_timeout=5000",
+                "PRAGMA synchronous=NORMAL",
+            ] {
+                let _ = sqlx::query(pragma).execute(&pool).await;
+            }
+        }
+
         Ok(Self { pool, backend })
     }
 
