@@ -13,9 +13,12 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
+import android.bluetooth.BluetoothStatusCodes;
 import android.content.Context;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -278,31 +281,66 @@ public class OpenFitBlePlugin extends Plugin {
         runNextOp();
     }
 
+    private static final String TAG = "OpenFitBle";
+
     @SuppressWarnings("deprecation")
     private void enqueueWrite(BluetoothGattCharacteristic c, byte[] value) {
         enqueue(() -> {
             try {
-                c.setValue(value);
-                c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-                boolean ok = gatt != null && gatt.writeCharacteristic(c);
-                if (!ok) opComplete();
+                if (gatt == null) {
+                    opComplete();
+                    return;
+                }
+                boolean ok;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    int r = gatt.writeCharacteristic(c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                    ok = r == BluetoothStatusCodes.SUCCESS;
+                    if (!ok) Log.w(TAG, "writeCharacteristic " + c.getUuid() + " failed code=" + r);
+                } else {
+                    c.setValue(value);
+                    c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                    ok = gatt.writeCharacteristic(c);
+                    if (!ok) Log.w(TAG, "writeCharacteristic(legacy) " + c.getUuid() + " returned false");
+                }
+                Log.i(TAG, "write " + c.getUuid() + " len=" + value.length + " ok=" + ok);
+                if (!ok) opComplete(); // else → onCharacteristicWrite → opComplete()
             } catch (SecurityException e) {
                 opComplete();
             }
         });
     }
 
+    @SuppressWarnings("deprecation")
     private void enqueueNotify(BluetoothGattCharacteristic c) {
         enqueue(() -> {
             try {
-                gatt.setCharacteristicNotification(c, true);
-                BluetoothGattDescriptor d = c.getDescriptor(CCCD);
-                if (d == null) {
+                if (gatt == null) {
                     opComplete();
                     return;
                 }
-                d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                gatt.writeDescriptor(d); // → onDescriptorWrite → opComplete()
+                gatt.setCharacteristicNotification(c, true);
+                BluetoothGattDescriptor d = c.getDescriptor(CCCD);
+                if (d == null) {
+                    Log.w(TAG, "no CCCD on " + c.getUuid());
+                    opComplete();
+                    return;
+                }
+                // Notify vs indicate, based on the characteristic's properties.
+                byte[] enable = (c.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
+                    ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
+                boolean ok;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    int r = gatt.writeDescriptor(d, enable);
+                    ok = r == BluetoothStatusCodes.SUCCESS;
+                    if (!ok) Log.w(TAG, "writeDescriptor " + c.getUuid() + " failed code=" + r);
+                } else {
+                    d.setValue(enable);
+                    ok = gatt.writeDescriptor(d);
+                    if (!ok) Log.w(TAG, "writeDescriptor(legacy) " + c.getUuid() + " returned false");
+                }
+                Log.i(TAG, "notify " + c.getUuid() + " ok=" + ok);
+                if (!ok) opComplete(); // else → onDescriptorWrite → opComplete()
             } catch (SecurityException e) {
                 opComplete();
             }
@@ -432,6 +470,8 @@ public class OpenFitBlePlugin extends Plugin {
 
     private void startHuamiSession(BluetoothGatt g, int mtu) {
         if (huami != null) return; // onMtuChanged can fire once; guard re-entry
+        Log.i(TAG, "startHuamiSession mtu=" + mtu + " write=" + (chunkWriteChar != null)
+            + " read=" + (chunkReadChar != null) + " hr=" + (hrChar != null));
         emitStatus("connected", "negotiated MTU " + mtu + ", authenticating…");
         huami = new HuamiSession(
             authKey,
