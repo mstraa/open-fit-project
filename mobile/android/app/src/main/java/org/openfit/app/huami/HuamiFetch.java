@@ -162,6 +162,33 @@ public class HuamiFetch {
         } else if (bytes.length % 8 == 0) {
             size = 8;
         }
+        // --- DEBUG (M2 reverse-eng): characterise every column of the record so we
+        //     can identify which byte (if any) carries SpO2 / stress / etc. Logs a
+        //     hex sample + per-column [min..max] ranges. Writes NOTHING to the DB.
+        if (size == 8 && bytes.length >= 8) {
+            int cols = 8;
+            int[] mn = new int[cols];
+            int[] mx = new int[cols];
+            for (int c = 0; c < cols; c++) { mn[c] = 255; mx[c] = 0; }
+            StringBuilder sample = new StringBuilder();
+            int records = bytes.length / size;
+            for (int r = 0; r < records; r++) {
+                for (int c = 0; c < cols; c++) {
+                    int val = bytes[r * size + c] & 0xff;
+                    if (val < mn[c]) mn[c] = val;
+                    if (val > mx[c]) mx[c] = val;
+                }
+                if (r < 24) {
+                    for (int c = 0; c < cols; c++) sample.append(String.format("%02x", bytes[r * size + c] & 0xff));
+                    sample.append(' ');
+                }
+            }
+            StringBuilder ranges = new StringBuilder();
+            for (int c = 0; c < cols; c++) ranges.append("b").append(c).append("=[").append(mn[c]).append("..").append(mx[c]).append("] ");
+            Log.i(TAG, "M2DBG ranges " + ranges + " (records=" + records + ")");
+            Log.i(TAG, "M2DBG sample " + sample);
+        }
+
         int emitted = 0;
         for (int i = 0; i + size <= bytes.length; i += size) {
             long ts = firstMinuteMillis + (long) (i / size) * 60_000L;
@@ -175,16 +202,12 @@ public class HuamiFetch {
                 sink.sample("steps", steps, ts);
                 emitted++;
             }
-            // 8-byte extended: sleep stage from deep/rem/light minutes.
-            if (size == 8) {
-                int deep = bytes[i + 6] & 0xff;
-                int rem = bytes[i + 7] & 0xff;
-                int sleep = bytes[i + 5] & 0xff;
-                // 2=deep, 3=rem, 1=light (matches SleepStage codes); skip awake/none.
-                if (deep > 0) sink.sample("sleep_stage", 2, ts);
-                else if (rem > 0) sink.sample("sleep_stage", 3, ts);
-                else if (sleep > 0) sink.sample("sleep_stage", 1, ts);
-            }
+            // NOTE: the 8-byte record's bytes 4–7 were assumed to be SpO2/sleep
+            // stages, but emitting that guess produced garbage ("11h deep"). We no
+            // longer emit sleep from this stream — the M2DBG dump above logs the
+            // real byte ranges so we can identify these columns before trusting
+            // them. Steps + HR (validated) are the only emitted kinds for now.
+            // Sleep continues to come from the Zepp import.
         }
         sink.log("fetch: parsed " + (bytes.length / size) + " min (size " + size + "), emitted " + emitted);
     }
