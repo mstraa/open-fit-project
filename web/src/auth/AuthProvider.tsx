@@ -60,6 +60,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fast = { timeoutMs: 6000 };
     try {
       const status = await apiFetch<{ needs_setup: boolean }>("/api/auth/status", undefined, fast);
+      try {
+        sessionStorage.removeItem("ofit_offline"); // reachable again → drop offline mode
+      } catch {
+        /* ignore */
+      }
       if (status.needs_setup) {
         setGate({ kind: "setup" });
         return;
@@ -73,10 +78,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         else throw e;
       }
     } catch {
-      // API unreachable. On the mobile app (or once a server URL is configured)
-      // prompt to (re)connect to the self-hosted server; on web with the default
-      // relative base, let the app render and show its own offline state.
-      if (isNative() || API_BASE) {
+      // API unreachable. If the user previously chose "Continue offline", honor it
+      // (go straight into the app). Otherwise, on the mobile app / a configured URL
+      // prompt to (re)connect; on default-relative web, render the offline state.
+      let offlineChosen = false;
+      try {
+        offlineChosen = sessionStorage.getItem("ofit_offline") === "1";
+      } catch {
+        /* ignore */
+      }
+      if (offlineChosen) {
+        setGate({ kind: "authed", username: "" });
+      } else if (isNative() || API_BASE) {
         setGate({ kind: "connect" });
       } else {
         setGate({ kind: "authed", username: "" });
@@ -309,7 +322,14 @@ function ConnectForm({ onOffline, onRetry }: { onOffline: () => void; onRetry: (
             type="button"
             className="btn btn--ghost"
             style={{ flex: 1, justifyContent: "center" }}
-            onClick={onOffline}
+            onClick={() => {
+              try {
+                sessionStorage.setItem("ofit_offline", "1"); // remember across reloads
+              } catch {
+                /* ignore */
+              }
+              onOffline();
+            }}
           >
             Continue offline
           </button>

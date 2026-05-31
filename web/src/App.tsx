@@ -12,6 +12,7 @@ import { Settings } from "./screens/Settings";
 import { Algorithms } from "./screens/Algorithms";
 import { Sleep } from "./screens/Sleep";
 import { GadgetbridgeAutoImportRunner } from "./gadgetbridge/useGadgetbridgeAutoImport";
+import { useDataRefresh } from "./hooks/useDataRefresh";
 import { Spinner } from "./ui/primitives";
 
 // Code-split the detail screen: it pulls in uPlot + MapLibre GL, which are heavy.
@@ -25,11 +26,14 @@ const BleDevices = lazy(() =>
 );
 
 export function App() {
+  // Bumps after a manual strap sync → remounts the routed screen so it re-fetches
+  // the new history WITHOUT a page reload (see useDataRefresh).
+  const refresh = useDataRefresh();
   return (
     <>
       {/* Hourly Gadgetbridge auto-import scheduler (native app only; renders null). */}
       <GadgetbridgeAutoImportRunner />
-      <Routes>
+      <Routes key={refresh}>
       {/* App opens directly to the dashboard (no separate launcher page). */}
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
 

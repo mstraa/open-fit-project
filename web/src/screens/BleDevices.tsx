@@ -141,13 +141,18 @@ function BufStat({ label, value }: { label: string; value: string }) {
  *  native plugin. Android app only. */
 function OutboxCard() {
   const [s, setS] = useState<{ count: number; maxLines: number; bytes: number } | null>(null);
+  const [err, setErr] = useState(false);
   useEffect(() => {
     if (!isNativeApp()) return;
     let alive = true;
     const poll = () =>
       OpenFitBle.getOutboxStatus()
-        .then((r) => alive && setS(r))
-        .catch(() => undefined);
+        .then((r) => {
+          if (!alive) return;
+          setS(r);
+          setErr(false);
+        })
+        .catch(() => alive && setErr(true));
     poll();
     const id = window.setInterval(poll, 8000);
     return () => {
@@ -155,7 +160,24 @@ function OutboxCard() {
       window.clearInterval(id);
     };
   }, []);
-  if (!isNativeApp() || !s) return null;
+  if (!isNativeApp()) return null;
+
+  // Always render the section on the app, even before the first status arrives,
+  // so the offline buffer is discoverable (works without the server).
+  if (!s) {
+    return (
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card__head">
+          <div className="card__title">
+            Offline buffer<span className="sub">on-device safety net</span>
+          </div>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+          {err ? "Update the app to see buffer status." : "Checking buffer…"}
+        </p>
+      </div>
+    );
+  }
 
   const pct = s.maxLines > 0 ? Math.min(100, (s.count / s.maxLines) * 100) : 0;
   const mb = s.bytes / 1_000_000;

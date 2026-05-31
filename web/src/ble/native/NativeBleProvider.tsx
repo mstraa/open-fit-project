@@ -124,11 +124,13 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
               e.message === "sync failed" ||
               e.message === "sync timed out";
             setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
-            // Reload to surface new history ONLY after a user-tapped sync — the
-            // periodic/auto background syncs land silently (data shows on next view).
+            // Surface new history after a user-tapped sync with a SOFT refresh (a
+            // data-updated event that remounts the screen) — not a page reload,
+            // which would re-run the boot and bounce an offline session to the
+            // connect screen. Background syncs stay silent.
             if (e.message === "sync complete" && userSync.current) {
               userSync.current = false;
-              window.setTimeout(() => window.location.reload(), 1500);
+              window.setTimeout(() => window.dispatchEvent(new Event("ofit:data-updated")), 800);
             }
             if (done) userSync.current = false;
           } else if (e.status === "error") {
