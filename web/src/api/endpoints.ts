@@ -284,6 +284,21 @@ export async function importFiles(files: FileList | File[]): Promise<ImportFileO
   return arr;
 }
 
+/** Per-kind ingest count from POST /api/import/gadgetbridge. */
+export interface GadgetbridgeImportResult {
+  device: string;
+  manufacturer?: string | null;
+  ingested: number;
+  by_kind: { kind: string; count: number }[];
+}
+
+/** Upload an exported Gadgetbridge SQLite DB → ingest its wellness. */
+export async function importGadgetbridge(file: File): Promise<GadgetbridgeImportResult> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return apiPostForm<GadgetbridgeImportResult>("/api/import/gadgetbridge", form);
+}
+
 /* ------------------------------------------------------------- version */
 
 /** GET /api/version — backend build/version metadata. Tolerant of field drift. */

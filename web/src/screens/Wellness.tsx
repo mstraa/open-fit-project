@@ -12,11 +12,11 @@
 // getWellness() is wired defensively for each kind: if the backend ever returns
 // samples, we render a small on-brand SVG sparkline; otherwise the empty state.
 
-import { useEffect, useState, type ReactNode, type SVGProps } from "react";
+import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { Seg } from "../ui/Seg";
-import { getWellness } from "../api/endpoints";
+import { getWellness, importGadgetbridge } from "../api/endpoints";
 import type { WellnessSample } from "../api/types";
 import { useWellnessLive } from "../hooks/useWellnessLive";
 
@@ -187,6 +187,68 @@ function StatTile({
 
 /* ------------------------------------------------------------------ screen */
 
+/** Import wellness from a Gadgetbridge export DB (HR / stress / steps / resting HR).
+ * The file input opens the OS picker on web AND inside the Capacitor app. */
+function GadgetbridgeCard() {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onFile = async (f: File | undefined) => {
+    if (!f) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await importGadgetbridge(f);
+      const breakdown = r.by_kind.map((k) => `${k.count.toLocaleString()} ${k.kind}`).join(" · ");
+      setResult(`Imported ${r.ingested.toLocaleString()} readings from ${r.device} — ${breakdown}.`);
+      setTimeout(() => window.location.reload(), 1400);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card__head">
+        <div className="card__title">
+          Import from Gadgetbridge<span className="sub">export DB · cloudless</span>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
+        In Gadgetbridge → <b>Database management → Export DB</b>, then upload the file here to
+        ingest heart rate, stress, steps and resting HR.
+      </p>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".db,application/octet-stream,application/x-sqlite3"
+        style={{ display: "none" }}
+        disabled={busy}
+        onChange={(e) => void onFile(e.target.files?.[0])}
+      />
+      <button type="button" className="btn" disabled={busy} onClick={() => inputRef.current?.click()}>
+        {busy ? "Importing…" : "Choose Gadgetbridge DB"}
+      </button>
+      {result && (
+        <div className="pill pill--good" style={{ marginTop: 12, justifyContent: "flex-start" }}>
+          {result}
+        </div>
+      )}
+      {error && (
+        <div className="pill pill--bad" style={{ marginTop: 12, justifyContent: "flex-start" }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Live real-time card: current HR from the wellness WebSocket + a sparkline. */
 function LiveCard() {
   const live = useWellnessLive();
@@ -271,6 +333,9 @@ export function Wellness() {
 
       {/* live real-time feed (WebSocket) */}
       <LiveCard />
+
+      {/* import wellness from a Gadgetbridge export DB (works on web + the app) */}
+      <GadgetbridgeCard />
 
       {/* stat tiles */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>
