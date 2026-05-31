@@ -64,6 +64,7 @@ public class OpenFitBlePlugin extends Plugin {
     private static final UUID CCCD = uuid16("2902");
     private static final UUID CHUNK_WRITE = UUID.fromString("00000016-0000-3512-2118-0009af100700");
     private static final UUID CHUNK_READ = UUID.fromString("00000017-0000-3512-2118-0009af100700");
+    private static final UUID ACTIVITY_DATA = UUID.fromString("00000005-0000-3512-2118-0009af100700");
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -80,6 +81,15 @@ public class OpenFitBlePlugin extends Plugin {
     private BluetoothGattCharacteristic chunkWriteChar;
     private BluetoothGattCharacteristic chunkReadChar;
     private BluetoothGattCharacteristic hrChar;
+    private BluetoothGattCharacteristic activityDataChar;
+
+    // Batched POST of fetched (historical) samples → /api/wellness.
+    private final java.util.List<String> fetchBatch = new java.util.ArrayList<>();
+    private static final java.text.SimpleDateFormat RFC3339;
+    static {
+        RFC3339 = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US);
+        RFC3339.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+    }
 
     private final ArrayDeque<Runnable> opQueue = new ArrayDeque<>();
     private boolean opInFlight = false;
@@ -288,6 +298,71 @@ public class OpenFitBlePlugin extends Plugin {
         call.resolve();
     }
 
+    /** Pull stored wellness since `sinceMillis` (default: 2 days) from the Helio. */
+    @PluginMethod
+    public void syncNow(PluginCall call) {
+        if (huami == null) {
+            call.reject("not connected to a Zepp-OS device");
+            return;
+        }
+        long since = call.getLong("sinceMillis") != null
+            ? call.getLong("sinceMillis")
+            : System.currentTimeMillis() - 2L * 24 * 3600 * 1000;
+        synchronized (fetchBatch) {
+            fetchBatch.clear();
+        }
+        huami.startActivityFetch(since);
+        call.resolve();
+    }
+
+    /** Accumulate a fetched historical sample; flush in batches of 1000. */
+    private void addFetchSample(String kind, double value, long tsMillis) {
+        synchronized (fetchBatch) {
+            fetchBatch.add("{\"kind\":\"" + kind + "\",\"value\":" + value
+                + ",\"ts\":\"" + RFC3339.format(new java.util.Date(tsMillis)) + "\"}");
+            if (fetchBatch.size() >= 1000) flushFetchBatchLocked();
+        }
+    }
+
+    private void flushFetchBatch() {
+        synchronized (fetchBatch) {
+            flushFetchBatchLocked();
+        }
+    }
+
+    private void flushFetchBatchLocked() {
+        if (fetchBatch.isEmpty() || apiBase == null) {
+            fetchBatch.clear();
+            return;
+        }
+        final String body = "[" + String.join(",", fetchBatch) + "]";
+        fetchBatch.clear();
+        final String base = apiBase;
+        final String tok = authToken;
+        ingestExec.execute(() -> postJson(base, tok, body));
+    }
+
+    private void postJson(String base, String tok, String body) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(base + "/api/wellness").openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(8000);
+            c.setRequestMethod("POST");
+            c.setRequestProperty("Content-Type", "application/json");
+            if (tok != null && !tok.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + tok);
+            c.setDoOutput(true);
+            try (OutputStream os = c.getOutputStream()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+            }
+            Log.i(TAG, "fetch batch POST → " + c.getResponseCode());
+        } catch (Exception e) {
+            Log.w(TAG, "fetch batch POST failed: " + e.getMessage());
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
     /** POST one sample to {apiBase}/api/wellness, throttled, off the BLE thread. */
     private void nativeIngest(String kind, double value) {
         final String base = apiBase;
@@ -485,6 +560,8 @@ public class OpenFitBlePlugin extends Plugin {
             Log.i(TAG, "notif " + u + " len=" + (v != null ? v.length : -1));
             if (CHUNK_READ.equals(u)) {
                 if (huami != null) huami.onChunkedRead(v);
+            } else if (ACTIVITY_DATA.equals(u)) {
+                if (huami != null) huami.onActivityData(v);
             } else if (HR_MEASUREMENT.equals(u)) {
                 if (huami != null) {
                     huami.onHrMeasurement(v);
@@ -530,6 +607,7 @@ public class OpenFitBlePlugin extends Plugin {
         chunkWriteChar = findChar(g, CHUNK_WRITE);
         chunkReadChar = findChar(g, CHUNK_READ);
         hrChar = findChar(g, HR_MEASUREMENT);
+        activityDataChar = findChar(g, ACTIVITY_DATA);
         if (chunkWriteChar == null || chunkReadChar == null) {
             emitStatus("error", "Zepp-OS chunked-transfer characteristics not found");
             return;
@@ -565,6 +643,7 @@ public class OpenFitBlePlugin extends Plugin {
                     main.post(() -> {
                         emitStatus("ready", "authenticated · streaming heart rate");
                         if (hrChar != null) enqueueNotify(hrChar);
+                        if (activityDataChar != null) enqueueNotify(activityDataChar);
                         huami.enableHeartRate();
                     });
                 }
@@ -582,6 +661,17 @@ public class OpenFitBlePlugin extends Plugin {
                 @Override
                 public void onLog(String msg) {
                     emitStatus("connected", msg);
+                }
+
+                @Override
+                public void onFetchSample(String kind, double value, long tsMillis) {
+                    addFetchSample(kind, value, tsMillis);
+                }
+
+                @Override
+                public void onFetchDone(boolean ok) {
+                    flushFetchBatch();
+                    main.post(() -> emitStatus("ready", ok ? "sync complete" : "sync failed"));
                 }
             }
         );

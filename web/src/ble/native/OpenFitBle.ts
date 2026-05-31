@@ -38,6 +38,8 @@ export interface OpenFitBlePlugin {
     authKey?: string;
   }): Promise<void>;
   disconnect(): Promise<void>;
+  /** Pull the connected Zepp-OS device's stored wellness since `sinceMillis`. */
+  syncNow(options: { sinceMillis?: number }): Promise<void>;
   addListener(event: "scanResult", cb: (e: NativeScanResult) => void): Promise<PluginListenerHandle>;
   addListener(event: "sample", cb: (e: NativeSample) => void): Promise<PluginListenerHandle>;
   addListener(event: "status", cb: (e: NativeStatus) => void): Promise<PluginListenerHandle>;

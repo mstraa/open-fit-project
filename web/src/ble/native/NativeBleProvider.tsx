@@ -44,6 +44,7 @@ interface NativeBleApi extends NativeBleState {
   scan: () => Promise<void>;
   addAndConnect: (dev: NativeScanResult, huami?: { authKey: string }) => Promise<void>;
   forget: () => Promise<void>;
+  sync: (days?: number) => Promise<void>;
 }
 
 const Ctx = createContext<NativeBleApi | null>(null);
@@ -175,6 +176,11 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     [open],
   );
 
+  const sync = useCallback(async (days = 2) => {
+    if (!available) return;
+    await OpenFitBle.syncNow({ sinceMillis: Date.now() - days * 86_400_000 }).catch(() => undefined);
+  }, [available]);
+
   const forget = useCallback(async () => {
     userDisconnect.current = true;
     saveSaved(null);
@@ -185,8 +191,8 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
   const connectedCount = state.status === "connected" ? 1 : 0;
 
   const value = useMemo<NativeBleApi>(
-    () => ({ ...state, available, connectedCount, scan, addAndConnect, forget }),
-    [state, available, connectedCount, scan, addAndConnect, forget],
+    () => ({ ...state, available, connectedCount, scan, addAndConnect, forget, sync }),
+    [state, available, connectedCount, scan, addAndConnect, forget, sync],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

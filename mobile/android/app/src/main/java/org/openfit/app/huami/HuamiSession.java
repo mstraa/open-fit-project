@@ -22,6 +22,7 @@ public class HuamiSession implements Huami2021Handler {
     // Endpoints / commands
     private static final short EP_AUTH = 0x0082;
     private static final short EP_HEART_RATE = 0x001d;
+    private static final short EP_FETCH = 0x004b; // ZeppOsActivityFetchService (encrypted)
     private static final byte RESPONSE = 0x10;
     private static final byte SUCCESS = 0x01;
     private static final byte CMD_PUB_KEY = 0x04;
@@ -35,6 +36,10 @@ public class HuamiSession implements Huami2021Handler {
         void onAuthFailed(String reason);
         void onHeartRate(int bpm);
         void onLog(String msg);
+        /** A stored-wellness sample pulled by the fetch (M2). */
+        void onFetchSample(String kind, double value, long tsMillis);
+        /** Stored-wellness fetch finished. */
+        void onFetchDone(boolean ok);
     }
 
     private final byte[] privateEC = new byte[24];
@@ -50,6 +55,7 @@ public class HuamiSession implements Huami2021Handler {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean realtimeStarted = false;
+    private final HuamiFetch fetch;
 
     public HuamiSession(String authKeyHex, int mtu, Consumer<byte[]> writeChunk,
                         Consumer<byte[]> writeAck, Listener listener) {
@@ -59,6 +65,36 @@ public class HuamiSession implements Huami2021Handler {
         this.writeChunk = writeChunk;
         this.writeAck = writeAck;
         this.listener = listener;
+        // Stored-wellness fetch: control is written to the encrypted chunked
+        // endpoint 0x004b; data records arrive on the raw char (onActivityData).
+        this.fetch = new HuamiFetch(
+            (cmd) -> write(EP_FETCH, cmd, true),
+            new HuamiFetch.Sink() {
+                @Override
+                public void sample(String kind, double value, long ts) {
+                    listener.onFetchSample(kind, value, ts);
+                }
+
+                @Override
+                public void done(boolean ok) {
+                    listener.onFetchDone(ok);
+                }
+
+                @Override
+                public void log(String msg) {
+                    listener.onLog(msg);
+                }
+            });
+    }
+
+    /** Start pulling stored ACTIVITY (steps + HR/minute) since {@code sinceMillis}. */
+    public void startActivityFetch(long sinceMillis) {
+        fetch.startActivity(sinceMillis);
+    }
+
+    /** Feed a raw activity-data notification (char 0x0005) to the fetch engine. */
+    public void onActivityData(byte[] value) {
+        fetch.onData(value);
     }
 
     public void setMtu(int mtu) {
@@ -110,6 +146,8 @@ public class HuamiSession implements Huami2021Handler {
     public void handle2021Payload(short type, byte[] payload) {
         if (type == EP_AUTH) {
             handleAuth(payload);
+        } else if (type == EP_FETCH) {
+            fetch.onControl(payload);
         } else if (type == EP_HEART_RATE) {
             // CMD_REALTIME_ACK etc. — informational
             Log.d(TAG, "hr endpoint ack");
