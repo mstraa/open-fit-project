@@ -79,6 +79,9 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
   }));
   const subs = useRef<PluginListenerHandle[]>([]);
   const userDisconnect = useRef(false);
+  // True only while a user-tapped sync is in flight, so background/periodic syncs
+  // don't reload the page out from under the user.
+  const userSync = useRef(false);
   const deviceRef = useRef<SavedDevice | null>(state.device);
   deviceRef.current = state.device;
 
@@ -121,11 +124,13 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
               e.message === "sync failed" ||
               e.message === "sync timed out";
             setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
-            // Only a sync that wrote NEW history reloads (so the wellness views,
-            // which fetch on mount, pick it up); "up to date" finishes quietly.
-            if (e.message === "sync complete") {
+            // Reload to surface new history ONLY after a user-tapped sync — the
+            // periodic/auto background syncs land silently (data shows on next view).
+            if (e.message === "sync complete" && userSync.current) {
+              userSync.current = false;
               window.setTimeout(() => window.location.reload(), 1500);
             }
+            if (done) userSync.current = false;
           } else if (e.status === "error") {
             setState((s) => ({ ...s, status: "error", message: e.message, syncing: false }));
           } else if (e.status === "disconnected") {
@@ -193,6 +198,7 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
   // force a specific window (e.g. a manual full re-sync).
   const sync = useCallback(async (days?: number) => {
     if (!available) return;
+    userSync.current = true; // user-tapped → reload the views when it completes
     setState((s) => ({ ...s, syncing: true, message: "Syncing stored data…" }));
     try {
       await OpenFitBle.syncNow(days ? { sinceMillis: Date.now() - days * 86_400_000 } : {});

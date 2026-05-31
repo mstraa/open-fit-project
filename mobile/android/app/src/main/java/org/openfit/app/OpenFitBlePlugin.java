@@ -107,7 +107,8 @@ public class OpenFitBlePlugin extends Plugin {
     // (the device keeps ~40 days). First sync (no watermark) pulls the full window.
     private static final long DEFAULT_WINDOW_MS = 40L * 24 * 3600 * 1000;
     private static final long SYNC_OVERLAP_MS = 10L * 60 * 1000;        // re-pull last 10 min (idempotent)
-    private static final long AUTO_SYNC_MIN_INTERVAL_MS = 20L * 60 * 1000; // throttle auto-sync on (re)connect
+    private static final long AUTO_SYNC_MIN_INTERVAL_MS = 10L * 60 * 1000; // throttle auto-sync on (re)connect
+    private static final long PERIODIC_SYNC_MS = 15L * 60 * 1000;        // background refresh while connected
     private long maxFetchedTs = 0L;                                      // newest ts seen this sync → next watermark
 
     private static UUID uuid16(String s) {
@@ -258,6 +259,7 @@ public class OpenFitBlePlugin extends Plugin {
 
     private void disconnectInternal() {
         fetchInProgress = false;
+        main.removeCallbacks(periodicSync);
         synchronized (opQueue) {
             opQueue.clear();
             opInFlight = false;
@@ -379,6 +381,24 @@ public class OpenFitBlePlugin extends Plugin {
 
     private SharedPreferences prefs() {
         return getContext().getSharedPreferences("ofit_ble", Context.MODE_PRIVATE);
+    }
+
+    /** Background refresh while connected: pull only new data every PERIODIC_SYNC_MS
+     *  so history stays current without any taps (survives screen-lock via the
+     *  foreground service). Self-reschedules; cancelled on disconnect. */
+    private final Runnable periodicSync = new Runnable() {
+        @Override
+        public void run() {
+            if (huami != null && !fetchInProgress && connectedId != null) {
+                beginSync(computeSince(connectedId));
+            }
+            main.postDelayed(this, PERIODIC_SYNC_MS);
+        }
+    };
+
+    private void startPeriodicSync() {
+        main.removeCallbacks(periodicSync);
+        main.postDelayed(periodicSync, PERIODIC_SYNC_MS);
     }
 
     /** Accumulate a fetched historical sample; flush in batches of 1000. */
@@ -716,7 +736,8 @@ public class OpenFitBlePlugin extends Plugin {
                         if (activityControlChar != null) enqueueNotify(activityControlChar);
                         if (activityDataChar != null) enqueueNotify(activityDataChar);
                         huami.enableHeartRate();
-                        maybeAutoSync(); // zero-tap incremental pull of stored data
+                        maybeAutoSync();      // zero-tap pull on (re)connect / app launch
+                        startPeriodicSync();  // …and keep refreshing every 15 min
                     });
                 }
 
