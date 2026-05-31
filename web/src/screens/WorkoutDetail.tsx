@@ -166,6 +166,14 @@ interface MetricPresentation {
 
 const identity = (s: ScalarSample[] | undefined): ScalarSample[] => s ?? [];
 
+/** Seconds-per-metre → "M:SS" minutes-per-kilometre (summary-activity pace). */
+function formatPaceMinKm(secPerM: number): string {
+  const secPerKm = secPerM * 1000;
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 function presentMetric(meta: MetricMeta, sport: Sport | undefined): MetricPresentation {
   if (meta.kind === "speed") {
     const mode: SpeedMode = speedModeFor(sport);
@@ -503,7 +511,18 @@ function DetailBody({
       {/* ---- summary tiles (avg per resolved metric + winning source) ---- */}
       <div className="summary">
         <SummaryTile label="Duration" value={durationSecs > 0 ? formatDuration(durationSecs) : "—"} />
-        <SummaryTile label="Recordings" value={String(recordingCount)} suffix=" merged" />
+        {detail.summary && detail.summary.distance_m > 0 && (
+          <SummaryTile label="Distance" value={(detail.summary.distance_m / 1000).toFixed(2)} suffix=" km" />
+        )}
+        {detail.summary && detail.summary.avg_pace_s_per_m > 0 && (
+          <SummaryTile label="Avg pace" value={formatPaceMinKm(detail.summary.avg_pace_s_per_m)} suffix=" /km" />
+        )}
+        {detail.summary && detail.summary.calories_kcal > 0 && (
+          <SummaryTile label="Calories" value={Math.round(detail.summary.calories_kcal).toString()} suffix=" kcal" />
+        )}
+        {!detail.summary && (
+          <SummaryTile label="Recordings" value={String(recordingCount)} suffix=" merged" />
+        )}
         {scalarMetrics.map((p) => {
           const resolved = detail.resolved[p.meta.kind];
           // Average is computed on the DISPLAY-transformed samples so pace/kmh

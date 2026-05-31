@@ -98,6 +98,7 @@ struct Version {
         dto::GadgetbridgeImportResponse,
         dto::GadgetbridgeDeviceResult,
         dto::ZeppImportResponse,
+        dto::ActivitySummaryStats,
         dto::WellnessKindCount,
         dto::SourceDto,
         dto::ActivitySummary,

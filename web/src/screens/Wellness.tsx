@@ -315,7 +315,8 @@ function ZeppCard() {
     try {
       const r = await importZepp(f);
       const breakdown = r.by_kind.map((k) => `${k.count.toLocaleString()} ${k.kind}`).join(" · ");
-      setResult(`Imported ${r.ingested.toLocaleString()} readings into ${r.source} — ${breakdown}.`);
+      const acts = r.activities_imported ? ` + ${r.activities_imported} workouts → Activities` : "";
+      setResult(`Imported ${r.ingested.toLocaleString()} readings into ${r.source} — ${breakdown}${acts}.`);
       setTimeout(() => window.location.reload(), 1800);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

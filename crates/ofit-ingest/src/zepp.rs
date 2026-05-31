@@ -27,10 +27,26 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-use ofit_core::{SleepStage, WellnessKind};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use ofit_core::{SleepStage, Sport, WellnessKind};
 
 pub use crate::gadgetbridge::WellnessReading;
+
+/// One workout summary from the Zepp `SPORT` table. These carry no per-second
+/// streams or GPS — just totals — so the API imports them as **summary
+/// activities** (a stream-less recording whose stats live in its metadata).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZeppWorkout {
+    pub sport: Sport,
+    /// Raw Zepp sport-type code (kept in metadata for traceability).
+    pub zepp_type: i64,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub distance_m: f64,
+    pub calories_kcal: f64,
+    /// Average pace in seconds per metre (0 when distance is 0).
+    pub avg_pace_s_per_m: f64,
+}
 
 /// Light user-profile facts pulled from `USER/` (names the created source).
 #[derive(Debug, Clone, Default)]
@@ -45,6 +61,8 @@ pub struct ZeppImport {
     pub source_name: String,
     /// All extracted readings (the API stamps each with a source + uuid).
     pub readings: Vec<WellnessReading>,
+    /// Workout summaries from `SPORT` (imported as summary activities).
+    pub workouts: Vec<ZeppWorkout>,
     /// Per-kind counts (for the import summary UI).
     pub counts: BTreeMap<WellnessKind, usize>,
     /// Categories present but deliberately not imported (with a reason).
@@ -103,6 +121,7 @@ pub fn read_zepp_export(root: &Path) -> Result<ZeppImport, ZeppError> {
     }
 
     let mut readings: Vec<WellnessReading> = Vec::new();
+    let mut workouts: Vec<ZeppWorkout> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut nickname: Option<String> = None;
 
@@ -114,13 +133,13 @@ pub fn read_zepp_export(root: &Path) -> Result<ZeppImport, ZeppError> {
                 "SLEEP_MINUTE" => parse_sleep_minute(&text, &mut readings),
                 "ACTIVITY" => parse_activity_daily(&text, &mut readings),
                 "BODY" => parse_body(&text, &mut readings),
+                "SPORT" => parse_sport(&text, &mut workouts),
                 "USER" => {
                     if let Some(n) = parse_user_nickname(&text) {
                         nickname = Some(n);
                     }
                 }
                 // Present-but-skipped categories — record why, once each.
-                "SPORT" => note(&mut skipped, "SPORT: workout summaries (no streams) — import real workouts as FIT/GPX/TCX"),
                 "ACTIVITY_MINUTE" | "ACTIVITY_STAGE" => {
                     note(&mut skipped, "ACTIVITY_MINUTE/STAGE: intraday steps skipped (daily ACTIVITY used instead)")
                 }
@@ -140,7 +159,51 @@ pub fn read_zepp_export(root: &Path) -> Result<ZeppImport, ZeppError> {
         None => "Zepp export".to_string(),
     };
 
-    Ok(ZeppImport { source_name, readings, counts, skipped })
+    Ok(ZeppImport { source_name, readings, workouts, counts, skipped })
+}
+
+/// `SPORT`: `type,startTime,sportTime(s),maxPace,minPace,distance(m),avgPace,calories`.
+/// `startTime` carries an explicit `+0000` offset.
+fn parse_sport(text: &str, out: &mut Vec<ZeppWorkout>) {
+    for line in text.lines().skip(1) {
+        let c = cells(line);
+        if c.len() < 8 {
+            continue;
+        }
+        let Some(start) = DateTime::parse_from_str(c[1].trim(), "%Y-%m-%d %H:%M:%S%z")
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        let secs = c[2].trim().parse::<i64>().unwrap_or(0).max(0);
+        let distance_m = c[5].trim().parse::<f64>().unwrap_or(0.0);
+        let avg_pace = c[6].trim().parse::<f64>().unwrap_or(0.0);
+        let calories = c[7].trim().parse::<f64>().unwrap_or(0.0);
+        let zepp_type = c[0].trim().parse::<i64>().unwrap_or(0);
+        out.push(ZeppWorkout {
+            sport: map_sport(zepp_type),
+            zepp_type,
+            started_at: start,
+            ended_at: start + Duration::seconds(secs),
+            distance_m,
+            calories_kcal: calories,
+            avg_pace_s_per_m: avg_pace,
+        });
+    }
+}
+
+/// Map Zepp/Huami sport-type codes to the canonical [`Sport`]. Only the codes we
+/// are confident about are mapped; everything else is `Other` (the raw code is
+/// preserved in the recording metadata).
+fn map_sport(code: i64) -> Sport {
+    match code {
+        1 | 8 => Sport::Running,      // outdoor run / treadmill
+        6 | 10 => Sport::Cycling,     // outdoor / indoor cycling
+        9 => Sport::Walking,          // walking
+        52 => Sport::Swimming,        // pool/open-water
+        _ => Sport::Other,
+    }
 }
 
 fn note(skipped: &mut Vec<String>, msg: &str) {

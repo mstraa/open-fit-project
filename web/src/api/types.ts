@@ -101,6 +101,12 @@ export interface ActivityDetail {
   /** Map keyed by StreamKind → resolved stream. */
   resolved: Partial<Record<StreamKind, ResolvedMetric>>;
   preferences: MetricSourcePreference[];
+  /** Totals for a summary-only activity (no streams), e.g. a Zepp workout. */
+  summary?: {
+    distance_m: number;
+    calories_kcal: number;
+    avg_pace_s_per_m: number;
+  };
 }
 
 /**

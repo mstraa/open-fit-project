@@ -427,6 +427,7 @@ export interface components {
              * @description Window start (UTC).
              */
             started_at: string;
+            summary?: null | components["schemas"]["ActivitySummaryStats"];
             /** @description The resolved LatLng track for the map (best source), downsampled. */
             track: components["schemas"]["TrackPoint"][];
             /**
@@ -461,6 +462,27 @@ export interface components {
              * @description Earliest start across member recordings (UTC).
              */
             started_at: string;
+        };
+        /**
+         * @description Totals for a **summary-only** activity (e.g. a Zepp `SPORT` workout that has
+         *     no per-second streams) — surfaced so the detail view shows stats, not a blank.
+         */
+        ActivitySummaryStats: {
+            /**
+             * Format: double
+             * @description Average pace in seconds per metre (0 when distance is 0).
+             */
+            avg_pace_s_per_m: number;
+            /**
+             * Format: double
+             * @description Energy in kcal.
+             */
+            calories_kcal: number;
+            /**
+             * Format: double
+             * @description Total distance in metres (0 when not a distance sport).
+             */
+            distance_m: number;
         };
         /** @description One algorithm in the registry as exposed to the client. */
         AlgorithmDto: {
@@ -994,6 +1016,8 @@ export interface components {
          *     account's continuous wellness across several CSV categories.
          */
         ZeppImportResponse: {
+            /** @description Summary activities created from the `SPORT` workout table. */
+            activities_imported: number;
             /** @description Per-kind breakdown. */
             by_kind: components["schemas"]["WellnessKindCount"][];
             /** @description Total readings ingested. */

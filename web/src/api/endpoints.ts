@@ -192,6 +192,16 @@ function normalizeActivityDetail(raw: unknown, fallbackId: string): ActivityDeta
   const prefsRaw = (pick(o, "preferences") as unknown[]) ?? [];
   const preferences = prefsRaw.map((p) => normalizePreference(p));
 
+  // Summary-only activities (e.g. Zepp SPORT) carry totals instead of streams.
+  const summaryRaw = pick(o, "summary") as Record<string, unknown> | null | undefined;
+  const summary = summaryRaw
+    ? {
+        distance_m: num(pick(summaryRaw, "distance_m")),
+        calories_kcal: num(pick(summaryRaw, "calories_kcal")),
+        avg_pace_s_per_m: num(pick(summaryRaw, "avg_pace_s_per_m")),
+      }
+    : undefined;
+
   const startedAt = str(pick(o, "started_at", "start"));
   const endedAt = str(pick(o, "ended_at", "end"));
   let duration = num(pick(o, "duration_secs", "duration"), NaN);
@@ -208,6 +218,7 @@ function normalizeActivityDetail(raw: unknown, fallbackId: string): ActivityDeta
     recordings,
     resolved,
     preferences,
+    summary,
   };
 }
 
@@ -317,6 +328,7 @@ export interface ZeppImportResult {
   source: string;
   ingested: number;
   by_kind: { kind: string; count: number }[];
+  activities_imported: number;
   skipped: string[];
 }
 

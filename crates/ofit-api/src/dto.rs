@@ -138,6 +138,18 @@ pub struct ResolvedScalarMetric {
     pub points: Vec<ScalarPoint>,
 }
 
+/// Totals for a **summary-only** activity (e.g. a Zepp `SPORT` workout that has
+/// no per-second streams) — surfaced so the detail view shows stats, not a blank.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ActivitySummaryStats {
+    /// Total distance in metres (0 when not a distance sport).
+    pub distance_m: f64,
+    /// Energy in kcal.
+    pub calories_kcal: f64,
+    /// Average pace in seconds per metre (0 when distance is 0).
+    pub avg_pace_s_per_m: f64,
+}
+
 /// Activity detail: contributing recordings + the resolved (merged) view.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ActivityDetail {
@@ -159,6 +171,8 @@ pub struct ActivityDetail {
     pub track: Vec<TrackPoint>,
     /// Source of the resolved track, if any.
     pub track_source_id: Option<Uuid>,
+    /// Totals for a summary-only activity (no streams); absent for normal ones.
+    pub summary: Option<ActivitySummaryStats>,
 }
 
 /// Response of `DELETE /api/activities/{id}/recordings/{recording_id}`.
@@ -311,6 +325,8 @@ pub struct ZeppImportResponse {
     pub ingested: usize,
     /// Per-kind breakdown.
     pub by_kind: Vec<WellnessKindCount>,
+    /// Summary activities created from the `SPORT` workout table.
+    pub activities_imported: usize,
     /// Categories present in the export but deliberately not imported, with why.
     pub skipped: Vec<String>,
 }

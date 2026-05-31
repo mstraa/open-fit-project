@@ -254,9 +254,19 @@ async fn build_activity_detail(
 
     let mut all_streams: Vec<Stream> = Vec::new();
     let mut recordings: Vec<RecordingDto> = Vec::new();
+    let mut summary: Option<ActivitySummaryStats> = None;
     for &rid in &activity.recording_ids {
         let streams = db.streams_for_recording(rid).await.map_err(internal)?;
         let rec = db.get_recording(rid).await.map_err(internal)?;
+        if summary.is_none() {
+            if let Some(m) = rec.as_ref().map(|r| &r.metadata).filter(|m| m.get("summary_only").and_then(|v| v.as_bool()).unwrap_or(false)) {
+                summary = Some(ActivitySummaryStats {
+                    distance_m: m.get("distance_m").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    calories_kcal: m.get("calories_kcal").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    avg_pace_s_per_m: m.get("avg_pace_s_per_m").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                });
+            }
+        }
         let (source_id, format) = match &rec {
             Some(r) => (
                 r.source_id,
@@ -345,6 +355,7 @@ async fn build_activity_detail(
         resolved_metrics,
         track,
         track_source_id,
+        summary,
     })
 }
 
@@ -551,10 +562,60 @@ pub async fn import_zepp(
         .collect();
     by_kind.sort_by(|a, b| b.count.cmp(&a.count));
 
+    // Workout summaries (SPORT) → stream-less "summary activities": one recording
+    // per workout whose totals live in metadata. Idempotent by a stable hash.
+    let mut activities_imported = 0usize;
+    for w in &imp.workouts {
+        let hash = format!(
+            "zepp-sport:{}:{}:{}",
+            w.zepp_type,
+            w.started_at.timestamp(),
+            w.distance_m as i64
+        );
+        if state
+            .db
+            .recording_id_by_hash(&hash)
+            .await
+            .map_err(internal)?
+            .is_some()
+        {
+            continue;
+        }
+        let metadata = serde_json::json!({
+            "source": "zepp-sport",
+            "format": "zepp",
+            "summary_only": true,
+            "zepp_type": w.zepp_type,
+            "distance_m": w.distance_m,
+            "calories_kcal": w.calories_kcal,
+            "avg_pace_s_per_m": w.avg_pace_s_per_m,
+        });
+        let rec = ofit_core::RawRecording {
+            id: uuid::Uuid::new_v4(),
+            source_id,
+            content_hash: ofit_core::ContentHash(hash),
+            sport: w.sport,
+            started_at: w.started_at,
+            ended_at: w.ended_at,
+            metadata,
+            ingested_at: chrono::Utc::now(),
+        };
+        state.db.insert_recording(&rec).await.map_err(internal)?;
+        let activity = ofit_core::Activity::from_recording(&rec);
+        state.db.upsert_activity(&activity).await.map_err(internal)?;
+        state
+            .db
+            .set_activity_recordings(activity.id, &activity.recording_ids)
+            .await
+            .map_err(internal)?;
+        activities_imported += 1;
+    }
+
     Ok(Json(ZeppImportResponse {
         source: imp.source_name,
         ingested: samples.len(),
         by_kind,
+        activities_imported,
         skipped: imp.skipped,
     }))
 }
