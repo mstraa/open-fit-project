@@ -308,6 +308,7 @@ public class OpenFitBlePlugin extends Plugin {
     public void configure(PluginCall call) {
         apiBase = call.getString("apiBase");
         authToken = call.getString("token");
+        ingestExec.execute(this::flushOutbox); // drain anything buffered while offline
         call.resolve();
     }
 
@@ -418,68 +419,129 @@ public class OpenFitBlePlugin extends Plugin {
     }
 
     private void flushFetchBatchLocked() {
-        if (fetchBatch.isEmpty() || apiBase == null) {
-            fetchBatch.clear();
-            return;
-        }
-        final String body = "[" + String.join(",", fetchBatch) + "]";
+        if (fetchBatch.isEmpty()) return;
+        java.util.List<String> batch = new java.util.ArrayList<>(fetchBatch);
         fetchBatch.clear();
-        final String base = apiBase;
-        final String tok = authToken;
-        ingestExec.execute(() -> postJson(base, tok, body));
+        sendOrQueue(batch);
     }
 
-    private void postJson(String base, String tok, String body) {
+    /** Live HR sample → ingest (throttled). Carries its own ts so it stays correct
+     *  even if it has to be buffered offline and flushed later. */
+    private void nativeIngest(String kind, double value) {
+        long now = System.currentTimeMillis();
+        if (now - lastIngest < 900) return;
+        lastIngest = now;
+        java.util.List<String> one = new java.util.ArrayList<>(1);
+        one.add("{\"kind\":\"" + kind + "\",\"value\":" + value
+            + ",\"ts\":\"" + RFC3339.format(new java.util.Date(now)) + "\"}");
+        sendOrQueue(one);
+    }
+
+    // ---- ingest with an offline outbox (all file access on the single ingestExec) ----
+
+    private static final int OUTBOX_MAX_LINES = 200_000; // ~2 days of 1 Hz HR
+
+    /** POST the samples; if the server is unreachable, append them to a local outbox
+     *  to flush on reconnect, so nothing is lost off-network (e.g. a workout away
+     *  from the LAN). A successful POST opportunistically drains the backlog. */
+    private void sendOrQueue(java.util.List<String> samples) {
+        if (samples.isEmpty()) return;
+        ingestExec.execute(() -> {
+            if (apiBase == null || apiBase.isEmpty() || !doPostBatch(apiBase, authToken, samples)) {
+                appendOutbox(samples);
+            } else {
+                flushOutbox();
+            }
+        });
+    }
+
+    /** POST a list of sample-JSONs as one JSON array. Returns true on 2xx. */
+    private boolean doPostBatch(String base, String tok, java.util.List<String> samples) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(base + "/api/wellness").openConnection();
-            c.setConnectTimeout(8000);
-            c.setReadTimeout(8000);
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(5000);
             c.setRequestMethod("POST");
             c.setRequestProperty("Content-Type", "application/json");
             if (tok != null && !tok.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + tok);
             c.setDoOutput(true);
             try (OutputStream os = c.getOutputStream()) {
-                os.write(body.getBytes(StandardCharsets.UTF_8));
+                os.write(("[" + String.join(",", samples) + "]").getBytes(StandardCharsets.UTF_8));
             }
-            Log.i(TAG, "fetch batch POST → " + c.getResponseCode());
+            int code = c.getResponseCode();
+            return code >= 200 && code < 300;
         } catch (Exception e) {
-            Log.w(TAG, "fetch batch POST failed: " + e.getMessage());
+            return false;
         } finally {
             if (c != null) c.disconnect();
         }
     }
 
-    /** POST one sample to {apiBase}/api/wellness, throttled, off the BLE thread. */
-    private void nativeIngest(String kind, double value) {
-        final String base = apiBase;
-        if (base == null || base.isEmpty()) return;
-        long now = System.currentTimeMillis();
-        if (now - lastIngest < 900) return;
-        lastIngest = now;
-        final String tok = authToken;
-        ingestExec.execute(() -> {
-            HttpURLConnection c = null;
-            try {
-                URL url = new URL(base + "/api/wellness");
-                c = (HttpURLConnection) url.openConnection();
-                c.setConnectTimeout(4000);
-                c.setReadTimeout(4000);
-                c.setRequestMethod("POST");
-                c.setRequestProperty("Content-Type", "application/json");
-                if (tok != null && !tok.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + tok);
-                c.setDoOutput(true);
-                String body = "[{\"kind\":\"" + kind + "\",\"value\":" + value + "}]";
-                try (OutputStream os = c.getOutputStream()) {
-                    os.write(body.getBytes(StandardCharsets.UTF_8));
-                }
-                c.getResponseCode();
-            } catch (Exception e) {
-                Log.w(TAG, "native ingest failed: " + e.getMessage());
-            } finally {
-                if (c != null) c.disconnect();
+    private java.io.File outboxFile() {
+        return new java.io.File(getContext().getFilesDir(), "ofit_outbox.jsonl");
+    }
+
+    private void appendOutbox(java.util.List<String> samples) {
+        try (java.io.FileWriter w = new java.io.FileWriter(outboxFile(), true)) {
+            for (String s : samples) {
+                w.write(s);
+                w.write('\n');
             }
-        });
+        } catch (Exception e) {
+            Log.w(TAG, "outbox append failed: " + e.getMessage());
+            return;
+        }
+        if (outboxFile().length() > 12_000_000) { // cap unbounded offline growth
+            java.util.List<String> lines = readOutbox();
+            if (lines.size() > OUTBOX_MAX_LINES) {
+                writeOutbox(new java.util.ArrayList<>(lines.subList(lines.size() - OUTBOX_MAX_LINES, lines.size())));
+            }
+        }
+    }
+
+    /** Drain buffered samples to the server (oldest first); stop if it's still down. */
+    private void flushOutbox() {
+        java.io.File f = outboxFile();
+        if (apiBase == null || apiBase.isEmpty() || !f.exists() || f.length() == 0) return;
+        java.util.List<String> lines = readOutbox();
+        int sent = 0;
+        while (sent < lines.size()) {
+            java.util.List<String> batch = lines.subList(sent, Math.min(sent + 500, lines.size()));
+            if (!doPostBatch(apiBase, authToken, batch)) break; // still unreachable; keep the rest
+            sent += batch.size();
+        }
+        if (sent == 0) return;
+        if (sent >= lines.size()) {
+            f.delete();
+            Log.i(TAG, "outbox flushed " + sent + " buffered samples");
+        } else {
+            writeOutbox(new java.util.ArrayList<>(lines.subList(sent, lines.size())));
+        }
+    }
+
+    private java.util.List<String> readOutbox() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(outboxFile()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (!line.isEmpty()) out.add(line);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "outbox read failed: " + e.getMessage());
+        }
+        return out;
+    }
+
+    private void writeOutbox(java.util.List<String> lines) {
+        try (java.io.FileWriter w = new java.io.FileWriter(outboxFile(), false)) {
+            for (String s : lines) {
+                w.write(s);
+                w.write('\n');
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "outbox rewrite failed: " + e.getMessage());
+        }
     }
 
     // --------------------------------------------------- serialized op queue
