@@ -88,6 +88,10 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private long startWallMs;
     private boolean paused = false;
     private boolean gpsEnabled = false;
+    // Timer (moving) time = total elapsed MINUS paused stretches. Sample/event `t`
+    // stay total-elapsed (monotonic, for FIT records); this drives the displayed clock.
+    private long timerBaseMs = 0;
+    private long segStartRtMs = 0;
 
     private final long[] lastImuEmit = new long[64]; // per sensor.type throttle
     private double cumDistanceM = 0;
@@ -135,6 +139,8 @@ public class RecordingService extends Service implements SensorEventListener, Lo
             }
         }
         startElapsedNs = SystemClock.elapsedRealtimeNanos();
+        timerBaseMs = 0;
+        segStartRtMs = SystemClock.elapsedRealtime();
 
         createChannel();
         startInForeground();
@@ -286,18 +292,31 @@ public class RecordingService extends Service implements SensorEventListener, Lo
 
     private void setPaused(boolean p) {
         if (paused == p) return;
+        if (p) {
+            // close the active segment into the timer accumulator
+            timerBaseMs += SystemClock.elapsedRealtime() - segStartRtMs;
+        } else {
+            segStartRtMs = SystemClock.elapsedRealtime();
+        }
         paused = p;
         writeLine("{\"k\":\"ev\",\"v\":\"" + (p ? "pause" : "resume") + "\",\"t\":" + nowMs() + "}");
     }
 
+    /** Total elapsed since start (monotonic) — for FIT record/event timestamps. */
     private long nowMs() {
         return Math.max(0, SystemClock.elapsedRealtimeNanos() - startElapsedNs) / 1_000_000L;
     }
 
+    /** Moving time (excludes paused stretches) — for the displayed clock + duration. */
+    private long timerMs() {
+        return paused ? timerBaseMs : timerBaseMs + (SystemClock.elapsedRealtime() - segStartRtMs);
+    }
+
     private void finishSession() {
         recording = false;
-        long elapsed = nowMs();
-        writeLine("{\"k\":\"ev\",\"v\":\"stop\",\"t\":" + elapsed + "}");
+        long elapsed = timerMs();   // moving time = the workout duration shown/saved
+        long totalMs = nowMs();     // monotonic file timestamp for the stop event
+        writeLine("{\"k\":\"ev\",\"v\":\"stop\",\"t\":" + totalMs + "}");
         try { if (sm != null) sm.unregisterListener(this); } catch (Exception ignored) {}
         try { if (lm != null) lm.removeUpdates(this); } catch (Exception ignored) {}
         synchronized (this) {
@@ -358,7 +377,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     // --- live snapshot accessors (read by the plugin's 1 Hz tick) ---
     double snapDistanceM() { return cumDistanceM; }
     double snapSpeedMps() { return lastSpeedMps; }
-    long snapElapsedMs() { return nowMs(); }
+    long snapElapsedMs() { return timerMs(); }
     boolean snapPaused() { return paused; }
     int snapHr() { return (SystemClock.elapsedRealtime() - latestHrAt) < 8000 ? latestHr : 0; }
     int snapCadence() { return lastCadence; }
