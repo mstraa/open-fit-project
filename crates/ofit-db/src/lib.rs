@@ -858,6 +858,25 @@ impl Db {
         Ok(())
     }
 
+    /// Purge derived outputs left over from a *previous* recompute — rows whose
+    /// `computed_at` predates `cutoff`. A full recompute stamps every fresh output
+    /// with one clock, so anything older belongs to a subject that no longer
+    /// produces output (e.g. a day whose bad wellness data was deleted). Without
+    /// this, those orphans linger forever because supersede-by-key can't replace
+    /// a row that nothing re-emits. Returns the number of rows removed.
+    pub async fn purge_derived_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
+        let c = cutoff.to_rfc3339();
+        let m = sqlx::query(&self.p("DELETE FROM derived_metrics WHERE computed_at < ?"))
+            .bind(&c)
+            .execute(&self.pool)
+            .await?;
+        let s = sqlx::query(&self.p("DELETE FROM derived_streams WHERE computed_at < ?"))
+            .bind(&c)
+            .execute(&self.pool)
+            .await?;
+        Ok(m.rows_affected() + s.rows_affected())
+    }
+
     /// All derived **metrics** for one subject (an activity id or a day id),
     /// ordered by plugin then name.
     pub async fn derived_metrics_for_subject(

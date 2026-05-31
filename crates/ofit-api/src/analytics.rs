@@ -273,6 +273,15 @@ pub async fn recompute(
         });
     }
 
+    // Drop any derived rows from earlier runs that nothing re-emitted this time —
+    // e.g. a day whose bad wellness data was deleted. Every output above is
+    // stamped `computed_at`, so anything older is an orphan.
+    state
+        .db
+        .purge_derived_before(computed_at)
+        .await
+        .map_err(internal)?;
+
     Ok(Json(RecomputeResponse {
         activities: input.activities.len(),
         wellness_points: input.wellness.len(),
