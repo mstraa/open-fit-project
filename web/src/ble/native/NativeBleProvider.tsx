@@ -117,6 +117,11 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
           if (e.status === "connected" || e.status === "ready") {
             const done = e.message === "sync complete" || e.message === "sync failed";
             setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
+            // A completed sync wrote new history — reload so the wellness views
+            // (which fetch on mount) pick it up.
+            if (e.message === "sync complete") {
+              window.setTimeout(() => window.location.reload(), 1500);
+            }
           } else if (e.status === "error") {
             setState((s) => ({ ...s, status: "error", message: e.message, syncing: false }));
           } else if (e.status === "disconnected") {
