@@ -55,17 +55,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [gate, setGate] = useState<Gate>({ kind: "loading" });
 
   const resolve = useCallback(async () => {
+    // Short timeout so an unreachable LAN server fails fast to the connect screen
+    // instead of hanging the boot on "Loading…".
+    const fast = { timeoutMs: 6000 };
     try {
-      const status = await apiFetch<{ needs_setup: boolean }>("/api/auth/status");
+      const status = await apiFetch<{ needs_setup: boolean }>("/api/auth/status", undefined, fast);
       if (status.needs_setup) {
         setGate({ kind: "setup" });
         return;
       }
       try {
-        const me = await apiFetch<{ username: string }>("/api/auth/me");
+        const me = await apiFetch<{ username: string }>("/api/auth/me", undefined, fast);
         setGate({ kind: "authed", username: me.username });
-      } catch {
-        setGate({ kind: "login" });
+      } catch (e) {
+        // 401 → need to log in; a timeout/network error → offline (connect screen).
+        if (e instanceof ApiError && e.status === 401) setGate({ kind: "login" });
+        else throw e;
       }
     } catch {
       // API unreachable. On the mobile app (or once a server URL is configured)
@@ -97,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return <AuthShell>Loading…</AuthShell>;
   }
   if (gate.kind === "connect") {
-    return <ConnectForm />;
+    return <ConnectForm onOffline={() => setGate({ kind: "authed", username: "" })} onRetry={resolve} />;
   }
   if (gate.kind === "setup" || gate.kind === "login") {
     return <AuthForm mode={gate.kind} onDone={resolve} />;
@@ -230,14 +235,22 @@ function AuthForm({ mode, onDone }: { mode: "setup" | "login"; onDone: () => voi
   );
 }
 
-/** Mobile/offline: point the app at your self-hosted ofit-api on the LAN. */
-function ConnectForm() {
+/** Mobile/offline: point the app at your self-hosted ofit-api on the LAN, retry,
+ *  or continue offline (live HR + on-device buffering keep working away from home;
+ *  history fills in once you're back on your network). */
+function ConnectForm({ onOffline, onRetry }: { onOffline: () => void; onRetry: () => void }) {
   const [url, setUrl] = useState(API_BASE || "http://192.168.1.29:8087");
+  const [retrying, setRetrying] = useState(false);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setApiBase(url);
     // The base is read at module load, so reload to apply it, then re-resolve.
     window.location.reload();
+  };
+  const retry = async () => {
+    setRetrying(true);
+    await onRetry();
+    setRetrying(false);
   };
   return (
     <AuthShell>
@@ -260,9 +273,10 @@ function ConnectForm() {
           </div>
         </div>
         <div>
-          <h1 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Connect to your server</h1>
+          <h1 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Server unreachable</h1>
           <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
-            Enter the address of your self-hosted Open Fit server on your network.
+            Can&apos;t reach your Open Fit server. Check the address, retry, or continue
+            offline — live data keeps recording and syncs when you&apos;re back on your network.
           </p>
         </div>
         <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
@@ -281,6 +295,25 @@ function ConnectForm() {
         <button type="submit" className="btn" style={{ justifyContent: "center" }}>
           Connect
         </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => void retry()}
+            disabled={retrying}
+          >
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={onOffline}
+          >
+            Continue offline
+          </button>
+        </div>
       </form>
     </AuthShell>
   );
