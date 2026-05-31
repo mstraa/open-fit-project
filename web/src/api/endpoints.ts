@@ -364,7 +364,7 @@ export async function getWellness(
   const samples: WellnessSample[] = (Array.isArray(arr) ? arr : []).map((s) => {
     const p = s as Record<string, unknown>;
     return {
-      date: str(pick(p, "date", "day", "timestamp", "t")),
+      date: str(pick(p, "ts", "date", "day", "timestamp", "t")),
       value: num(pick(p, "value", "v")),
       value2:
         pick(p, "value2", "v2") !== undefined ? num(pick(p, "value2", "v2")) : undefined,

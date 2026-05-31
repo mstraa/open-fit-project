@@ -3,7 +3,15 @@
 _Living doc — current state of the build. Update on every change._
 
 **Last updated:** 2026-05-31
-**Current phase:** Phase 1 + tie-off DONE ✅ · **Phase 2a (server): wellness streaming** 🚧 · **Phase 3 (analytics): abstraction + built-ins + WASM plugin host + derived persistence + analytics REST** 🚧 (stages 1–4 done; web wiring next)
+**Current phase:** Phases 0–3 DONE ✅ · **Phase 4 (life tracker / wellness views)** 🚧 (Dashboard + Wellness + Sleep wired to real data; Trends/posture next)
+
+## Phase 4 — life tracker / wellness views (web/, React)
+- **Wellness screen — WIRED ✅** no longer Phase-4 stubs: a real **Readiness banner** (score + word from the `readiness` algorithm via `/api/analytics/training-load`), 4 stat tiles with latest **resting HR / HRV / stress avg / body battery**, trend sparklines (HRV, body battery, resting HR, stress, steps) over Day/Week/Month windows **anchored to each series' latest sample** (so imported history that ends a day or two ago still shows), with even-stride downsampling for the big series (HRV ~10k, stress ~9.5k pts). A **last-night sleep card** (score + stage bar) walks back to the most recent night with data and links to `/sleep`.
+- **Sleep screen — DONE ✅** (`/sleep`, see Phase 2/3 entries): last-night tiles + recent-nights stage bars from the `sleep` algorithm.
+- **Dashboard** already bound (readiness banner + `WellnessLatestTile` resting-HR/body-battery, correct serde kind names).
+- **Key fix:** `getWellness` now reads the API's `ts` field (was looking for `date`/`day`), and the Wellness screen uses the real serde kind names (`resting_heart_rate`/`sleep_stage`, not `resting_hr`/`sleep`) — that field/name mismatch was why the computed data wasn't showing.
+- **Verified live (8087):** Readiness 67/100 · HRV 67ms (baseline 47) · resting_heart_rate 101 · hrv 10,080 · stress 9,590 · body_battery 56 · steps 7,217 samples.
+- **Next in Phase 4:** Weight/Calories tiles + a **Trends** screen (long-term day/week/month); posture (lying/sitting/standing) pending a Helio/Gadgetbridge source.
 
 ## Phase 3 — derived persistence + analytics REST (ofit-db + ofit-api)
 Stage 3: persist algorithm outputs and expose the analytics engine over REST so the dashboard can list algorithms, recompute, and read chart-ready derivations.
