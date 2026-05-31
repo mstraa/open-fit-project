@@ -234,22 +234,47 @@ function BandChart({
   );
 }
 
+interface DayTotal {
+  t: number;
+  value: number;
+}
+
+/** Correct daily STEP totals from a series that mixes two semantics: a per-minute
+ *  increment stream (sum over the day) AND a midnight daily-total snapshot from a
+ *  second source. They describe the SAME steps, so we take max(incrementSum,
+ *  snapshot) per day rather than adding them (which would double every day). */
+function dailyStepTotals(samples: WellnessSample[]): DayTotal[] {
+  const day = new Map<number, { incr: number; snap: number }>();
+  for (const s of samples) {
+    const t = Date.parse(s.date);
+    if (!Number.isFinite(t)) continue;
+    const key = Math.floor(t / DAY_MS) * DAY_MS;
+    const d = day.get(key) ?? { incr: 0, snap: 0 };
+    if (s.date.slice(11, 19) === "00:00:00") d.snap = Math.max(d.snap, s.value);
+    else d.incr += s.value;
+    day.set(key, d);
+  }
+  return [...day.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, d]) => ({ t, value: Math.max(d.incr, d.snap) }));
+}
+
 /** Daily-total bars (steps). */
 function BarChart({
-  buckets,
+  bars,
   color,
   height = 140,
   viewW = 720,
 }: {
-  buckets: Bucket[];
+  bars: DayTotal[];
   color: string;
   height?: number;
   viewW?: number;
 }) {
-  const hi = Math.max(...buckets.map((b) => b.sum), 1);
-  const slot = viewW / buckets.length;
+  const hi = Math.max(...bars.map((b) => b.value), 1);
+  const slot = viewW / bars.length;
   const bw = slot * 0.6;
-  const gid = `bar-${color.replace(/\W/g, "")}-${buckets.length}`;
+  const gid = `bar-${color.replace(/\W/g, "")}-${bars.length}`;
   return (
     <svg
       viewBox={`0 0 ${viewW} ${height}`}
@@ -264,8 +289,8 @@ function BarChart({
           <stop offset="100%" stopColor={color} stopOpacity="0.35" />
         </linearGradient>
       </defs>
-      {buckets.map((b, i) => {
-        const h = Math.max((b.sum / hi) * (height - 8), 1);
+      {bars.map((b, i) => {
+        const h = Math.max((b.value / hi) * (height - 8), 1);
         return (
           <rect key={b.t} x={i * slot + (slot - bw) / 2} y={height - h} width={bw} height={h} fill={`url(#${gid})`} />
         );
@@ -319,29 +344,28 @@ function MetricChart({
     () => [...samples].sort((a, b) => a.date.localeCompare(b.date)),
     [samples],
   );
-  const buckets = useMemo(
-    () => bucketize(sorted, mode === "bars" ? DAY_MS : chooseBucketMs(sorted)),
-    [sorted, mode],
-  );
-  if (!buckets.length) return null;
 
   if (mode === "bars") {
-    const totals = buckets.map((b) => b.sum);
+    const bars = dailyStepTotals(sorted);
+    if (!bars.length) return null;
+    const totals = bars.map((b) => b.value);
     const total = totals.reduce((a, b) => a + b, 0);
     return (
       <>
         <StatHeader
           items={[
             { label: "Total", value: fmtNum(total, true), unit },
-            { label: "Daily avg", value: fmtNum(total / buckets.length, true), unit },
+            { label: "Daily avg", value: fmtNum(total / bars.length, true), unit },
             { label: "Best day", value: fmtNum(Math.max(...totals), true), unit },
           ]}
         />
-        <BarChart buckets={buckets} color={color} height={height} />
+        <BarChart bars={bars} color={color} height={height} />
       </>
     );
   }
 
+  const buckets = bucketize(sorted, chooseBucketMs(sorted));
+  if (!buckets.length) return null;
   const vals = sorted.map((s) => s.value);
   const min = Math.min(...vals);
   const max = Math.max(...vals);

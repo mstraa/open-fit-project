@@ -312,7 +312,8 @@ impl Db {
     /// In a real stream this would be batched; kept single-row here for clarity.
     pub async fn insert_wellness_sample(&self, w: &WellnessSample) -> Result<()> {
         sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
-             VALUES (?, ?, ?, ?, ?)"))
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT (source_id, kind, ts) DO UPDATE SET value = excluded.value"))
         .bind(w.id.to_string())
         .bind(w.source_id.to_string())
         .bind(serde_plain(&w.kind))
@@ -332,7 +333,8 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         for w in samples {
             sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
-                 VALUES (?, ?, ?, ?, ?)"))
+                 VALUES (?, ?, ?, ?, ?) \
+                 ON CONFLICT (source_id, kind, ts) DO UPDATE SET value = excluded.value"))
                 .bind(w.id.to_string())
                 .bind(w.source_id.to_string())
                 .bind(serde_plain(&w.kind))
