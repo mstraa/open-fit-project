@@ -118,7 +118,7 @@ const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
  *  Added devices live in the app-global NativeBleProvider: they keep streaming
  *  across screens and auto-reconnect on drop. Android app only. */
 function NativeBleCard() {
-  const { status, found, hr, message, device, available, scan, addAndConnect, forget, sync } = useNativeBle();
+  const { status, found, hr, message, device, syncing, available, scan, addAndConnect, forget, sync } = useNativeBle();
   const [authKey, setAuthKey] = useState<string>(() => {
     try {
       return localStorage.getItem(HELIO_KEY_STORE) ?? "";
@@ -201,11 +201,13 @@ function NativeBleCard() {
           {device.type === "huami" && status === "connected" && (
             <div className="card stat" style={{ justifyContent: "center", gap: 10 }}>
               <div className="stat__label">Stored data (M2 beta)</div>
-              <button type="button" className="btn" onClick={() => void sync(2)}>
-                Sync last 2 days
+              <button type="button" className="btn" disabled={syncing} onClick={() => void sync(2)}>
+                {syncing ? "Syncing…" : "Sync last 2 days"}
               </button>
               <span className="faint" style={{ fontSize: 10.5 }}>
-                Pulls steps + per-minute HR from the strap.
+                {message && (syncing || message.startsWith("sync") || message.startsWith("fetch"))
+                  ? message
+                  : "Pulls steps + per-minute HR from the strap."}
               </span>
             </div>
           )}

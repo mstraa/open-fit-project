@@ -52,6 +52,7 @@ public class HuamiSession implements Huami2021Handler {
     private final Consumer<byte[]> writeChunk; // → GATT char 0x0016
     private final Consumer<byte[]> writeAck;    // → GATT char 0x0017
     private final Listener listener;
+    private Consumer<byte[]> writeActivityControl; // → raw GATT char 0x0004 (set by plugin)
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean realtimeStarted = false;
@@ -65,10 +66,14 @@ public class HuamiSession implements Huami2021Handler {
         this.writeChunk = writeChunk;
         this.writeAck = writeAck;
         this.listener = listener;
-        // Stored-wellness fetch: control is written to the encrypted chunked
-        // endpoint 0x004b; data records arrive on the raw char (onActivityData).
+        // Stored-wellness fetch: control is written RAW to char 0x0004 (the
+        // legacy Huami activity-control char), responses come on char 0x0004 and
+        // data records on char 0x0005. The plugin supplies the raw-write callback
+        // via setActivityControlWriter(); until then writes are dropped.
         this.fetch = new HuamiFetch(
-            (cmd) -> write(EP_FETCH, cmd, true),
+            (cmd) -> {
+                if (writeActivityControl != null) writeActivityControl.accept(cmd);
+            },
             new HuamiFetch.Sink() {
                 @Override
                 public void sample(String kind, double value, long ts) {
@@ -90,6 +95,16 @@ public class HuamiSession implements Huami2021Handler {
     /** Start pulling stored ACTIVITY (steps + HR/minute) since {@code sinceMillis}. */
     public void startActivityFetch(long sinceMillis) {
         fetch.startActivity(sinceMillis);
+    }
+
+    /** Plugin supplies the raw-write callback for the activity-control char 0x0004. */
+    public void setActivityControlWriter(Consumer<byte[]> writer) {
+        this.writeActivityControl = writer;
+    }
+
+    /** Feed a raw activity-control notification (char 0x0004) to the fetch engine. */
+    public void onActivityControl(byte[] value) {
+        fetch.onControl(value);
     }
 
     /** Feed a raw activity-data notification (char 0x0005) to the fetch engine. */

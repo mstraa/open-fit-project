@@ -64,6 +64,7 @@ public class OpenFitBlePlugin extends Plugin {
     private static final UUID CCCD = uuid16("2902");
     private static final UUID CHUNK_WRITE = UUID.fromString("00000016-0000-3512-2118-0009af100700");
     private static final UUID CHUNK_READ = UUID.fromString("00000017-0000-3512-2118-0009af100700");
+    private static final UUID ACTIVITY_CONTROL = UUID.fromString("00000004-0000-3512-2118-0009af100700");
     private static final UUID ACTIVITY_DATA = UUID.fromString("00000005-0000-3512-2118-0009af100700");
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -81,6 +82,7 @@ public class OpenFitBlePlugin extends Plugin {
     private BluetoothGattCharacteristic chunkWriteChar;
     private BluetoothGattCharacteristic chunkReadChar;
     private BluetoothGattCharacteristic hrChar;
+    private BluetoothGattCharacteristic activityControlChar;
     private BluetoothGattCharacteristic activityDataChar;
 
     // Batched POST of fetched (historical) samples → /api/wellness.
@@ -299,15 +301,25 @@ public class OpenFitBlePlugin extends Plugin {
     }
 
     /** Pull stored wellness since `sinceMillis` (default: 2 days) from the Helio. */
+    private boolean fetchInProgress = false;
+
     @PluginMethod
     public void syncNow(PluginCall call) {
+        Log.i(TAG, "syncNow called, huami=" + (huami != null) + " inProgress=" + fetchInProgress);
         if (huami == null) {
             call.reject("not connected to a Zepp-OS device");
             return;
         }
-        long since = call.getLong("sinceMillis") != null
-            ? call.getLong("sinceMillis")
+        if (fetchInProgress) {
+            call.reject("already syncing");
+            return;
+        }
+        Double sinceD = call.getDouble("sinceMillis");
+        long since = sinceD != null
+            ? sinceD.longValue()
             : System.currentTimeMillis() - 2L * 24 * 3600 * 1000;
+        fetchInProgress = true;
+        main.postDelayed(() -> fetchInProgress = false, 90_000); // failsafe
         synchronized (fetchBatch) {
             fetchBatch.clear();
         }
@@ -560,6 +572,8 @@ public class OpenFitBlePlugin extends Plugin {
             Log.i(TAG, "notif " + u + " len=" + (v != null ? v.length : -1));
             if (CHUNK_READ.equals(u)) {
                 if (huami != null) huami.onChunkedRead(v);
+            } else if (ACTIVITY_CONTROL.equals(u)) {
+                if (huami != null) huami.onActivityControl(v);
             } else if (ACTIVITY_DATA.equals(u)) {
                 if (huami != null) huami.onActivityData(v);
             } else if (HR_MEASUREMENT.equals(u)) {
@@ -607,6 +621,7 @@ public class OpenFitBlePlugin extends Plugin {
         chunkWriteChar = findChar(g, CHUNK_WRITE);
         chunkReadChar = findChar(g, CHUNK_READ);
         hrChar = findChar(g, HR_MEASUREMENT);
+        activityControlChar = findChar(g, ACTIVITY_CONTROL);
         activityDataChar = findChar(g, ACTIVITY_DATA);
         if (chunkWriteChar == null || chunkReadChar == null) {
             emitStatus("error", "Zepp-OS chunked-transfer characteristics not found");
@@ -643,6 +658,7 @@ public class OpenFitBlePlugin extends Plugin {
                     main.post(() -> {
                         emitStatus("ready", "authenticated · streaming heart rate");
                         if (hrChar != null) enqueueNotify(hrChar);
+                        if (activityControlChar != null) enqueueNotify(activityControlChar);
                         if (activityDataChar != null) enqueueNotify(activityDataChar);
                         huami.enableHeartRate();
                     });
@@ -670,11 +686,16 @@ public class OpenFitBlePlugin extends Plugin {
 
                 @Override
                 public void onFetchDone(boolean ok) {
+                    fetchInProgress = false;
                     flushFetchBatch();
                     main.post(() -> emitStatus("ready", ok ? "sync complete" : "sync failed"));
                 }
             }
         );
+        // Fetch (M2) writes its control commands raw to char 0x0004.
+        if (activityControlChar != null) {
+            huami.setActivityControlWriter((cmd) -> enqueueWrite(activityControlChar, cmd));
+        }
         // Receive the handshake responses, then kick off auth.
         enqueueNotify(chunkReadChar);
         huami.startAuth();

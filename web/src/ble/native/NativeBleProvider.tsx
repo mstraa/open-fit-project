@@ -36,6 +36,7 @@ interface NativeBleState {
   hr: number | null;
   message?: string;
   device: SavedDevice | null; // the active/added device
+  syncing: boolean;
 }
 
 interface NativeBleApi extends NativeBleState {
@@ -74,6 +75,7 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     found: [],
     hr: null,
     device: loadSaved(),
+    syncing: false,
   }));
   const subs = useRef<PluginListenerHandle[]>([]);
   const userDisconnect = useRef(false);
@@ -113,7 +115,8 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
         }),
         OpenFitBle.addListener("status", (e: NativeStatus) => {
           if (e.status === "connected" || e.status === "ready") {
-            setState((s) => ({ ...s, status: "connected", message: e.message }));
+            const done = e.message === "sync complete" || e.message === "sync failed";
+            setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
           } else if (e.status === "error") {
             setState((s) => ({ ...s, status: "error", message: e.message }));
           } else if (e.status === "disconnected") {
@@ -178,7 +181,12 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
 
   const sync = useCallback(async (days = 2) => {
     if (!available) return;
-    await OpenFitBle.syncNow({ sinceMillis: Date.now() - days * 86_400_000 }).catch(() => undefined);
+    setState((s) => ({ ...s, syncing: true, message: "Syncing stored data…" }));
+    try {
+      await OpenFitBle.syncNow({ sinceMillis: Date.now() - days * 86_400_000 });
+    } catch (e) {
+      setState((s) => ({ ...s, syncing: false, message: `sync error: ${e instanceof Error ? e.message : String(e)}` }));
+    }
   }, [available]);
 
   const forget = useCallback(async () => {

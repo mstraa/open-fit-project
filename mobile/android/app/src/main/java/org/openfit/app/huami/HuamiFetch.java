@@ -62,18 +62,20 @@ public class HuamiFetch {
 
     /** Begin fetching ACTIVITY (steps + HR per minute) since {@code sinceMillis}. */
     public void startActivity(long sinceMillis) {
-        if (active) return;
+        Log.i(TAG, "startActivity (restart) since=" + sinceMillis);
         active = true;
         type = TYPE_ACTIVITY;
         lastPacketCounter = -1;
         buffer.reset();
         byte[] cmd = concat(new byte[]{CMD_START_DATE, type}, timeBytes(sinceMillis));
+        Log.i(TAG, "fetch write START_DATE len=" + cmd.length);
         sink.log("fetch: start activity since " + sinceMillis);
         writeControl.accept(cmd);
     }
 
     /** Inbound control response (chunked endpoint 0x004b payload). */
     public void onControl(byte[] v) {
+        Log.i(TAG, "onControl len=" + v.length + " active=" + active + " b0=" + (v.length > 0 ? String.format("0x%02x", v[0]) : "-"));
         if (!active || v.length < 3 || v[0] != RESPONSE) {
             return;
         }
@@ -95,6 +97,7 @@ public class HuamiFetch {
 
     /** Inbound data packet (raw char 0x0005): [counter, ...records]. */
     public void onData(byte[] v) {
+        Log.i(TAG, "onData len=" + (v != null ? v.length : -1) + " active=" + active);
         if (!active || v.length == 0) return;
         if ((byte) (lastPacketCounter + 1) == v[0]) {
             lastPacketCounter++;
@@ -113,6 +116,10 @@ public class HuamiFetch {
         }
         int expectedPackets = le32(v, 3);
         startMillis = parseTs(v, 7);
+        StringBuilder hx = new StringBuilder();
+        for (byte b : v) hx.append(String.format("%02x ", b));
+        Log.i(TAG, "startDate resp=[" + hx.toString().trim() + "] packets=" + expectedPackets
+            + " startMillis=" + startMillis + " (" + new java.util.Date(startMillis) + ")");
         if (expectedPackets == 0) {
             sink.log("fetch: nothing new");
             sendAck();
