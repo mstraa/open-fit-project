@@ -355,6 +355,19 @@ export async function getVersion(): Promise<VersionInfo> {
   };
 }
 
+/* ------------------------------------------------------------ settings */
+
+/** GET /api/settings — account/server-bound preferences as a `{ key: value }` map. */
+export async function getSettings(): Promise<Record<string, string>> {
+  const raw = await apiFetch<unknown>("/api/settings");
+  return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
+}
+
+/** PUT /api/settings — upsert one setting; returns the full updated map. */
+export async function setSetting(key: string, value: string): Promise<Record<string, string>> {
+  return apiSend<Record<string, string>>("/api/settings", "PUT", { key, value });
+}
+
 /* ------------------------------------------------------------ wellness */
 
 /**

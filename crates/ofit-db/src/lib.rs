@@ -357,6 +357,37 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Read every app setting as `(key, value)` pairs.
+    pub async fn list_settings(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT key, value FROM settings")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get::<String, _>("key"), r.get::<String, _>("value")))
+            .collect())
+    }
+
+    /// Upsert one app setting (portable: try UPDATE, INSERT if nothing changed).
+    pub async fn set_setting(&self, key: &str, value: &str, now: DateTime<Utc>) -> Result<()> {
+        let ts = now.to_rfc3339();
+        let updated = sqlx::query(&self.p("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?"))
+            .bind(value)
+            .bind(&ts)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        if updated.rows_affected() == 0 {
+            sqlx::query(&self.p("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)"))
+                .bind(key)
+                .bind(value)
+                .bind(&ts)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Get-or-create a [`Source`] by `(kind, name)`, returning its id. Used by the
     /// wellness ingest path to attribute streamed samples to a stable source.
     pub async fn ensure_source(&self, kind: SourceKind, name: &str) -> Result<Uuid> {

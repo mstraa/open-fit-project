@@ -3,7 +3,7 @@
 // file under ./screens (the in-shell screens mount the AppShell themselves so
 // each screen owns its topbar title/crumb/actions and active nav).
 
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Dashboard } from "./screens/Dashboard";
 import { Activities } from "./screens/Activities";
@@ -13,6 +13,7 @@ import { Algorithms } from "./screens/Algorithms";
 import { Sleep } from "./screens/Sleep";
 import { GadgetbridgeAutoImportRunner } from "./gadgetbridge/useGadgetbridgeAutoImport";
 import { useDataRefresh } from "./hooks/useDataRefresh";
+import { syncPrefs } from "./prefs";
 import { Spinner } from "./ui/primitives";
 
 // Code-split the detail screen: it pulls in uPlot + MapLibre GL, which are heavy.
@@ -29,6 +30,10 @@ export function App() {
   // Bumps after a manual strap sync → remounts the routed screen so it re-fetches
   // the new history WITHOUT a page reload (see useDataRefresh).
   const refresh = useDataRefresh();
+  // Pull server-bound preferences (e.g. the step goal) into the local cache once.
+  useEffect(() => {
+    void syncPrefs();
+  }, []);
   return (
     <>
       {/* Hourly Gadgetbridge auto-import scheduler (native app only; renders null). */}

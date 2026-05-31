@@ -233,6 +233,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/analytics/recompute", post(analytics::recompute))
         .route("/analytics/derived", get(analytics::derived))
         .route("/analytics/training-load", get(analytics::training_load))
+        .route("/settings", get(handlers::get_settings).put(handlers::set_setting))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     let api = public_api.merge(protected_api);

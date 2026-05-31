@@ -401,6 +401,43 @@ pub async fn set_preference(
     Ok(Json(pref_to_dto(pref)))
 }
 
+/// Body of `PUT /api/settings` — set one app-level key/value setting.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct SetSettingRequest {
+    pub key: String,
+    pub value: String,
+}
+
+/// `GET /api/settings` — all app settings as a `{ key: value }` map. These are
+/// account/server-bound preferences (e.g. the daily step goal) shared across
+/// every device, as opposed to per-device localStorage.
+#[utoipa::path(get, path = "/api/settings", responses((status = 200)))]
+pub async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<Json<std::collections::BTreeMap<String, String>>, ApiError> {
+    let pairs = state.db.list_settings().await.map_err(internal)?;
+    Ok(Json(pairs.into_iter().collect()))
+}
+
+/// `PUT /api/settings` — upsert one setting; returns the full settings map.
+#[utoipa::path(
+    put, path = "/api/settings",
+    request_body = SetSettingRequest,
+    responses((status = 200))
+)]
+pub async fn set_setting(
+    State(state): State<AppState>,
+    Json(req): Json<SetSettingRequest>,
+) -> Result<Json<std::collections::BTreeMap<String, String>>, ApiError> {
+    state
+        .db
+        .set_setting(&req.key, &req.value, chrono::Utc::now())
+        .await
+        .map_err(internal)?;
+    let pairs = state.db.list_settings().await.map_err(internal)?;
+    Ok(Json(pairs.into_iter().collect()))
+}
+
 /// `GET /api/wellness?kind=&from=&to=` — continuous wellness trend.
 #[utoipa::path(
     get, path = "/api/wellness",
