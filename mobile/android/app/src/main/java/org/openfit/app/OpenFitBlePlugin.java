@@ -249,6 +249,7 @@ public class OpenFitBlePlugin extends Plugin {
     }
 
     private void disconnectInternal() {
+        fetchInProgress = false;
         synchronized (opQueue) {
             opQueue.clear();
             opInFlight = false;

@@ -118,12 +118,12 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
             const done = e.message === "sync complete" || e.message === "sync failed";
             setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
           } else if (e.status === "error") {
-            setState((s) => ({ ...s, status: "error", message: e.message }));
+            setState((s) => ({ ...s, status: "error", message: e.message, syncing: false }));
           } else if (e.status === "disconnected") {
             // Auto-reconnect an added device unless the user asked to disconnect.
             const d = deviceRef.current;
             if (d && !userDisconnect.current) {
-              setState((s) => ({ ...s, status: "reconnecting", hr: null }));
+              setState((s) => ({ ...s, status: "reconnecting", hr: null, syncing: false }));
               window.setTimeout(() => {
                 if (deviceRef.current && !userDisconnect.current) void open(deviceRef.current);
               }, 2500);
