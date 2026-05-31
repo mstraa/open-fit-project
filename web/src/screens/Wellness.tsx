@@ -333,6 +333,45 @@ interface SleepNight {
   awake: number;
 }
 
+/** Heart rate over the last 24h — the per-minute history pulled from the strap
+ *  (M2 fetch) plus live samples. Bounded window + downsample so it stays light. */
+function HeartRateDayCard() {
+  const [samples, setSamples] = useState<WellnessSample[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    getWellness("heart_rate", from)
+      .then((s) => {
+        if (!alive) return;
+        const sorted = [...s.samples].sort((a, b) => a.date.localeCompare(b.date));
+        setSamples(downsample(sorted, 400));
+        setLoaded(true);
+      })
+      .catch(() => alive && setLoaded(true));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return (
+    <div className="card">
+      <div className="card__head">
+        <div className="card__title">
+          Heart rate<span className="sub">last 24 hours</span>
+        </div>
+      </div>
+      {samples.length > 0 ? (
+        <Sparkline samples={samples} color="var(--hr)" height={140} />
+      ) : (
+        <EmptyState
+          label={loaded ? "No data yet" : "Loading…"}
+          hint="Live HR + per-minute history synced from your strap."
+        />
+      )}
+    </div>
+  );
+}
+
 /** Last-night sleep summary (score + stage bar) from the `sleep` algorithm,
  *  walking back to the most recent night that has data. Links to /sleep. */
 function LastNightSleepCard() {
@@ -502,6 +541,9 @@ export function Wellness() {
               }
             />
           </div>
+
+          {/* heart rate · 24h (live + the strap's fetched per-minute history) */}
+          <HeartRateDayCard />
 
           {/* body battery 24h */}
           <div className="card">

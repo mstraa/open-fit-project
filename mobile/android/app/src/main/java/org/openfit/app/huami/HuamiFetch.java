@@ -49,6 +49,7 @@ public class HuamiFetch {
     private byte type;
     private int lastPacketCounter;
     private long startMillis;
+    private int expectedRecords;
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream(4096);
 
     public HuamiFetch(Consumer<byte[]> writeControl, Sink sink) {
@@ -115,6 +116,7 @@ public class HuamiFetch {
             return;
         }
         int expectedPackets = le32(v, 3);
+        expectedRecords = expectedPackets;
         startMillis = parseTs(v, 7);
         StringBuilder hx = new StringBuilder();
         for (byte b : v) hx.append(String.format("%02x ", b));
@@ -148,11 +150,17 @@ public class HuamiFetch {
         sendAck();
     }
 
-    /** ACTIVITY: 4-byte records [rawKind, rawIntensity, steps, heartRate]/minute. */
+    /** ACTIVITY: per-minute records. 4-byte = [rawKind,rawIntensity,steps,hr];
+     *  8-byte (extended) adds [unknown,sleep,deepSleep,remSleep]. steps@2/hr@3 are
+     *  the same in both — the record SIZE is derived from the data length / the
+     *  device-reported record count (the Helio uses 8). */
     private void parseActivity(byte[] bytes, long firstMinuteMillis) {
-        final int size = 4;
-        if (bytes.length % size != 0) {
-            sink.log("fetch: activity size % 4 != 0 (" + bytes.length + ")");
+        int size = 4;
+        if (expectedRecords > 0) {
+            int s = bytes.length / expectedRecords;
+            size = s >= 8 ? 8 : 4;
+        } else if (bytes.length % 8 == 0) {
+            size = 8;
         }
         int emitted = 0;
         for (int i = 0; i + size <= bytes.length; i += size) {
@@ -167,8 +175,18 @@ public class HuamiFetch {
                 sink.sample("steps", steps, ts);
                 emitted++;
             }
+            // 8-byte extended: sleep stage from deep/rem/light minutes.
+            if (size == 8) {
+                int deep = bytes[i + 6] & 0xff;
+                int rem = bytes[i + 7] & 0xff;
+                int sleep = bytes[i + 5] & 0xff;
+                // 2=deep, 3=rem, 1=light (matches SleepStage codes); skip awake/none.
+                if (deep > 0) sink.sample("sleep_stage", 2, ts);
+                else if (rem > 0) sink.sample("sleep_stage", 3, ts);
+                else if (sleep > 0) sink.sample("sleep_stage", 1, ts);
+            }
         }
-        sink.log("fetch: parsed " + (bytes.length / size) + " minutes, emitted " + emitted + " samples");
+        sink.log("fetch: parsed " + (bytes.length / size) + " min (size " + size + "), emitted " + emitted);
     }
 
     private void sendAck() {
