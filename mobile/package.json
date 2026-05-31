@@ -11,6 +11,7 @@
     "run:android": "npm run sync && cap run android"
   },
   "dependencies": {
+    "@capacitor-community/bluetooth-le": "^6.1.0",
     "@capacitor-community/sqlite": "^6.0.2",
     "@capacitor/android": "^6.2.0",
     "@capacitor/core": "^6.2.0",

@@ -284,6 +284,13 @@ export async function importFiles(files: FileList | File[]): Promise<ImportFileO
   return arr;
 }
 
+/** Stream wellness samples into the API (the live BLE / relay write path). */
+export async function ingestWellness(
+  items: { kind: string; value: number; ts?: string }[],
+): Promise<{ ingested: number }> {
+  return apiSend<{ ingested: number }>("/api/wellness", "POST", items);
+}
+
 /** Per-kind ingest count from POST /api/import/gadgetbridge. */
 export interface GadgetbridgeImportResult {
   device: string;

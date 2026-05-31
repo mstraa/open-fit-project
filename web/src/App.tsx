@@ -19,6 +19,11 @@ const WorkoutDetail = lazy(() =>
   import("./screens/WorkoutDetail").then((m) => ({ default: m.WorkoutDetail })),
 );
 
+// Code-split the BLE screen: it pulls the Capacitor BLE plugin (native/Web BT).
+const BleDevices = lazy(() =>
+  import("./screens/BleDevices").then((m) => ({ default: m.BleDevices })),
+);
+
 export function App() {
   return (
     <Routes>
@@ -65,12 +70,9 @@ export function App() {
       <Route
         path="/devices"
         element={
-          <ComingSoon
-            title="Devices & sources"
-            crumb="Connected devices & data sources"
-            phase="Phase 3"
-            hint="BLE ingestion via Gadgetbridge and per-source priority configure here."
-          />
+          <Suspense fallback={<Spinner label="Loading devices…" />}>
+            <BleDevices />
+          </Suspense>
         }
       />
 
