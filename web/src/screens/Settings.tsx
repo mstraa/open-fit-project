@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "../app/AppShell";
+import { getStepsGoal, setStepsGoal } from "../prefs";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../ui/EmptyState";
 import { useHealth } from "../hooks/useHealth";
@@ -109,6 +110,17 @@ const SUBNAV: SubLink[] = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
         <ellipse cx="12" cy="6" rx="8" ry="3" />
         <path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" />
+      </svg>
+    ),
+  },
+  {
+    id: "goals",
+    label: "Goals",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="5" />
+        <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
       </svg>
     ),
   },
@@ -460,6 +472,9 @@ export function Settings() {
             />
           </section>
 
+          {/* GOALS — REAL (client-side preferences) */}
+          <GoalsPanel />
+
           {/* APPEARANCE — REAL theme toggle */}
           <section className="panel card" id="appearance">
             <div className="card__head">
@@ -607,6 +622,50 @@ const THEME_CARDS: ThemeCard[] = [
     disabled: true,
   },
 ];
+
+function GoalsPanel() {
+  const [goal, setGoal] = useState(getStepsGoal());
+  return (
+    <section className="panel card" id="goals">
+      <div className="card__head">
+        <div className="card__title">
+          Goals<span className="sub">used by the dashboard</span>
+        </div>
+      </div>
+      <div className="row">
+        <div className="row__b">
+          <b>Daily step goal</b>
+          <span>The Today ring on the dashboard fills toward this.</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="number"
+            min={1000}
+            step={500}
+            value={goal}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setGoal(v);
+              setStepsGoal(v);
+            }}
+            aria-label="Daily step goal"
+            style={{
+              width: 110,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border, #1c2030)",
+              background: "var(--surface-2, #14171f)",
+              color: "var(--fg)",
+              font: "inherit",
+              textAlign: "right",
+            }}
+          />
+          <span className="faint" style={{ fontSize: 12 }}>steps</span>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function ThemePicker({ onPick }: { onPick: (label: string) => void }) {
   const { theme, setTheme } = useTheme();

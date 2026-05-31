@@ -22,6 +22,7 @@ import type { ActivitySummary, Source, Sport, WellnessKind } from "../api/types"
 import type { TrainingLoadResponseDto } from "../api/schema";
 import { MultiLineChart, type MultiSeries } from "../charts/MultiLineChart";
 import { formatDuration, sportLabel } from "../ui/format";
+import { getStepsGoal } from "../prefs";
 import "./Dashboard.css";
 
 /* --------------------------------------------------------------- ranges */
@@ -540,6 +541,15 @@ function WeeklyVolumeCard({ activities }: { activities: ActivitySummary[] }) {
 function TodayCard() {
   const [steps, setSteps] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [goal, setGoal] = useState(getStepsGoal());
+
+  // Live-update when the goal is changed in Settings.
+  useEffect(() => {
+    const onPrefs = () => setGoal(getStepsGoal());
+    window.addEventListener("ofit:prefs", onPrefs);
+    return () => window.removeEventListener("ofit:prefs", onPrefs);
+  }, []);
+
   useEffect(() => {
     let alive = true;
     const start = new Date();
@@ -562,7 +572,6 @@ function TodayCard() {
     };
   }, []);
 
-  const goal = 10000;
   const pct = steps != null ? Math.min(1, steps / goal) : 0;
   const r = 46;
   const circ = 2 * Math.PI * r;
@@ -577,7 +586,7 @@ function TodayCard() {
       ) : steps == null || steps === 0 ? (
         <EmptyState label="No steps yet today" hint="Steps stream in from your connected strap." compact />
       ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "6px 2px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 20, padding: "6px 2px" }}>
           <svg width="116" height="116" viewBox="0 0 116 116" aria-hidden style={{ flex: "0 0 auto" }}>
             <circle cx="58" cy="58" r={r} fill="none" stroke="var(--surface-2, #1a1d28)" strokeWidth="10" />
             <circle
@@ -592,19 +601,24 @@ function TodayCard() {
               strokeDashoffset={circ * (1 - pct)}
               transform="rotate(-90 58 58)"
             />
-            <text x="58" y="54" textAnchor="middle" className="num" style={{ fontSize: 22, fontWeight: 800, fill: "var(--fg)" }}>
-              {(steps / 1000).toFixed(steps >= 10000 ? 0 : 1)}k
-            </text>
-            <text x="58" y="72" textAnchor="middle" style={{ fontSize: 10, fill: "var(--muted)" }}>
-              steps
+            <text
+              x="58"
+              y="58"
+              textAnchor="middle"
+              dominantBaseline="central"
+              className="num"
+              style={{ fontSize: 26, fontWeight: 800, fill: "var(--fg)" }}
+            >
+              {Math.round(pct * 100)}%
             </text>
           </svg>
           <div>
-            <div className="num" style={{ fontSize: 26, fontWeight: 800 }}>
+            <div className="num" style={{ fontSize: 28, fontWeight: 800, lineHeight: 1 }}>
               {steps.toLocaleString()}
             </div>
-            <div className="stat__label" style={{ marginTop: 2 }}>
-              {Math.round(pct * 100)}% of {goal.toLocaleString()} goal
+            <div className="stat__label" style={{ marginTop: 4 }}>steps today</div>
+            <div className="faint" style={{ fontSize: 11.5, marginTop: 6 }}>
+              Goal {goal.toLocaleString()}
             </div>
           </div>
         </div>
