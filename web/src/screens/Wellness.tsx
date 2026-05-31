@@ -40,6 +40,7 @@ const KINDS = [
   "stress",
   "body_battery",
   "steps",
+  "sp_o2",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -902,6 +903,20 @@ export function Wellness() {
               mode="bars"
               height={130}
               empty={<EmptyState label="No data yet" compact />}
+            />
+          </div>
+
+          {/* blood oxygen (SpO₂) */}
+          <div className="card">
+            <div className="card__head">
+              <div className="card__title">Blood oxygen · SpO₂</div>
+            </div>
+            <ModuleBody
+              samples={series.sp_o2}
+              color="var(--good)"
+              unit="%"
+              height={130}
+              empty={<EmptyState label="No data yet" hint="Synced from your strap's SpO₂ sensor." compact />}
             />
           </div>
         </div>

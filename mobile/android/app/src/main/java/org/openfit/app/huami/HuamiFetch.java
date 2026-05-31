@@ -124,14 +124,12 @@ public class HuamiFetch {
 
     private void onStartDate(byte[] v) {
         if (v[2] != SUCCESS) {
-            Log.i(TAG, "FETCHDBG type=0x" + String.format("%02x", type) + " start NOT OK 0x" + String.format("%02x", v[2]));
             sink.log("fetch: 0x" + String.format("%02x", type) + " start not ok (0x" + String.format("%02x", v[2]) + ")");
             finishType(false);
             return;
         }
         expectedRecords = le32(v, 3);
         startMillis = parseTs(v, 7);
-        Log.i(TAG, "FETCHDBG type=0x" + String.format("%02x", type) + " records=" + expectedRecords);
         if (expectedRecords == 0) {
             sink.log("fetch: 0x" + String.format("%02x", type) + " nothing new");
             sendAck();
@@ -206,7 +204,6 @@ public class HuamiFetch {
                 n++;
             }
         }
-        sink.log("fetch: stress parsed " + n); Log.i(TAG, "FETCHDBG stress parsed " + n);
     }
 
     /** HRV / RESTING_HEART_RATE: 6-byte records [ts(4, LE epoch secs), unk, value]. */
@@ -220,7 +217,6 @@ public class HuamiFetch {
                 n++;
             }
         }
-        sink.log("fetch: " + kind + " parsed " + n + " of " + (bytes.length / 6)); Log.i(TAG, "FETCHDBG " + kind + " parsed " + n + " of " + (bytes.length/6));
     }
 
     /** SPO2_NORMAL: 1 version byte, then 65-byte records [ts(4 LE secs), spo2, …60].
@@ -240,7 +236,6 @@ public class HuamiFetch {
                 n++;
             }
         }
-        sink.log("fetch: spo2 parsed " + n); Log.i(TAG, "FETCHDBG spo2 parsed " + n);
     }
 
     private void sendAck() {
