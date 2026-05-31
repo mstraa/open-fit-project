@@ -58,6 +58,8 @@ interface BleState {
   live: Live;
   device: Found | null;
   message?: string;
+  /** Step-by-step diagnostic log of the last scan/connect (newest last). */
+  steps: string[];
 }
 
 interface BleApi extends BleState {
@@ -84,8 +86,14 @@ function parseRsc(v: DataView): { speed: number; cadence: number } {
 
 type BleClient = typeof import("@capacitor-community/bluetooth-le").BleClient;
 
+/** Compact an error into a one-line string for the diagnostic log. */
+function shortErr(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  return m.length > 90 ? `${m.slice(0, 90)}…` : m;
+}
+
 export function BleProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<BleState>({ status: "idle", found: [], live: {}, device: null });
+  const [state, setState] = useState<BleState>({ status: "idle", found: [], live: {}, device: null, steps: [] });
 
   // Long-lived handles. These live in the provider (mounted above the router),
   // so they are NOT recreated on navigation — the connection genuinely persists.
@@ -93,16 +101,27 @@ export function BleProvider({ children }: { children: ReactNode }) {
   const liveRef = useRef<Live>({});
   const lastPushRef = useRef(0);
   const userDisconnectRef = useRef(false); // distinguish intentional vs dropped
-  const busyRef = useRef(false); // guard against overlapping scan/connect churn
+  const scanningRef = useRef(false);
+  const connectingRef = useRef(false);
+
+  // Append a diagnostic step (also mirrored to the console). Surfaced in the UI
+  // so a connection failure shows exactly which step failed and with what error.
+  const step = useCallback((msg: string, reset = false) => {
+    // eslint-disable-next-line no-console
+    console.log(`[BLE] ${msg}`);
+    setState((s) => ({ ...s, steps: (reset ? [] : s.steps).concat(msg).slice(-14) }));
+  }, []);
 
   const ble = useCallback(async () => {
     if (!clientRef.current) {
+      step("Initializing Bluetooth…");
       const mod = await import("@capacitor-community/bluetooth-le");
       await mod.BleClient.initialize({ androidNeverForLocation: true });
       clientRef.current = mod.BleClient;
+      step("Bluetooth ready.");
     }
     return clientRef.current;
-  }, []);
+  }, [step]);
 
   const pushHr = useCallback((hr: number) => {
     const now = Date.now();
@@ -131,8 +150,9 @@ export function BleProvider({ children }: { children: ReactNode }) {
           pushHr(liveRef.current.hr);
         });
         subscribed++;
-      } catch {
-        /* no readable HR service */
+        step("Subscribed: Heart Rate.");
+      } catch (e) {
+        step(`No Heart Rate service (${shortErr(e)}).`);
       }
       try {
         await client.startNotifications(id, CP_SERVICE, CP_MEASUREMENT, (v) => {
@@ -140,8 +160,9 @@ export function BleProvider({ children }: { children: ReactNode }) {
           emitLive();
         });
         subscribed++;
+        step("Subscribed: Power.");
       } catch {
-        /* no power */
+        /* no power — common, don't clutter the log */
       }
       try {
         await client.startNotifications(id, RSC_SERVICE, RSC_MEASUREMENT, (v) => {
@@ -151,12 +172,13 @@ export function BleProvider({ children }: { children: ReactNode }) {
           emitLive();
         });
         subscribed++;
+        step("Subscribed: Speed/Cadence.");
       } catch {
         /* no RSC */
       }
       return subscribed;
     },
-    [emitLive, pushHr],
+    [emitLive, pushHr, step],
   );
 
   // Open (or re-open) the GATT connection. On an unexpected drop we attempt a
@@ -166,25 +188,40 @@ export function BleProvider({ children }: { children: ReactNode }) {
   const open = useCallback(
     async (dev: Found, attempt = 0) => {
       const client = await ble();
-      await client.connect(dev.deviceId, () => {
-        if (userDisconnectRef.current) return; // we asked for it — stay quiet
-        // Unexpected drop: try to heal up to 3 times with backoff.
-        if (attempt < 3) {
-          setState((s) => ({ ...s, status: "reconnecting", message: undefined }));
-          window.setTimeout(() => {
-            void open(dev, attempt + 1).catch(() => {
-              setState((s) => ({ ...s, status: "error", message: "Connection lost — tap to reconnect." }));
-            });
-          }, 800 * (attempt + 1));
-        } else {
-          setState((s) => ({ ...s, status: "error", message: "Connection lost — tap to reconnect." }));
-        }
-      });
+      // Clear any stale GATT for this device id first (a half-open connection
+      // from a previous failed attempt makes the next connect throw).
+      try {
+        await client.disconnect(dev.deviceId);
+      } catch {
+        /* nothing to clear */
+      }
+      step(attempt === 0 ? `Connecting to ${dev.name}…` : `Reconnecting (try ${attempt + 1})…`);
+      await client.connect(
+        dev.deviceId,
+        () => {
+          if (userDisconnectRef.current) return; // we asked for it — stay quiet
+          step("Link dropped.");
+          // Unexpected drop: try to heal up to 3 times with backoff.
+          if (attempt < 3) {
+            setState((s) => ({ ...s, status: "reconnecting", message: undefined }));
+            window.setTimeout(() => {
+              void open(dev, attempt + 1).catch((e) => {
+                setState((s) => ({ ...s, status: "error", message: `Connection lost — tap to reconnect. (${shortErr(e)})` }));
+              });
+            }, 800 * (attempt + 1));
+          } else {
+            setState((s) => ({ ...s, status: "error", message: "Connection lost — tap to reconnect." }));
+          }
+        },
+        { timeout: 10_000 }, // fail fast with a clear error, not a hang
+      );
+      step("Connected — discovering services…");
       const subscribed = await subscribe(client, dev.deviceId);
       // Stay connected regardless (notifications can also start a beat late). When
       // nothing subscribed, show a soft hint rather than tearing the link down —
       // a hard disconnect here is what was wrongly killing the readable Helio.
-      setState({
+      setState((s) => ({
+        ...s,
         status: "connected",
         found: [],
         live: { ...liveRef.current },
@@ -193,36 +230,49 @@ export function BleProvider({ children }: { children: ReactNode }) {
           subscribed === 0
             ? `Connected — no standard HR/power/cadence data yet. If readings don't appear, this device (e.g. a full Garmin) may use a proprietary protocol; use the Zepp/Gadgetbridge export for it.`
             : undefined,
-      });
+      }));
     },
     [ble, subscribe],
   );
 
   const connect = useCallback(
     async (dev: Found) => {
-      if (busyRef.current) return;
-      busyRef.current = true;
+      if (connectingRef.current) return;
+      connectingRef.current = true;
       userDisconnectRef.current = false;
       liveRef.current = {};
-      setState((s) => ({ ...s, status: "connecting", device: dev, live: {}, message: undefined }));
+      setState((s) => ({ ...s, status: "connecting", device: dev, live: {}, message: undefined, steps: [] }));
       try {
+        // Android can't connect while a scan is running — stop it first.
+        if (scanningRef.current) {
+          scanningRef.current = false;
+          try {
+            const c = await ble();
+            await c.stopLEScan();
+            step("Stopped scan before connecting.");
+          } catch {
+            /* ignore */
+          }
+        }
         await open(dev);
       } catch (e) {
+        step(`ERROR: ${shortErr(e)}`);
         setState((s) => ({ ...s, status: "error", message: e instanceof Error ? e.message : String(e) }));
       } finally {
-        busyRef.current = false;
+        connectingRef.current = false;
       }
     },
-    [open],
+    [ble, open, step],
   );
 
   const scan = useCallback(async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
+    if (scanningRef.current || connectingRef.current) return;
     try {
       const client = await ble();
       const found: Found[] = [];
-      setState((s) => ({ ...s, status: "scanning", found, message: undefined }));
+      scanningRef.current = true;
+      setState((s) => ({ ...s, status: "scanning", found, message: undefined, steps: [] }));
+      step("Scanning for nearby devices…");
       await client.requestLEScan({}, (r) => {
         const id = r.device.deviceId;
         if (found.some((f) => f.deviceId === id)) return;
@@ -235,21 +285,22 @@ export function BleProvider({ children }: { children: ReactNode }) {
         setState((s) => ({ ...s, found: [...found] }));
       });
       window.setTimeout(async () => {
+        if (!scanningRef.current) return; // a connect already stopped the scan
         try {
           await client.stopLEScan();
         } catch {
           /* ignore */
         }
+        scanningRef.current = false;
         setState((s) => ({
           ...s,
-          status: "scanned",
+          status: s.status === "scanning" ? "scanned" : s.status,
           found: [...found].sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999)),
         }));
-        busyRef.current = false;
       }, 8000);
     } catch {
       // Desktop Chrome (Web Bluetooth) has no continuous scan → OS device picker.
-      busyRef.current = false;
+      scanningRef.current = false;
       try {
         const client = await ble();
         const device = await client.requestDevice({
@@ -261,7 +312,7 @@ export function BleProvider({ children }: { children: ReactNode }) {
         setState((s) => ({ ...s, status: "error", message: e instanceof Error ? e.message : String(e) }));
       }
     }
-  }, [ble, connect]);
+  }, [ble, connect, step]);
 
   const disconnect = useCallback(async () => {
     userDisconnectRef.current = true;
@@ -275,7 +326,7 @@ export function BleProvider({ children }: { children: ReactNode }) {
       }
     }
     liveRef.current = {};
-    setState({ status: "idle", found: [], live: {}, device: null });
+    setState({ status: "idle", found: [], live: {}, device: null, steps: [] });
   }, [state.device]);
 
   const value = useMemo<BleApi>(

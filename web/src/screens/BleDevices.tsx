@@ -19,7 +19,7 @@ import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
 
 export function BleDevices() {
-  const { status, found, live, device, message, scan, connect, disconnect } = useBle();
+  const { status, found, live, device, message, steps, scan, connect, disconnect } = useBle();
   const live_ = status === "connected" || status === "reconnecting";
 
   return (
@@ -59,9 +59,22 @@ export function BleDevices() {
       {live_ && device ? (
         <ConnectedView name={device.name} live={live} reconnecting={status === "reconnecting"} note={message} />
       ) : status === "connecting" ? (
-        <EmptyState label={`Connecting to ${device?.name ?? "device"}…`} />
+        <>
+          <EmptyState label={`Connecting to ${device?.name ?? "device"}…`} />
+          <BleLog steps={steps} />
+        </>
       ) : status === "error" ? (
-        <EmptyState label="Bluetooth error" hint={message} />
+        <>
+          <EmptyState label="Bluetooth error" hint={message} />
+          <BleLog steps={steps} />
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
+            {device && (
+              <button type="button" className="btn" onClick={() => void connect(device)}>
+                Retry connection
+              </button>
+            )}
+          </div>
+        </>
       ) : found.length > 0 ? (
         <DeviceList found={found} onConnect={(d) => void connect(d)} />
       ) : status === "scanning" ? (
@@ -90,6 +103,34 @@ export function BleDevices() {
         </div>
       )}
     </AppShell>
+  );
+}
+
+/** Diagnostic step log — shows exactly where a scan/connect got to and which
+ *  step failed (with the real Bluetooth error), so failures aren't a mystery. */
+function BleLog({ steps }: { steps: string[] }) {
+  if (!steps || steps.length === 0) return null;
+  return (
+    <div className="card" style={{ marginTop: 16, padding: 14 }}>
+      <div className="stat__label" style={{ marginBottom: 8 }}>
+        Connection log
+      </div>
+      <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+        {steps.map((s, i) => (
+          <li
+            key={i}
+            className={s.startsWith("ERROR") || s.startsWith("No Heart") || s.includes("dropped") ? "" : "muted"}
+            style={{
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+              color: s.startsWith("ERROR") ? "var(--hr, #e5677d)" : undefined,
+            }}
+          >
+            {s}
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
