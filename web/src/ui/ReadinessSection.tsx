@@ -26,13 +26,20 @@ function tier(score: number): { word: string; tint: string } {
   return { word: "Depleted", tint: "t-hr" };
 }
 
-export function ReadinessSection({ data }: { data: TrainingLoadResponseDto | null }) {
+export function ReadinessSection({
+  data,
+  compact = false,
+}: {
+  data: TrainingLoadResponseDto | null;
+  /** In a grid row → let the grid own the spacing (no bottom margin). */
+  compact?: boolean;
+}) {
   const ok = data != null && data.readiness_available && data.readiness != null;
   const score = ok ? Math.round(data!.readiness as number) : null;
   const t = score != null ? tier(score) : { word: "", tint: "t-acc" };
 
   return (
-    <section className="card" style={{ marginBottom: "var(--gap)" }}>
+    <section className="card" style={compact ? undefined : { marginBottom: "var(--gap)" }}>
       <div className="card__head">
         <div className={`stat__ico ${t.tint}`} style={{ marginBottom: 0 }}>
           <HeartGlyph />

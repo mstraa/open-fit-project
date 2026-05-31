@@ -274,7 +274,7 @@ function LiveCard() {
   return (
     <div
       className="card"
-      style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}
+      style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}
     >
       <div className="stat__ico t-hr" style={{ marginBottom: 0 }}>
         <HeartGlyph />
@@ -289,10 +289,20 @@ function LiveCard() {
         viewBox={`0 0 ${w} ${h}`}
         preserveAspectRatio="none"
         height={h}
-        style={{ flex: "1 1 120px", minWidth: 120, maxWidth: "100%", height: h }}
+        style={{ flex: "1 1 140px", minWidth: 120, maxWidth: 360, height: h }}
         aria-hidden
       >
-        {path && <path d={path} fill="none" stroke="var(--hr)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />}
+        {path && (
+          <path
+            d={path}
+            fill="none"
+            stroke="var(--hr)"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
       </svg>
       <span
         className={live.connected ? "pill pill--good" : "pill"}
@@ -447,11 +457,11 @@ export function Wellness() {
         <Seg options={RANGES} value={range} onChange={setRange} aria-label="Date range" />
       }
     >
-      {/* recovery readiness — shared section (same on the Dashboard) */}
-      <ReadinessSection data={tl} />
-
-      {/* live real-time feed (WebSocket) */}
-      <LiveCard />
+      {/* recovery readiness (once-daily metric) + live HR, compact 2-up row */}
+      <div className="grid grid--2" style={{ marginBottom: "var(--gap)" }}>
+        <ReadinessSection data={tl} compact />
+        <LiveCard />
+      </div>
 
       {/* import wellness from a Gadgetbridge export DB (works on web + the app) */}
 
