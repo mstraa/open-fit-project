@@ -93,11 +93,22 @@ public class HuamiSession implements Huami2021Handler {
             });
     }
 
-    /** Start pulling stored ACTIVITY (steps + HR/minute) since {@code sinceMillis}.
-     *  Pauses the realtime-HR stream first so the device handles one job at a time. */
+    /** The stored-wellness types we sweep on each sync, in order. ACTIVITY (steps +
+     *  per-minute HR) is the proven, densest type and runs first; the rest add
+     *  stress, HRV, resting HR and SpO2 from the device's own records. */
+    private static final byte[] FETCH_TYPES = {
+        HuamiFetch.TYPE_ACTIVITY,
+        HuamiFetch.TYPE_STRESS,
+        HuamiFetch.TYPE_HRV,
+        HuamiFetch.TYPE_RESTING_HR,
+        HuamiFetch.TYPE_SPO2,
+    };
+
+    /** Pull all stored wellness types since {@code sinceMillis}. Pauses the
+     *  realtime-HR stream first so the device handles one job at a time. */
     public void startActivityFetch(long sinceMillis) {
         pauseHeartRate();
-        fetch.startActivity(sinceMillis);
+        fetch.startSync(sinceMillis, FETCH_TYPES);
     }
 
     /** Stop the realtime-HR stream + its keepalive (resume with enableHeartRate). */

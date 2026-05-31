@@ -3,50 +3,55 @@ package org.openfit.app.huami;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
-import java.util.List;
 import java.util.TimeZone;
 import java.util.function.Consumer;
 
 /**
- * Pulls the Helio's STORED wellness over BLE (Zepp-OS activity-fetch protocol),
- * ported from Gadgetbridge's AbstractFetchOperation / FetchActivityOperation
- * (AGPLv3). M2: the ACTIVITY type = per-minute steps + heart rate.
+ * Pulls the Helio's STORED wellness over BLE (Zepp-OS / Huami activity-fetch
+ * protocol), ported from Gadgetbridge's AbstractFetchOperation + the per-type
+ * Fetch*Operation classes (AGPLv3).
  *
- * Transport (driven by HuamiSession): control commands are written to the
- * encrypted chunked endpoint 0x004b and their responses arrive there too
- * ({@link #onControl}); the bulk data records stream on the raw char 0x0005
- * ({@link #onData}). The state machine: START_DATE → (FETCH_DATA) → data packets
- * → FETCH_DATA response (CRC) → parse → ACK.
+ * The transport is identical for every metric — START_DATE → FETCH_DATA → data
+ * packets (raw char 0x0005) → FETCH_DATA response (CRC) → ACK — only the data
+ * TYPE byte and the record format differ. So one fetch can sweep several types
+ * sequentially (ACTIVITY, then STRESS, HRV, RESTING_HR, SPO2). Control commands
+ * are written raw to char 0x0004; their responses arrive on the same char.
  */
 public class HuamiFetch {
     private static final String TAG = "HuamiFetch";
 
-    // Control commands / responses (HuamiService).
+    // Control commands / responses.
     private static final byte CMD_START_DATE = 0x01;
     private static final byte CMD_FETCH_DATA = 0x02;
     private static final byte CMD_ACK = 0x03;
     private static final byte RESPONSE = 0x10;
     private static final byte SUCCESS = 0x01;
 
-    // Fetch data types (HuamiFetchDataType).
-    static final byte TYPE_ACTIVITY = 0x01;
+    // Fetch data types (HuamiFetchDataType — values verified against Gadgetbridge).
+    public static final byte TYPE_ACTIVITY = 0x01;     // per-minute steps + HR (+sleep bytes)
+    public static final byte TYPE_STRESS = 0x13;       // STRESS_AUTOMATIC, per-minute byte
+    public static final byte TYPE_SPO2 = 0x25;         // SPO2_NORMAL, 65-byte records
+    public static final byte TYPE_RESTING_HR = 0x3a;   // RESTING_HEART_RATE, 6-byte records
+    public static final byte TYPE_HRV = 0x49;          // HRV, 6-byte records
 
     public interface Sink {
-        /** A parsed sample: kind ("steps"/"heart_rate"), value, epoch millis. */
+        /** A parsed sample: kind ("steps"/"heart_rate"/"stress"/"hrv"/…), value, epoch millis. */
         void sample(String kind, double value, long tsMillis);
-        /** Fetch finished (success or not). */
+        /** The whole multi-type fetch finished. */
         void done(boolean ok);
         void log(String msg);
     }
 
-    private final Consumer<byte[]> writeControl; // → chunked endpoint 0x004b (encrypted)
+    private final Consumer<byte[]> writeControl; // → raw GATT char 0x0004
     private final Sink sink;
 
     private boolean active = false;
     private byte type;
+    private byte[] typeQueue = new byte[0];
+    private int typeIndex = 0;
+    private long sinceMillis;
     private int lastPacketCounter;
     private long startMillis;
     private int expectedRecords;
@@ -61,22 +66,31 @@ public class HuamiFetch {
         return active;
     }
 
-    /** Begin fetching ACTIVITY (steps + HR per minute) since {@code sinceMillis}. */
-    public void startActivity(long sinceMillis) {
-        Log.i(TAG, "startActivity (restart) since=" + sinceMillis);
+    /** Sweep the given data types in order since {@code sinceMillis}. */
+    public void startSync(long sinceMillis, byte[] types) {
+        this.sinceMillis = sinceMillis;
+        this.typeQueue = types;
+        this.typeIndex = 0;
+        Log.i(TAG, "startSync since=" + sinceMillis + " types=" + types.length);
+        startNextType();
+    }
+
+    private void startNextType() {
+        if (typeIndex >= typeQueue.length) {
+            sink.done(true);
+            return;
+        }
         active = true;
-        type = TYPE_ACTIVITY;
+        type = typeQueue[typeIndex];
         lastPacketCounter = -1;
         buffer.reset();
         byte[] cmd = concat(new byte[]{CMD_START_DATE, type}, timeBytes(sinceMillis));
-        Log.i(TAG, "fetch write START_DATE len=" + cmd.length);
-        sink.log("fetch: start activity since " + sinceMillis);
+        sink.log("fetch: type 0x" + String.format("%02x", type) + " since " + sinceMillis);
         writeControl.accept(cmd);
     }
 
-    /** Inbound control response (chunked endpoint 0x004b payload). */
+    /** Inbound control response (raw char 0x0004 payload). */
     public void onControl(byte[] v) {
-        Log.i(TAG, "onControl len=" + v.length + " active=" + active + " b0=" + (v.length > 0 ? String.format("0x%02x", v[0]) : "-"));
         if (!active || v.length < 3 || v[0] != RESPONSE) {
             return;
         }
@@ -88,17 +102,16 @@ public class HuamiFetch {
                 onFetchDataResponse(v);
                 return;
             case CMD_ACK:
-                finish(true);
+                finishType(true);
                 return;
             default:
                 Log.w(TAG, "unexpected control " + String.format("0x%02x", v[1]));
-                finish(false);
+                finishType(false);
         }
     }
 
     /** Inbound data packet (raw char 0x0005): [counter, ...records]. */
     public void onData(byte[] v) {
-        Log.i(TAG, "onData len=" + (v != null ? v.length : -1) + " active=" + active);
         if (!active || v.length == 0) return;
         if ((byte) (lastPacketCounter + 1) == v[0]) {
             lastPacketCounter++;
@@ -111,33 +124,28 @@ public class HuamiFetch {
 
     private void onStartDate(byte[] v) {
         if (v[2] != SUCCESS) {
-            sink.log("fetch: start-date not successful");
-            finish(false);
+            Log.i(TAG, "FETCHDBG type=0x" + String.format("%02x", type) + " start NOT OK 0x" + String.format("%02x", v[2]));
+            sink.log("fetch: 0x" + String.format("%02x", type) + " start not ok (0x" + String.format("%02x", v[2]) + ")");
+            finishType(false);
             return;
         }
-        int expectedPackets = le32(v, 3);
-        expectedRecords = expectedPackets;
+        expectedRecords = le32(v, 3);
         startMillis = parseTs(v, 7);
-        StringBuilder hx = new StringBuilder();
-        for (byte b : v) hx.append(String.format("%02x ", b));
-        Log.i(TAG, "startDate resp=[" + hx.toString().trim() + "] packets=" + expectedPackets
-            + " startMillis=" + startMillis + " (" + new java.util.Date(startMillis) + ")");
-        if (expectedPackets == 0) {
-            sink.log("fetch: nothing new");
+        Log.i(TAG, "FETCHDBG type=0x" + String.format("%02x", type) + " records=" + expectedRecords);
+        if (expectedRecords == 0) {
+            sink.log("fetch: 0x" + String.format("%02x", type) + " nothing new");
             sendAck();
             return;
         }
-        sink.log("fetch: " + expectedPackets + " packets since " + startMillis);
-        // Ask the device to start streaming the data packets (on char 0x0005).
+        sink.log("fetch: 0x" + String.format("%02x", type) + " " + expectedRecords + " records");
         writeControl.accept(new byte[]{CMD_FETCH_DATA});
     }
 
     private void onFetchDataResponse(byte[] v) {
         if (v[2] != SUCCESS) {
-            finish(false);
+            finishType(false);
             return;
         }
-        // Optional 4-byte CRC32 over the buffered records at [3..7].
         boolean ok = true;
         if (v.length == 7) {
             int crc = le32(v, 3);
@@ -145,15 +153,24 @@ public class HuamiFetch {
             if (!ok) sink.log("fetch: CRC mismatch");
         }
         if (ok) {
-            parseActivity(buffer.toByteArray(), startMillis);
+            byte[] buf = buffer.toByteArray();
+            switch (type) {
+                case TYPE_ACTIVITY: parseActivity(buf, startMillis); break;
+                case TYPE_STRESS: parseStress(buf, startMillis); break;
+                case TYPE_HRV: parseTimestamped6(buf, "hrv", 1, 255); break;
+                case TYPE_RESTING_HR: parseTimestamped6(buf, "resting_heart_rate", 25, 220); break;
+                case TYPE_SPO2: parseSpo2(buf); break;
+                default: break;
+            }
         }
         sendAck();
     }
 
     /** ACTIVITY: per-minute records. 4-byte = [rawKind,rawIntensity,steps,hr];
-     *  8-byte (extended) adds [unknown,sleep,deepSleep,remSleep]. steps@2/hr@3 are
-     *  the same in both — the record SIZE is derived from the data length / the
-     *  device-reported record count (the Helio uses 8). */
+     *  8-byte (extended) keeps steps@2/hr@3. The extra bytes 4-7 are NOT sleep —
+     *  on this device they are flat/sentinel during the day (verified by a byte
+     *  dump), so we emit ONLY steps + HR. Record size is derived from the data
+     *  length / the device-reported record count (the Helio uses 8). */
     private void parseActivity(byte[] bytes, long firstMinuteMillis) {
         int size = 4;
         if (expectedRecords > 0) {
@@ -162,33 +179,6 @@ public class HuamiFetch {
         } else if (bytes.length % 8 == 0) {
             size = 8;
         }
-        // --- DEBUG (M2 reverse-eng): characterise every column of the record so we
-        //     can identify which byte (if any) carries SpO2 / stress / etc. Logs a
-        //     hex sample + per-column [min..max] ranges. Writes NOTHING to the DB.
-        if (size == 8 && bytes.length >= 8) {
-            int cols = 8;
-            int[] mn = new int[cols];
-            int[] mx = new int[cols];
-            for (int c = 0; c < cols; c++) { mn[c] = 255; mx[c] = 0; }
-            StringBuilder sample = new StringBuilder();
-            int records = bytes.length / size;
-            for (int r = 0; r < records; r++) {
-                for (int c = 0; c < cols; c++) {
-                    int val = bytes[r * size + c] & 0xff;
-                    if (val < mn[c]) mn[c] = val;
-                    if (val > mx[c]) mx[c] = val;
-                }
-                if (r < 24) {
-                    for (int c = 0; c < cols; c++) sample.append(String.format("%02x", bytes[r * size + c] & 0xff));
-                    sample.append(' ');
-                }
-            }
-            StringBuilder ranges = new StringBuilder();
-            for (int c = 0; c < cols; c++) ranges.append("b").append(c).append("=[").append(mn[c]).append("..").append(mx[c]).append("] ");
-            Log.i(TAG, "M2DBG ranges " + ranges + " (records=" + records + ")");
-            Log.i(TAG, "M2DBG sample " + sample);
-        }
-
         int emitted = 0;
         for (int i = 0; i + size <= bytes.length; i += size) {
             long ts = firstMinuteMillis + (long) (i / size) * 60_000L;
@@ -202,14 +192,55 @@ public class HuamiFetch {
                 sink.sample("steps", steps, ts);
                 emitted++;
             }
-            // NOTE: the 8-byte record's bytes 4–7 were assumed to be SpO2/sleep
-            // stages, but emitting that guess produced garbage ("11h deep"). We no
-            // longer emit sleep from this stream — the M2DBG dump above logs the
-            // real byte ranges so we can identify these columns before trusting
-            // them. Steps + HR (validated) are the only emitted kinds for now.
-            // Sleep continues to come from the Zepp import.
         }
-        sink.log("fetch: parsed " + (bytes.length / size) + " min (size " + size + "), emitted " + emitted);
+        sink.log("fetch: activity " + (bytes.length / size) + " min, emitted " + emitted);
+    }
+
+    /** STRESS_AUTOMATIC: one byte per minute from startMillis; 0xff = not measured. */
+    private void parseStress(byte[] bytes, long firstMinuteMillis) {
+        int n = 0;
+        for (int i = 0; i < bytes.length; i++) {
+            int s = bytes[i] & 0xff;
+            if (s >= 1 && s <= 100) {
+                sink.sample("stress", s, firstMinuteMillis + (long) i * 60_000L);
+                n++;
+            }
+        }
+        sink.log("fetch: stress parsed " + n); Log.i(TAG, "FETCHDBG stress parsed " + n);
+    }
+
+    /** HRV / RESTING_HEART_RATE: 6-byte records [ts(4, LE epoch secs), unk, value]. */
+    private void parseTimestamped6(byte[] bytes, String kind, int lo, int hi) {
+        int n = 0;
+        for (int off = 0; off + 6 <= bytes.length; off += 6) {
+            long ts = le32u(bytes, off) * 1000L;
+            int val = bytes[off + 5] & 0xff;
+            if (val >= lo && val <= hi && ts > 0) {
+                sink.sample(kind, val, ts);
+                n++;
+            }
+        }
+        sink.log("fetch: " + kind + " parsed " + n + " of " + (bytes.length / 6)); Log.i(TAG, "FETCHDBG " + kind + " parsed " + n + " of " + (bytes.length/6));
+    }
+
+    /** SPO2_NORMAL: 1 version byte, then 65-byte records [ts(4 LE secs), spo2, …60].
+     *  spo2 raw is signed: negative ⇒ automatic measurement, value = raw + 128. */
+    private void parseSpo2(byte[] bytes) {
+        if (bytes.length < 66 || (bytes.length - 1) % 65 != 0) {
+            sink.log("fetch: spo2 unexpected len " + bytes.length);
+            return;
+        }
+        int n = 0;
+        for (int off = 1; off + 65 <= bytes.length; off += 65) {
+            long ts = le32u(bytes, off) * 1000L;
+            int raw = bytes[off + 4]; // signed
+            int spo2 = raw < 0 ? raw + 128 : raw;
+            if (spo2 >= 50 && spo2 <= 100 && ts > 0) {
+                sink.sample("sp_o2", spo2, ts);
+                n++;
+            }
+        }
+        sink.log("fetch: spo2 parsed " + n); Log.i(TAG, "FETCHDBG spo2 parsed " + n);
     }
 
     private void sendAck() {
@@ -217,10 +248,12 @@ public class HuamiFetch {
         writeControl.accept(new byte[]{CMD_ACK, 0x09});
     }
 
-    private void finish(boolean ok) {
+    /** A type completed (ok or not) — advance to the next, or finish the sweep. */
+    private void finishType(boolean ok) {
         active = false;
         buffer.reset();
-        sink.done(ok);
+        typeIndex++;
+        startNextType();
     }
 
     // ---- helpers (ported from BLETypeConversions) ----
@@ -258,14 +291,17 @@ public class HuamiFetch {
         return (v[o] & 0xff) | ((v[o + 1] & 0xff) << 8) | ((v[o + 2] & 0xff) << 16) | ((v[o + 3] & 0xff) << 24);
     }
 
+    /** Unsigned little-endian 32-bit (epoch seconds fit in 31 bits until 2038, but
+     *  mask to be safe). */
+    static long le32u(byte[] v, int o) {
+        return ((long) (v[o] & 0xff)) | ((long) (v[o + 1] & 0xff) << 8)
+            | ((long) (v[o + 2] & 0xff) << 16) | ((long) (v[o + 3] & 0xff) << 24);
+    }
+
     static byte[] concat(byte[] a, byte[] b) {
         byte[] out = new byte[a.length + b.length];
         System.arraycopy(a, 0, out, 0, a.length);
         System.arraycopy(b, 0, out, a.length, b.length);
         return out;
     }
-
-    // (unused placeholder to keep List import meaningful for future multi-day batching)
-    @SuppressWarnings("unused")
-    private List<Long> reserved = new ArrayList<>();
 }
