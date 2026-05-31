@@ -18,7 +18,7 @@ import { useState } from "react";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
-import { useNativeBle } from "../ble/native/useNativeBle";
+import { useNativeBle } from "../ble/native/NativeBleProvider";
 
 export function BleDevices() {
   const { status, found, live, device, message, steps, scan, connect, disconnect } = useBle();
@@ -113,11 +113,12 @@ export function BleDevices() {
 const HELIO_KEY_STORE = "ofit_helio_authkey";
 const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
 
-/** Direct-device port (docs/NATIVE-BLE-PORT.md). M0: standard-GATT HR over the
- *  native path. M1: Zepp-OS / Huami (Helio) — auth handshake + encrypted
- *  transport → live HR, by entering the device auth key. Android app only. */
+/** Direct-device port (docs/NATIVE-BLE-PORT.md). M0: standard-GATT HR. M1:
+ *  Zepp-OS / Huami (Helio) — auth handshake + encrypted transport → live HR.
+ *  Added devices live in the app-global NativeBleProvider: they keep streaming
+ *  across screens and auto-reconnect on drop. Android app only. */
 function NativeBleCard() {
-  const { status, found, hr, message, deviceName, available, scan, connect, disconnect } = useNativeBle();
+  const { status, found, hr, message, device, available, scan, addAndConnect, forget } = useNativeBle();
   const [authKey, setAuthKey] = useState<string>(() => {
     try {
       return localStorage.getItem(HELIO_KEY_STORE) ?? "";
@@ -126,7 +127,7 @@ function NativeBleCard() {
     }
   });
   if (!available) return null;
-  const live = status === "connected" || status === "connecting";
+  const linked = status === "connected" || status === "connecting" || status === "reconnecting";
   const keyOk = /^(0x)?[0-9a-fA-F]{32}$/.test(authKey.trim());
 
   const saveKey = (v: string) => {
@@ -142,12 +143,12 @@ function NativeBleCard() {
     <div className="card" style={{ marginTop: 24 }}>
       <div className="card__head">
         <div className="card__title">
-          Native BLE<span className="sub">direct GATT · Helio M1 (beta)</span>
+          Native BLE<span className="sub">direct GATT · auto-reconnect</span>
         </div>
         <div className="card__tools">
-          {live ? (
-            <button type="button" className="btn btn--ghost" onClick={() => void disconnect()}>
-              Disconnect
+          {device ? (
+            <button type="button" className="btn btn--ghost" onClick={() => void forget()}>
+              Forget
             </button>
           ) : (
             <button type="button" className="btn" disabled={status === "scanning"} onClick={() => void scan()}>
@@ -158,9 +159,9 @@ function NativeBleCard() {
       </div>
       <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
         Direct device sync, no Gadgetbridge. Standard HR works on any strap / watch in <b>Broadcast HR</b>;
-        for the <b>Helio (Zepp-OS)</b>, paste its 32-hex auth key, then connect with <b>Zepp-OS</b>.{" "}
-        <b>First unpair the Helio in Android → Bluetooth settings</b> so it doesn&apos;t fight the Zepp app
-        for the connection.
+        for the <b>Helio (Zepp-OS)</b>, paste its 32-hex auth key, then add it with <b>Zepp-OS</b>. Added
+        devices keep streaming across the app and reconnect automatically.{" "}
+        <b>First unpair the Helio in Android → Bluetooth settings</b> so it doesn&apos;t fight the Zepp app.
       </p>
 
       <label style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 12 }}>
@@ -175,20 +176,29 @@ function NativeBleCard() {
         />
       </label>
 
-      {status === "connected" ? (
+      {device ? (
         <div className="grid grid--stats">
           <div className="card stat">
             <div className="stat__ico t-hr">
               <BleIcon />
             </div>
-            <div className="stat__label">{deviceName ?? "Device"} · heart rate</div>
+            <div className="stat__label">
+              {device.name} ·{" "}
+              {status === "connected"
+                ? "streaming → wellness"
+                : status === "reconnecting"
+                  ? "reconnecting…"
+                  : status === "connecting"
+                    ? "connecting…"
+                    : status === "error"
+                      ? "error"
+                      : "added"}
+            </div>
             <div className="stat__val num" style={{ fontSize: 26 }}>
-              {hr ?? "—"} <small>bpm</small>
+              {status === "connected" && hr != null ? hr : "—"} <small>bpm</small>
             </div>
           </div>
         </div>
-      ) : status === "error" ? (
-        <div className="pill pill--bad" style={{ justifyContent: "flex-start" }}>{message}</div>
       ) : found.length > 0 ? (
         <div className="card card--pad0">
           {found.map((d) => (
@@ -204,13 +214,13 @@ function NativeBleCard() {
                     className="btn"
                     disabled={!keyOk}
                     title={keyOk ? "" : "Enter the 32-hex auth key first"}
-                    onClick={() => void connect(d, { authKey: authKey.trim() })}
+                    onClick={() => void addAndConnect(d, { authKey: authKey.trim() })}
                   >
-                    Zepp-OS
+                    Add · Zepp-OS
                   </button>
                 )}
-                <button type="button" className="btn btn--ghost" onClick={() => void connect(d)}>
-                  Standard HR
+                <button type="button" className="btn btn--ghost" onClick={() => void addAndConnect(d)}>
+                  Add · Standard HR
                 </button>
               </div>
             </div>
@@ -221,8 +231,10 @@ function NativeBleCard() {
           {status === "scanning" ? "Scanning…" : "Tap Native scan to list devices."}
         </span>
       )}
-      {message && status !== "error" && (
-        <span className="faint" style={{ fontSize: 11, display: "block", marginTop: 8 }}>{message}</span>
+      {message && (status === "error" || (linked && status !== "connected")) && (
+        <span className={status === "error" ? "pill pill--bad" : "faint"} style={{ fontSize: 11, display: status === "error" ? "flex" : "block", marginTop: 8, justifyContent: "flex-start" }}>
+          {message}
+        </span>
       )}
     </div>
   );

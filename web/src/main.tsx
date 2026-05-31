@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { AuthProvider } from "./auth/AuthProvider";
 import { BleProvider } from "./ble/BleProvider";
+import { NativeBleProvider } from "./ble/native/NativeBleProvider";
 import { App } from "./App";
 // app.css = canonical design system (defines --bg/--surface/--accent/--hr…).
 // tokens.css = legacy --color-*/--space-*/--radius-* bridge → design tokens.
@@ -20,7 +21,9 @@ createRoot(rootEl).render(
       <BrowserRouter>
         <AuthProvider>
           <BleProvider>
-            <App />
+            <NativeBleProvider>
+              <App />
+            </NativeBleProvider>
           </BleProvider>
         </AuthProvider>
       </BrowserRouter>

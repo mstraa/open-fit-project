@@ -1,4 +1,5 @@
 // App shell — implements the design's .app / .rail / .topbar / .main / .content.
+// (ConnIndicator import below.)
 //
 // The RAIL holds the brand, the full nav (with route-driven is-active via
 // react-router NavLink) and the user/footer chip with a LIVE health dot.
@@ -13,6 +14,7 @@ import { useHealth } from "../hooks/useHealth";
 import { useActivities } from "../hooks/useActivities";
 import { useAlgorithms } from "../hooks/useAlgorithms";
 import { useAuth } from "../auth/AuthProvider";
+import { ConnIndicator } from "../ble/native/ConnIndicator";
 import {
   ActivitiesIcon,
   AlgorithmsIcon,
@@ -75,6 +77,7 @@ export function AppShell({ title, crumb, actions, children }: AppShellProps) {
               {crumb ? <div className="topbar__crumb">{crumb}</div> : null}
             </div>
             <div className="topbar__spacer" />
+            <ConnIndicator />
             {actions}
           </header>
           <div className="content">{children}</div>
