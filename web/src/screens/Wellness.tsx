@@ -9,7 +9,7 @@
 // samples for this account/hardware it falls back to the on-brand empty state
 // (never fake numbers).
 
-import { useEffect, useState, type ReactNode, type SVGProps } from "react";
+import { useEffect, useMemo, useState, type ReactNode, type SVGProps } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
@@ -118,52 +118,6 @@ function hasData(samples: WellnessSample[] | undefined): samples is WellnessSamp
   return Array.isArray(samples) && samples.length > 0;
 }
 
-/* ------------------------------------------------------ tiny SVG sparkline */
-
-// Minimal on-brand line sparkline used only when REAL samples are present. It
-// mirrors the design's OF.lineChart shape (filled area under a single stroke).
-function Sparkline({
-  samples,
-  color,
-  height = 160,
-  viewW = 720,
-}: {
-  samples: WellnessSample[];
-  color: string;
-  height?: number;
-  viewW?: number;
-}) {
-  const vals = samples.map((s) => s.value);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const span = max - min || 1;
-  const stepX = vals.length > 1 ? viewW / (vals.length - 1) : viewW;
-  const sy = (v: number) => height - ((v - min) / span) * (height - 12) - 6;
-  const pts = vals.map((v, i) => ({ x: i * stepX, y: sy(v) }));
-  const line = smoothLine(pts);
-  const lastX = pts.length ? pts[pts.length - 1].x : viewW;
-  const area = `${line} L${lastX.toFixed(1)},${height} L0,${height} Z`;
-  const gid = `sl-${Math.round(min)}-${Math.round(max)}-${vals.length}`;
-  return (
-    <svg
-      viewBox={`0 0 ${viewW} ${height}`}
-      preserveAspectRatio="none"
-      style={{ width: "100%", height }}
-      role="img"
-      aria-label="trend"
-    >
-      <defs>
-        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#${gid})`} />
-      <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 /** Catmull-Rom → cubic-bézier smoothing for a soft, rounded line through points. */
 function smoothLine(pts: { x: number; y: number }[]): string {
   if (pts.length === 0) return "";
@@ -181,6 +135,229 @@ function smoothLine(pts: { x: number; y: number }[]): string {
     d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
   }
   return d;
+}
+
+/* ----------------------------------------------- bucketed trend rendering */
+// Raw per-minute series (HR, stress, body battery) are far too jagged to read,
+// and multi-day trends are noise at full resolution. We bucket each series by
+// hour (≤2-day spans) or day (longer) and render a min/max BAND with a mean
+// line — so a glance shows the spread and the trend, with min/avg/max printed.
+
+interface Bucket {
+  t: number;
+  min: number;
+  max: number;
+  mean: number;
+  sum: number;
+  count: number;
+}
+
+const HOUR_MS = 3_600_000;
+
+function bucketize(samples: WellnessSample[], bucketMs: number): Bucket[] {
+  const map = new Map<number, { min: number; max: number; sum: number; count: number }>();
+  for (const s of samples) {
+    const t = Date.parse(s.date);
+    if (!Number.isFinite(t)) continue;
+    const key = Math.floor(t / bucketMs) * bucketMs;
+    const b = map.get(key);
+    if (!b) map.set(key, { min: s.value, max: s.value, sum: s.value, count: 1 });
+    else {
+      if (s.value < b.min) b.min = s.value;
+      if (s.value > b.max) b.max = s.value;
+      b.sum += s.value;
+      b.count += 1;
+    }
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, b]) => ({ t, min: b.min, max: b.max, mean: b.sum / b.count, sum: b.sum, count: b.count }));
+}
+
+/** Hour buckets for ≤2-day spans, day buckets beyond — keeps bucket count readable. */
+function chooseBucketMs(samples: WellnessSample[]): number {
+  if (samples.length < 2) return HOUR_MS;
+  const span = Date.parse(samples[samples.length - 1].date) - Date.parse(samples[0].date);
+  return span <= 2 * DAY_MS ? HOUR_MS : DAY_MS;
+}
+
+/** Min/max band (shaded) + mean line. De-noises raw series into a readable shape
+ *  while still showing the per-bucket spread. */
+function BandChart({
+  buckets,
+  color,
+  height = 140,
+  viewW = 720,
+}: {
+  buckets: Bucket[];
+  color: string;
+  height?: number;
+  viewW?: number;
+}) {
+  const lo = Math.min(...buckets.map((b) => b.min));
+  const hi = Math.max(...buckets.map((b) => b.max));
+  const span = hi - lo || 1;
+  const stepX = buckets.length > 1 ? viewW / (buckets.length - 1) : 0;
+  const sy = (v: number) => height - ((v - lo) / span) * (height - 16) - 8;
+  const top = buckets.map((b, i) => ({ x: i * stepX, y: sy(b.max) }));
+  const bot = buckets.map((b, i) => ({ x: i * stepX, y: sy(b.min) }));
+  const meanPts = buckets.map((b, i) => ({ x: i * stepX, y: sy(b.mean) }));
+  const topLine = smoothLine(top);
+  const botBack = smoothLine([...bot].reverse()).replace(/^M/, "L");
+  const band = buckets.length > 1 ? `${topLine} ${botBack} Z` : "";
+  const gid = `band-${color.replace(/\W/g, "")}-${buckets.length}`;
+  return (
+    <svg
+      viewBox={`0 0 ${viewW} ${height}`}
+      preserveAspectRatio="none"
+      style={{ width: "100%", height }}
+      role="img"
+      aria-label="trend with min/max band"
+    >
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.24" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.04" />
+        </linearGradient>
+      </defs>
+      {band && <path d={band} fill={`url(#${gid})`} />}
+      <path
+        d={smoothLine(meanPts)}
+        fill="none"
+        stroke={color}
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+/** Daily-total bars (steps). */
+function BarChart({
+  buckets,
+  color,
+  height = 140,
+  viewW = 720,
+}: {
+  buckets: Bucket[];
+  color: string;
+  height?: number;
+  viewW?: number;
+}) {
+  const hi = Math.max(...buckets.map((b) => b.sum), 1);
+  const slot = viewW / buckets.length;
+  const bw = slot * 0.6;
+  const gid = `bar-${color.replace(/\W/g, "")}-${buckets.length}`;
+  return (
+    <svg
+      viewBox={`0 0 ${viewW} ${height}`}
+      preserveAspectRatio="none"
+      style={{ width: "100%", height }}
+      role="img"
+      aria-label="daily totals"
+    >
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.9" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.35" />
+        </linearGradient>
+      </defs>
+      {buckets.map((b, i) => {
+        const h = Math.max((b.sum / hi) * (height - 8), 1);
+        return (
+          <rect key={b.t} x={i * slot + (slot - bw) / 2} y={height - h} width={bw} height={h} fill={`url(#${gid})`} />
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Compact number: 13381 → "13,381"; small values keep one decimal. */
+function fmtNum(v: number, big = false): string {
+  if (!Number.isFinite(v)) return "—";
+  if (big) return Math.round(v).toLocaleString();
+  return Math.abs(v) >= 100 ? `${Math.round(v)}` : `${Math.round(v * 10) / 10}`;
+}
+
+/** Small min/avg/max (or total) readout above a chart. */
+function StatHeader({ items }: { items: { label: string; value: string; unit?: string }[] }) {
+  return (
+    <div style={{ display: "flex", gap: 20, flexWrap: "wrap", margin: "0 0 12px" }}>
+      {items.map((it) => (
+        <div key={it.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--muted)" }}>
+            {it.label}
+          </span>
+          <span className="num" style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
+            {it.value}
+            {it.unit ? <small style={{ fontSize: 10, opacity: 0.5, marginLeft: 3 }}>{it.unit}</small> : null}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A readable metric trend: min/avg/max (or total) header + a min/max band, or
+ *  daily-total bars for cumulative metrics (mode="bars"). */
+function MetricChart({
+  samples,
+  color,
+  unit,
+  height = 140,
+  mode = "band",
+}: {
+  samples: WellnessSample[];
+  color: string;
+  unit?: string;
+  height?: number;
+  mode?: "band" | "bars";
+}) {
+  const sorted = useMemo(
+    () => [...samples].sort((a, b) => a.date.localeCompare(b.date)),
+    [samples],
+  );
+  const buckets = useMemo(
+    () => bucketize(sorted, mode === "bars" ? DAY_MS : chooseBucketMs(sorted)),
+    [sorted, mode],
+  );
+  if (!buckets.length) return null;
+
+  if (mode === "bars") {
+    const totals = buckets.map((b) => b.sum);
+    const total = totals.reduce((a, b) => a + b, 0);
+    return (
+      <>
+        <StatHeader
+          items={[
+            { label: "Total", value: fmtNum(total, true), unit },
+            { label: "Daily avg", value: fmtNum(total / buckets.length, true), unit },
+            { label: "Best day", value: fmtNum(Math.max(...totals), true), unit },
+          ]}
+        />
+        <BarChart buckets={buckets} color={color} height={height} />
+      </>
+    );
+  }
+
+  const vals = sorted.map((s) => s.value);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return (
+    <>
+      <StatHeader
+        items={[
+          { label: "Min", value: fmtNum(min), unit },
+          { label: "Avg", value: fmtNum(avg), unit },
+          { label: "Max", value: fmtNum(max), unit },
+        ]}
+      />
+      <BandChart buckets={buckets} color={color} height={height} />
+    </>
+  );
 }
 
 /* ------------------------------------------------ stat-tile glyphs (design) */
@@ -361,7 +538,7 @@ function HeartRateDayCard() {
         </div>
       </div>
       {samples.length > 0 ? (
-        <Sparkline samples={samples} color="var(--hr)" height={140} />
+        <MetricChart samples={samples} color="var(--hr)" unit="bpm" height={140} />
       ) : (
         <EmptyState
           label={loaded ? "No data yet" : "Loading…"}
@@ -532,10 +709,10 @@ export function Wellness() {
             <ModuleBody
               samples={series.hrv}
               color="var(--power)"
+              unit="ms"
               empty={
                 <EmptyState
                   label="No data yet"
-                  phase="Phase 4"
                   hint="Overnight HRV trend with your personal balanced band."
                 />
               }
@@ -555,10 +732,10 @@ export function Wellness() {
             <ModuleBody
               samples={series.body_battery}
               color="var(--accent)"
+              unit="%"
               empty={
                 <EmptyState
                   label="No data yet"
-                  phase="Phase 4"
                   hint="Energy charge & drain across the day."
                 />
               }
@@ -579,8 +756,9 @@ export function Wellness() {
             <ModuleBody
               samples={series.resting_heart_rate}
               color="var(--hr)"
+              unit="bpm"
               height={110}
-              empty={<EmptyState label="No data yet" phase="Phase 4" compact />}
+              empty={<EmptyState label="No data yet" compact />}
             />
           </div>
 
@@ -593,7 +771,7 @@ export function Wellness() {
               samples={series.stress}
               color="var(--cal)"
               height={130}
-              empty={<EmptyState label="No data yet" phase="Phase 4" compact />}
+              empty={<EmptyState label="No data yet" compact />}
             />
             <div className="legend" style={{ marginTop: 8 }}>
               <i>
@@ -623,8 +801,9 @@ export function Wellness() {
             <ModuleBody
               samples={series.steps}
               color="var(--accent)"
+              mode="bars"
               height={130}
-              empty={<EmptyState label="No data yet" phase="Phase 4" compact />}
+              empty={<EmptyState label="No data yet" compact />}
             />
           </div>
         </div>
@@ -636,20 +815,25 @@ export function Wellness() {
 
 /* --------------------------------------------------------------- helpers */
 
-// Render real samples as a sparkline if present, otherwise the empty state.
+// Render real samples as a readable min/max-band (or bars) chart if present,
+// otherwise the on-brand empty state.
 function ModuleBody({
   samples,
   color,
   empty,
   height,
+  unit,
+  mode,
 }: {
   samples: WellnessSample[] | undefined;
   color: string;
   empty: ReactNode;
   height?: number;
+  unit?: string;
+  mode?: "band" | "bars";
 }) {
   if (hasData(samples)) {
-    return <Sparkline samples={samples} color={color} height={height} />;
+    return <MetricChart samples={samples} color={color} unit={unit} height={height} mode={mode} />;
   }
   return <>{empty}</>;
 }
