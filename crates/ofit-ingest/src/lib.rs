@@ -36,12 +36,14 @@ pub mod gadgetbridge;
 mod gpx;
 mod pipeline;
 mod tcx;
+pub mod zepp;
 
 pub use builder::RecordingBuilder;
 pub use gadgetbridge::{
     read_db as read_gadgetbridge_db, GadgetbridgeDevice, GadgetbridgeImport, GbError, WellnessReading,
 };
 pub use pipeline::{import_bytes_path, import_path, ImportOutcome, PipelineError};
+pub use zepp::{read_zepp_export, read_zepp_zip, ZeppError, ZeppImport, ZeppUser};
 
 /// Errors raised while importing a file.
 #[derive(Debug, thiserror::Error)]

@@ -41,7 +41,7 @@ impl SleepStage {
 /// Each variant maps to a scalar `value` in [`WellnessSample`]; categorical
 /// kinds (sleep stage) encode via a stable numeric code, keeping the hot path
 /// a single numeric column for high-rate streaming.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WellnessKind {
     /// Live/continuous heart rate (bpm).
@@ -62,6 +62,10 @@ pub enum WellnessKind {
     SpO2,
     /// Steps in the sample interval (count).
     Steps,
+    /// Body weight (kg).
+    Weight,
+    /// Energy burned in the sample interval (kcal).
+    Calories,
 }
 
 /// One continuous wellness reading.

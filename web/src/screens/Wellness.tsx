@@ -16,7 +16,7 @@ import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "reac
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { Seg } from "../ui/Seg";
-import { getWellness, importGadgetbridge } from "../api/endpoints";
+import { getWellness, importGadgetbridge, importZepp } from "../api/endpoints";
 import type { WellnessSample } from "../api/types";
 import { useWellnessLive } from "../hooks/useWellnessLive";
 
@@ -251,6 +251,69 @@ function GadgetbridgeCard() {
   );
 }
 
+/** Import a zipped Zepp/Amazfit app export (all-day HR, sleep staging, steps,
+ *  calories, weight). One account → one Zepp source; re-uploading replaces. */
+function ZeppCard() {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onFile = async (f: File | undefined) => {
+    if (!f) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await importZepp(f);
+      const breakdown = r.by_kind.map((k) => `${k.count.toLocaleString()} ${k.kind}`).join(" · ");
+      setResult(`Imported ${r.ingested.toLocaleString()} readings into ${r.source} — ${breakdown}.`);
+      setTimeout(() => window.location.reload(), 1800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card__head">
+        <div className="card__title">
+          Import from Zepp / Amazfit<span className="sub">app export · cloudless</span>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
+        In the Zepp app → <b>Profile → Settings → About → Export data</b>, then zip the exported
+        folder and upload it here to ingest all-day heart rate, sleep staging (→ sleep score),
+        daily steps &amp; calories, and weight.
+      </p>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".zip,application/zip"
+        style={{ display: "none" }}
+        disabled={busy}
+        onChange={(e) => void onFile(e.target.files?.[0])}
+      />
+      <button type="button" className="btn" disabled={busy} onClick={() => inputRef.current?.click()}>
+        {busy ? "Importing…" : "Choose Zepp export (.zip)"}
+      </button>
+      {result && (
+        <div className="pill pill--good" style={{ marginTop: 12, justifyContent: "flex-start" }}>
+          {result}
+        </div>
+      )}
+      {error && (
+        <div className="pill pill--bad" style={{ marginTop: 12, justifyContent: "flex-start" }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Live real-time card: current HR from the wellness WebSocket + a sparkline. */
 function LiveCard() {
   const live = useWellnessLive();
@@ -338,6 +401,7 @@ export function Wellness() {
 
       {/* import wellness from a Gadgetbridge export DB (works on web + the app) */}
       <GadgetbridgeCard />
+      <ZeppCard />
 
       {/* stat tiles */}
       <div className="grid grid--stats" style={{ marginBottom: "var(--gap)" }}>

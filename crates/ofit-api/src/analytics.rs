@@ -47,10 +47,11 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 
 /// The wellness kinds the built-in algorithms consume; we load each once and
 /// flatten into [`AnalyticsInput::wellness`].
-const ANALYTICS_WELLNESS_KINDS: [WellnessKind; 3] = [
+const ANALYTICS_WELLNESS_KINDS: [WellnessKind; 4] = [
     WellnessKind::Hrv,
     WellnessKind::RestingHeartRate,
     WellnessKind::HeartRate,
+    WellnessKind::SleepStage,
 ];
 
 /// Assemble the full algorithm registry: built-ins + any WASM plugins under the

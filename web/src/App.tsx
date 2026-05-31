@@ -11,6 +11,7 @@ import { Activities } from "./screens/Activities";
 import { Wellness } from "./screens/Wellness";
 import { Settings } from "./screens/Settings";
 import { Algorithms } from "./screens/Algorithms";
+import { Sleep } from "./screens/Sleep";
 import { ComingSoon } from "./screens/ComingSoon";
 import { Spinner } from "./ui/primitives";
 
@@ -45,17 +46,7 @@ export function App() {
       <Route path="/algorithms" element={<Algorithms />} />
 
       {/* Nav items without a module yet → generic empty-state screen. */}
-      <Route
-        path="/sleep"
-        element={
-          <ComingSoon
-            title="Sleep"
-            crumb="Sleep staging & overnight recovery"
-            phase="Phase 4"
-            hint="Sleep staging arrives with the wellness ingestion phase."
-          />
-        }
-      />
+      <Route path="/sleep" element={<Sleep />} />
       <Route
         path="/trends"
         element={

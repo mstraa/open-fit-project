@@ -494,6 +494,71 @@ pub async fn import_gadgetbridge(
     Ok(Json(GadgetbridgeImportResponse { devices: results, ingested: total }))
 }
 
+/// `POST /api/import/zepp` — upload a **zipped** Zepp/Amazfit app export; extract
+/// the continuous wellness (all-day HR, sleep staging, daily steps/calories,
+/// weight) and ingest it, attributed to one Zepp source for the account. The
+/// import is idempotent per source (re-uploading replaces, never duplicates).
+#[utoipa::path(
+    post, path = "/api/import/zepp",
+    responses((status = 200, body = ZeppImportResponse))
+)]
+pub async fn import_zepp(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<ZeppImportResponse>, ApiError> {
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("multipart error: {e}")))?
+    {
+        if let Ok(b) = field.bytes().await {
+            data = Some(b.to_vec());
+            break;
+        }
+    }
+    let bytes = data.ok_or_else(|| err(StatusCode::BAD_REQUEST, "no file uploaded".to_string()))?;
+
+    // Unzip + parse off the async runtime (CPU-bound, ~0.8M rows).
+    let imp = tokio::task::spawn_blocking(move || ofit_ingest::read_zepp_zip(&bytes))
+        .await
+        .map_err(internal)?
+        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+
+    let source_id = state
+        .db
+        .ensure_source(SourceKind::Gadgetbridge, &imp.source_name)
+        .await
+        .map_err(internal)?;
+    state.db.delete_wellness_for_source(source_id).await.map_err(internal)?;
+
+    let mut counts: std::collections::HashMap<ofit_core::WellnessKind, usize> = std::collections::HashMap::new();
+    let samples: Vec<ofit_core::WellnessSample> = imp
+        .readings
+        .iter()
+        .map(|r| {
+            *counts.entry(r.kind).or_default() += 1;
+            ofit_core::WellnessSample::scalar(source_id, r.kind, r.value, r.ts)
+        })
+        .collect();
+    for chunk in samples.chunks(5_000) {
+        state.db.insert_wellness_samples(chunk).await.map_err(internal)?;
+    }
+
+    let mut by_kind: Vec<WellnessKindCount> = counts
+        .into_iter()
+        .map(|(kind, count)| WellnessKindCount { kind, count })
+        .collect();
+    by_kind.sort_by(|a, b| b.count.cmp(&a.count));
+
+    Ok(Json(ZeppImportResponse {
+        source: imp.source_name,
+        ingested: samples.len(),
+        by_kind,
+        skipped: imp.skipped,
+    }))
+}
+
 /// `POST /api/wellness` — batch-ingest continuous wellness samples (the
 /// streaming/relay write path). Persists them and fans each out live to the
 /// `/api/wellness/live` subscribers.

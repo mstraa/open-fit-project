@@ -4,196 +4,30 @@
 // (0x180D), Cycling Power (0x1818, Stryd power), Running Speed & Cadence
 // (0x1814) — straight into /api/wellness (so it shows on the live card + stores).
 //
+// The connection itself lives in the app-global BleProvider (mounted above the
+// router) so it SURVIVES navigation — this screen is just the scan/connect UI.
+// Walk over to Wellness while connected and the live HR keeps streaming.
+//
 // Proprietary, device-specific protocols (full Helio/Garmin) stay on the
 // Gadgetbridge-DB path (2a) until/unless we vendor those modules.
 //
 // Works in the Android app (Capacitor BLE) and in Chrome (Web Bluetooth). All
 // BLE is verified on-device — there is no BLE in CI.
 
-import { useCallback, useRef, useState } from "react";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
-import { ingestWellness } from "../api/endpoints";
-
-// Standard 16-bit GATT UUIDs (expanded to the full 128-bit base form).
-const uuid = (short: string) => `0000${short}-0000-1000-8000-00805f9b34fb`;
-const HR_SERVICE = uuid("180d");
-const HR_MEASUREMENT = uuid("2a37");
-const CP_SERVICE = uuid("1818"); // Cycling Power (Stryd reports running power here)
-const CP_MEASUREMENT = uuid("2a63");
-const RSC_SERVICE = uuid("1814"); // Running Speed and Cadence
-const RSC_MEASUREMENT = uuid("2a53");
-
-interface Found {
-  deviceId: string;
-  name: string;
-  rssi?: number;
-  services: string[];
-}
-
-interface Live {
-  hr?: number;
-  power?: number;
-  cadence?: number;
-  speed?: number;
-}
-
-type State =
-  | { kind: "idle" }
-  | { kind: "scanning"; found: Found[] }
-  | { kind: "scanned"; found: Found[] }
-  | { kind: "connected"; name: string; live: Live }
-  | { kind: "error"; message: string };
-
-function shortHas(services: string[], short: string): boolean {
-  const u = uuid(short);
-  return services.some((s) => s.toLowerCase() === u || s.toLowerCase() === short);
-}
-
-/** Heart Rate Measurement (0x2A37): flags byte, then uint8 or uint16 HR. */
-function parseHr(v: DataView): number {
-  const flags = v.getUint8(0);
-  return flags & 0x01 ? v.getUint16(1, true) : v.getUint8(1);
-}
-/** Cycling Power Measurement (0x2A63): flags (2), instantaneous power sint16 @2. */
-function parsePower(v: DataView): number {
-  return v.getInt16(2, true);
-}
-/** RSC Measurement (0x2A53): flags, speed uint16 (1/256 m/s) @1, cadence uint8 @3. */
-function parseRsc(v: DataView): { speed: number; cadence: number } {
-  return { speed: v.getUint16(1, true) / 256, cadence: v.getUint8(3) };
-}
+import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
 
 export function BleDevices() {
-  const [state, setState] = useState<State>({ kind: "idle" });
-  const apiRef = useRef<typeof import("@capacitor-community/bluetooth-le").BleClient | null>(null);
-  const connectedId = useRef<string | null>(null);
-
-  const ble = useCallback(async () => {
-    if (!apiRef.current) {
-      const mod = await import("@capacitor-community/bluetooth-le");
-      await mod.BleClient.initialize({ androidNeverForLocation: true });
-      apiRef.current = mod.BleClient;
-    }
-    return apiRef.current;
-  }, []);
-
-  const connect = useCallback(
-    async (dev: Found) => {
-      try {
-        const client = await ble();
-        await client.connect(dev.deviceId, () => {
-          connectedId.current = null;
-          setState({ kind: "scanned", found: [] });
-        });
-        connectedId.current = dev.deviceId;
-        const live: Live = {};
-        setState({ kind: "connected", name: dev.name, live });
-
-        let lastPush = 0;
-        const pushHr = (hr: number) => {
-          const now = Date.now();
-          if (now - lastPush > 900) {
-            lastPush = now;
-            void ingestWellness([{ kind: "heart_rate", value: hr }]).catch(() => undefined);
-          }
-        };
-
-        // Subscribe to whatever standard services the device offers.
-        try {
-          await client.startNotifications(dev.deviceId, HR_SERVICE, HR_MEASUREMENT, (v) => {
-            live.hr = parseHr(v);
-            setState({ kind: "connected", name: dev.name, live: { ...live } });
-            pushHr(live.hr);
-          });
-        } catch {
-          /* no HR service */
-        }
-        try {
-          await client.startNotifications(dev.deviceId, CP_SERVICE, CP_MEASUREMENT, (v) => {
-            live.power = parsePower(v);
-            setState({ kind: "connected", name: dev.name, live: { ...live } });
-          });
-        } catch {
-          /* no power */
-        }
-        try {
-          await client.startNotifications(dev.deviceId, RSC_SERVICE, RSC_MEASUREMENT, (v) => {
-            const { speed, cadence } = parseRsc(v);
-            live.speed = speed;
-            live.cadence = cadence;
-            setState({ kind: "connected", name: dev.name, live: { ...live } });
-          });
-        } catch {
-          /* no RSC */
-        }
-      } catch (e) {
-        setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
-      }
-    },
-    [ble],
-  );
-
-  const scan = useCallback(async () => {
-    try {
-      const client = await ble();
-      // Native (Android) supports a continuous scan → list everything nearby.
-      const found: Found[] = [];
-      setState({ kind: "scanning", found });
-      await client.requestLEScan({}, (r) => {
-        const id = r.device.deviceId;
-        if (found.some((f) => f.deviceId === id)) return;
-        found.push({
-          deviceId: id,
-          name: r.device.name || r.localName || "(unnamed)",
-          rssi: r.rssi,
-          services: (r.uuids ?? []).map((u) => u.toLowerCase()),
-        });
-        setState({ kind: "scanning", found: [...found] });
-      });
-      setTimeout(async () => {
-        try {
-          await client.stopLEScan();
-        } catch {
-          /* ignore */
-        }
-        setState({ kind: "scanned", found: [...found].sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999)) });
-      }, 8000);
-    } catch {
-      // Desktop Chrome (Web Bluetooth) has no continuous scan → use the OS
-      // device picker (filtered to the HR service) and connect directly.
-      try {
-        const client = await ble();
-        const device = await client.requestDevice({
-          services: [HR_SERVICE],
-          optionalServices: [CP_SERVICE, RSC_SERVICE],
-        });
-        await connect({ deviceId: device.deviceId, name: device.name || "(device)", services: [HR_SERVICE] });
-      } catch (e) {
-        setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
-      }
-    }
-  }, [ble, connect]);
-
-  const disconnect = useCallback(async () => {
-    const client = apiRef.current;
-    if (client && connectedId.current) {
-      try {
-        await client.disconnect(connectedId.current);
-      } catch {
-        /* ignore */
-      }
-    }
-    connectedId.current = null;
-    setState({ kind: "scanned", found: [] });
-  }, []);
+  const { status, found, live, device, message, scan, connect, disconnect } = useBle();
+  const live_ = status === "connected" || status === "reconnecting";
 
   return (
     <AppShell
       title="Devices & sources"
       crumb="Direct BLE · real-time · cloudless"
       actions={
-        state.kind === "connected" ? (
+        live_ ? (
           <button type="button" className="btn btn--ghost" onClick={() => void disconnect()}>
             Disconnect
           </button>
@@ -201,10 +35,10 @@ export function BleDevices() {
           <button
             type="button"
             className="btn"
-            disabled={state.kind === "scanning"}
+            disabled={status === "scanning" || status === "connecting"}
             onClick={() => void scan()}
           >
-            {state.kind === "scanning" ? "Scanning…" : "Scan for BLE devices"}
+            {status === "scanning" ? "Scanning…" : "Scan for BLE devices"}
           </button>
         )
       }
@@ -216,18 +50,21 @@ export function BleDevices() {
           <span className="muted">
             Streams live heart rate / power / cadence from devices that expose the standard
             GATT services — no Gadgetbridge in the loop. Put your watch in "Broadcast HR"
-            mode and your strap/Stryd active. (Runs on the phone; Bluetooth required.)
+            mode and your strap/Stryd active. The connection stays alive as you move between
+            screens. (Runs on the phone; Bluetooth required.)
           </span>
         </div>
       </div>
 
-      {state.kind === "connected" ? (
-        <ConnectedView name={state.name} live={state.live} />
-      ) : state.kind === "error" ? (
-        <EmptyState label="Bluetooth error" hint={state.message} />
-      ) : "found" in state && state.found.length > 0 ? (
-        <DeviceList found={state.found} onConnect={(d) => void connect(d)} />
-      ) : state.kind === "scanning" ? (
+      {live_ && device ? (
+        <ConnectedView name={device.name} live={live} reconnecting={status === "reconnecting"} />
+      ) : status === "connecting" ? (
+        <EmptyState label={`Connecting to ${device?.name ?? "device"}…`} />
+      ) : status === "error" ? (
+        <EmptyState label="Bluetooth error" hint={message} />
+      ) : found.length > 0 ? (
+        <DeviceList found={found} onConnect={(d) => void connect(d)} />
+      ) : status === "scanning" ? (
         <EmptyState label="Scanning for nearby devices…" />
       ) : (
         <div
@@ -260,10 +97,7 @@ function DeviceList({ found, onConnect }: { found: Found[]; onConnect: (d: Found
   return (
     <div className="card card--pad0">
       {found.map((d) => {
-        const tags: string[] = [];
-        if (shortHas(d.services, "180d")) tags.push("Heart Rate");
-        if (shortHas(d.services, "1818")) tags.push("Power");
-        if (shortHas(d.services, "1814")) tags.push("Speed/Cadence");
+        const tags = serviceLabel(d.services);
         return (
           <div key={d.deviceId} className="dev" style={{ padding: "12px 16px" }}>
             <div className="dev__b">
@@ -283,13 +117,13 @@ function DeviceList({ found, onConnect }: { found: Found[]; onConnect: (d: Found
   );
 }
 
-function ConnectedView({ name, live }: { name: string; live: Live }) {
+function ConnectedView({ name, live, reconnecting }: { name: string; live: Live; reconnecting: boolean }) {
   return (
     <>
       <div className="card" style={{ marginBottom: "var(--gap)", display: "flex", alignItems: "center", gap: 12 }}>
-        <span className="dot-live" />
+        <span className="dot-live" style={reconnecting ? { background: "var(--warn, #e0a83e)" } : undefined} />
         <b>{name}</b>
-        <span className="muted">streaming live → wellness</span>
+        <span className="muted">{reconnecting ? "reconnecting…" : "streaming live → wellness"}</span>
       </div>
       <div className="grid grid--stats">
         <LiveTile tint="t-hr" label="Heart rate" value={live.hr} unit="bpm" />

@@ -301,6 +301,20 @@ pub struct GadgetbridgeImportResponse {
     pub ingested: usize,
 }
 
+/// Response of `POST /api/import/zepp` — a Zepp app-export (.zip) holds one
+/// account's continuous wellness across several CSV categories.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ZeppImportResponse {
+    /// Source the readings were attributed to (e.g. `"Zepp (mstraa)"`).
+    pub source: String,
+    /// Total readings ingested.
+    pub ingested: usize,
+    /// Per-kind breakdown.
+    pub by_kind: Vec<WellnessKindCount>,
+    /// Categories present in the export but deliberately not imported, with why.
+    pub skipped: Vec<String>,
+}
+
 /// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a
 /// JSON text frame — the real-time fan-out of the ingest path to the dashboard.
 #[derive(Debug, Clone, Serialize, ToSchema)]

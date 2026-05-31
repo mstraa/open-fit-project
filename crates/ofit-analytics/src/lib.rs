@@ -24,7 +24,7 @@ pub mod input;
 pub mod params;
 pub mod runner;
 
-pub use algorithms::{AnomalyFlag, Readiness, TrainingLoad, TssMethod};
+pub use algorithms::{AnomalyFlag, Readiness, Sleep, TrainingLoad, TssMethod};
 pub use input::{ActivityInput, AnalyticsInput, MetricSeries, WellnessPoint};
 pub use params::{AthleteThresholds, LoadTimeConstants, ReadinessParams};
 pub use runner::{AlgorithmOutputs, RunnableAlgorithm};
@@ -39,6 +39,7 @@ pub fn builtin_algorithms() -> Vec<Box<dyn RunnableAlgorithm>> {
     vec![
         Box::new(TrainingLoad::default()),
         Box::new(Readiness::default()),
+        Box::new(Sleep::default()),
         Box::new(AnomalyFlag::default()),
     ]
 }
@@ -105,7 +106,7 @@ mod tests {
     #[test]
     fn builtin_registry_specs_are_versioned_and_well_formed() {
         let specs = builtin_specs();
-        assert_eq!(specs.len(), 3);
+        assert_eq!(specs.len(), 4);
         for s in &specs {
             assert!(!s.id.is_empty());
             // version parses as semver-ish (three dot-separated numbers).
@@ -119,7 +120,7 @@ mod tests {
         let mut ids: Vec<_> = specs.iter().map(|s| s.id.clone()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 3);
+        assert_eq!(ids.len(), 4);
     }
 
     #[test]

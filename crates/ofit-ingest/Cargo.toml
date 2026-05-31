@@ -10,6 +10,7 @@ ofit-db.workspace = true
 sqlx.workspace = true
 fitparser.workspace = true
 gpx.workspace = true
+zip.workspace = true
 quick-xml.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

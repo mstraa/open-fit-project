@@ -276,6 +276,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/import/zepp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/import/zepp` — upload a **zipped** Zepp/Amazfit app export; extract
+         *     the continuous wellness (all-day HR, sleep staging, daily steps/calories,
+         *     weight) and ingest it, attributed to one Zepp source for the account. The
+         *     import is idempotent per source (re-uploading replaces, never duplicates).
+         */
+        post: operations["import_zepp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/preferences": {
         parameters: {
             query?: never;
@@ -936,7 +958,7 @@ export interface components {
          *     a single numeric column for high-rate streaming.
          * @enum {string}
          */
-        WellnessKind: "heart_rate" | "sleep_stage" | "resting_heart_rate" | "hrv" | "stress" | "body_battery" | "respiration" | "sp_o2" | "steps";
+        WellnessKind: "heart_rate" | "sleep_stage" | "resting_heart_rate" | "hrv" | "stress" | "body_battery" | "respiration" | "sp_o2" | "steps" | "weight" | "calories";
         /** @description Count of ingested readings of one wellness kind. */
         WellnessKindCount: {
             count: number;
@@ -966,6 +988,20 @@ export interface components {
             kind: components["schemas"]["WellnessKind"];
             /** @description Trend samples, ascending by time (may be empty for this dataset). */
             points: components["schemas"]["WellnessPoint"][];
+        };
+        /**
+         * @description Response of `POST /api/import/zepp` — a Zepp app-export (.zip) holds one
+         *     account's continuous wellness across several CSV categories.
+         */
+        ZeppImportResponse: {
+            /** @description Per-kind breakdown. */
+            by_kind: components["schemas"]["WellnessKindCount"][];
+            /** @description Total readings ingested. */
+            ingested: number;
+            /** @description Categories present in the export but deliberately not imported, with why. */
+            skipped: string[];
+            /** @description Source the readings were attributed to (e.g. `"Zepp (mstraa)"`). */
+            source: string;
         };
     };
     responses: never;
@@ -1306,6 +1342,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GadgetbridgeImportResponse"];
+                };
+            };
+        };
+    };
+    import_zepp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZeppImportResponse"];
                 };
             };
         };

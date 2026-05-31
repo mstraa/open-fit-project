@@ -312,6 +312,21 @@ export async function importGadgetbridge(file: File): Promise<GadgetbridgeImport
   return apiPostForm<GadgetbridgeImportResult>("/api/import/gadgetbridge", form);
 }
 
+/** Response of POST /api/import/zepp (one Zepp account export .zip). */
+export interface ZeppImportResult {
+  source: string;
+  ingested: number;
+  by_kind: { kind: string; count: number }[];
+  skipped: string[];
+}
+
+/** Upload a zipped Zepp/Amazfit app export → ingest its wellness. */
+export async function importZepp(file: File): Promise<ZeppImportResult> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return apiPostForm<ZeppImportResult>("/api/import/zepp", form);
+}
+
 /* ------------------------------------------------------------- version */
 
 /** GET /api/version — backend build/version metadata. Tolerant of field drift. */
