@@ -72,15 +72,18 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const token = getToken();
+  // Pull `headers` out of init so the spread below can't clobber the merged
+  // headers (the Bearer token) — that bug made every POST/PUT 401 on mobile.
+  const { headers: initHeaders, ...restInit } = init ?? {};
   const res = await fetch(url, {
     // Cookie auth for same-origin web; Bearer token for the cross-origin mobile app.
     credentials: "include",
+    ...restInit,
     headers: {
       Accept: "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {}),
+      ...(initHeaders ?? {}),
     },
-    ...init,
   });
   if (!res.ok) {
     throw new ApiError(`${res.status} ${res.statusText}`, res.status);
