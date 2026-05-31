@@ -22,7 +22,6 @@ import {
   MenuIcon,
   SettingsIcon,
   SleepIcon,
-  TrendsIcon,
   WellnessIcon,
 } from "./icons";
 
@@ -114,7 +113,6 @@ function Rail({ open }: { open: boolean }) {
         <NavItem to="/activities" icon={<ActivitiesIcon />} label="Activities" badge={activityBadge} />
         <NavItem to="/wellness" icon={<WellnessIcon />} label="Wellness" />
         <NavItem to="/sleep" icon={<SleepIcon />} label="Sleep" />
-        <NavItem to="/trends" icon={<TrendsIcon />} label="Trends" />
         <div className="nav__label">System</div>
         <NavItem to="/devices" icon={<DevicesIcon />} label="Devices & sources" />
         <NavItem to="/algorithms" icon={<AlgorithmsIcon />} label="Algorithms" badge={algorithmBadge} />

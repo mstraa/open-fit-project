@@ -211,7 +211,7 @@ function DetailBody({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 220px), 1fr))",
               gap: "var(--space-3)",
             }}
           >

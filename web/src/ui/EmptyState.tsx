@@ -11,7 +11,8 @@ export interface EmptyStateProps {
   label?: string;
   /** Optional supporting line, e.g. "Wellness ingestion lands next phase." */
   hint?: ReactNode;
-  /** Optional phase tag, e.g. "Phase 3" → renders a "· Phase 3" pill. */
+  /** Deprecated/ignored: roadmap "Phase N" tags are no longer rendered. Kept so
+   *  existing call sites still type-check; remove the props at leisure. */
   phase?: string;
   /** Override the default glyph. */
   icon?: ReactNode;
@@ -22,7 +23,6 @@ export interface EmptyStateProps {
 export function EmptyState({
   label = "No data yet",
   hint,
-  phase,
   icon,
   compact = false,
 }: EmptyStateProps) {
@@ -59,14 +59,6 @@ export function EmptyState({
       </span>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{label}</span>
-        {phase ? (
-          <span
-            className="tag"
-            style={{ fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}
-          >
-            {phase}
-          </span>
-        ) : null}
       </div>
       {hint ? (
         <div style={{ fontSize: 11.5, color: "var(--faint)", maxWidth: "44ch" }}>{hint}</div>

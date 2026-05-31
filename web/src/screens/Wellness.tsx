@@ -1,16 +1,13 @@
-// Wellness screen — faithful port of docs/designs/wellness.html.
+// Wellness screen — faithful port of docs/designs/wellness.html, wired to live
+// data (Gadgetbridge / Zepp imports + the live BLE feed via the wellness API).
+//   - readiness banner (readiness algorithm)
+//   - 4 stat tiles: latest resting HR · HRV · stress avg · body battery
+//   - main column: last-night sleep (sleep algorithm) · HRV trend · body-battery
+//   - side column: resting HR · stress · steps
 //
-// This is Phase 4: there is no backend wellness ingestion yet (resting HR, HRV,
-// stress, sleep, body battery, steps), so EVERY data module renders the on-brand
-// <EmptyState label="No data yet" phase="Phase 4" /> per the hard project rules
-// — never fake numbers. The full design STRUCTURE, labels and layout are kept:
-//   - readiness banner
-//   - 4 stat tiles (resting HR · HRV · stress · body battery)
-//   - main column: last-night sleep · HRV trend · body-battery 24h
-//   - side column: resting HR 7d · stress today · steps this week
-//
-// getWellness() is wired defensively for each kind: if the backend ever returns
-// samples, we render a small on-brand SVG sparkline; otherwise the empty state.
+// Each module renders a real sparkline from getWellness(); when a metric has no
+// samples for this account/hardware it falls back to the on-brand empty state
+// (never fake numbers).
 
 import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
 import { Link } from "react-router-dom";
@@ -316,7 +313,9 @@ function ZeppCard() {
       const r = await importZepp(f);
       const breakdown = r.by_kind.map((k) => `${k.count.toLocaleString()} ${k.kind}`).join(" · ");
       const acts = r.activities_imported ? ` + ${r.activities_imported} workouts → Activities` : "";
-      setResult(`Imported ${r.ingested.toLocaleString()} readings into ${r.source} — ${breakdown}${acts}.`);
+      const dups = r.activities_skipped_dup + r.duplicate_summaries_removed;
+      const deduped = dups ? ` (skipped ${dups} that duplicate your .fit imports)` : "";
+      setResult(`Imported ${r.ingested.toLocaleString()} readings into ${r.source} — ${breakdown}${acts}${deduped}.`);
       setTimeout(() => window.location.reload(), 1800);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -383,7 +382,10 @@ function LiveCard() {
     .join(" ");
 
   return (
-    <div className="card" style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 18 }}>
+    <div
+      className="card"
+      style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}
+    >
       <div className="stat__ico t-hr" style={{ marginBottom: 0 }}>
         <HeartGlyph />
       </div>
@@ -393,7 +395,13 @@ function LiveCard() {
           {hr ? Math.round(hr.value) : "—"} <small>bpm</small>
         </div>
       </div>
-      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ flex: "0 0 auto" }} aria-hidden>
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        preserveAspectRatio="none"
+        height={h}
+        style={{ flex: "1 1 120px", minWidth: 120, maxWidth: "100%", height: h }}
+        aria-hidden
+      >
         {path && <path d={path} fill="none" stroke="var(--hr)" strokeWidth={2} />}
       </svg>
       <span

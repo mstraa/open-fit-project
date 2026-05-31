@@ -329,6 +329,8 @@ export interface ZeppImportResult {
   ingested: number;
   by_kind: { kind: string; count: number }[];
   activities_imported: number;
+  activities_skipped_dup: number;
+  duplicate_summaries_removed: number;
   skipped: string[];
 }
 

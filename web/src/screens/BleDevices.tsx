@@ -46,7 +46,7 @@ export function BleDevices() {
       <div className="banner" style={{ marginBottom: 24 }}>
         <BleIcon />
         <div>
-          <b>Direct BLE (Phase 2b).</b>{" "}
+          <b>Direct BLE.</b>{" "}
           <span className="muted">
             Streams live heart rate / power / cadence from devices that expose the standard
             GATT services — no Gadgetbridge in the loop. Put your watch in "Broadcast HR"

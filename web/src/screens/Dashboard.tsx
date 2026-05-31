@@ -569,12 +569,12 @@ function WellnessLatestTile({
 function StatTileEmpty({
   tint,
   label,
-  phase,
   icon,
 }: {
   tint: string;
   label: string;
-  phase: string;
+  /** Ignored — kept so call sites still type-check. */
+  phase?: string;
   icon: ReactNode;
 }) {
   return (
@@ -586,7 +586,7 @@ function StatTileEmpty({
       </div>
       <div className="stat__delta flat">
         <span className="tag" style={{ fontFamily: "var(--font-mono)" }}>
-          No data · {phase}
+          No data yet
         </span>
       </div>
     </div>

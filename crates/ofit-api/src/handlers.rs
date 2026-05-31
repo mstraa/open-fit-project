@@ -505,6 +505,72 @@ pub async fn import_gadgetbridge(
     Ok(Json(GadgetbridgeImportResponse { devices: results, ingested: total }))
 }
 
+/// Windows `(sport, start, end)` of **real** (non summary-only) activities — a
+/// Zepp summary overlapping one of these (same sport) is a duplicate of a real
+/// recorded effort. An activity is "real" if it has ≥1 non-summary recording.
+async fn real_activity_windows(
+    db: &ofit_db::Db,
+) -> Result<Vec<(ofit_core::Sport, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>, ofit_db::DbError>
+{
+    let acts = db.list_activities().await?;
+    let recs = db.list_recordings().await?;
+    let summary_only: std::collections::HashSet<uuid::Uuid> = recs
+        .iter()
+        .filter(|r| r.metadata.get("summary_only").and_then(|v| v.as_bool()).unwrap_or(false))
+        .map(|r| r.id)
+        .collect();
+    Ok(acts
+        .into_iter()
+        .filter(|a| a.recording_ids.iter().any(|rid| !summary_only.contains(rid)))
+        .map(|a| (a.sport, a.started_at, a.ended_at))
+        .collect())
+}
+
+/// Delete summary-only activities that duplicate a real streamed activity (same
+/// sport, overlapping window). A summary-only activity is one whose every member
+/// recording is `summary_only`. Idempotent: only the activity grouping is removed
+/// (the `RawRecording`s are preserved), so re-running is a no-op. Returns count.
+async fn cleanup_duplicate_summary_activities(db: &ofit_db::Db) -> Result<usize, ofit_db::DbError> {
+    let acts = db.list_activities().await?;
+    let recs = db.list_recordings().await?;
+    let summary_only: std::collections::HashSet<uuid::Uuid> = recs
+        .iter()
+        .filter(|r| r.metadata.get("summary_only").and_then(|v| v.as_bool()).unwrap_or(false))
+        .map(|r| r.id)
+        .collect();
+    let real: Vec<(ofit_core::Sport, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = acts
+        .iter()
+        .filter(|a| a.recording_ids.iter().any(|rid| !summary_only.contains(rid)))
+        .map(|a| (a.sport, a.started_at, a.ended_at))
+        .collect();
+    let mut deleted = 0usize;
+    for a in &acts {
+        let is_summary_only =
+            !a.recording_ids.is_empty() && a.recording_ids.iter().all(|rid| summary_only.contains(rid));
+        if !is_summary_only {
+            continue;
+        }
+        if real
+            .iter()
+            .any(|(sport, s, e)| *sport == a.sport && ofit_core::overlaps((a.started_at, a.ended_at), (*s, *e)))
+        {
+            db.delete_activity(a.id).await?;
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
+/// `POST /api/maintenance/dedup-zepp-summaries` — one-shot cleanup of summary
+/// activities that duplicate a real streamed activity. Returns `{ deleted }`.
+#[utoipa::path(post, path = "/api/maintenance/dedup-zepp-summaries", responses((status = 200, body = DedupResponse)))]
+pub async fn dedup_zepp_summaries(
+    State(state): State<AppState>,
+) -> Result<Json<DedupResponse>, ApiError> {
+    let deleted = cleanup_duplicate_summary_activities(&state.db).await.map_err(internal)?;
+    Ok(Json(DedupResponse { deleted }))
+}
+
 /// `POST /api/import/zepp` — upload a **zipped** Zepp/Amazfit app export; extract
 /// the continuous wellness (all-day HR, sleep staging, daily steps/calories,
 /// weight) and ingest it, attributed to one Zepp source for the account. The
@@ -564,7 +630,11 @@ pub async fn import_zepp(
 
     // Workout summaries (SPORT) → stream-less "summary activities": one recording
     // per workout whose totals live in metadata. Idempotent by a stable hash.
+    // Real (non-summary) activity windows, loaded once: a summary overlapping a
+    // real streamed activity of the same sport is a duplicate of the .fit import.
+    let real_windows = real_activity_windows(&state.db).await.map_err(internal)?;
     let mut activities_imported = 0usize;
+    let mut activities_skipped_dup = 0usize;
     for w in &imp.workouts {
         let hash = format!(
             "zepp-sport:{}:{}:{}",
@@ -579,6 +649,15 @@ pub async fn import_zepp(
             .map_err(internal)?
             .is_some()
         {
+            continue;
+        }
+        // Skip summaries that duplicate a real streamed activity (same sport,
+        // overlapping window); keep genuinely-new summaries standalone.
+        if real_windows
+            .iter()
+            .any(|(sport, s, e)| *sport == w.sport && ofit_core::overlaps((w.started_at, w.ended_at), (*s, *e)))
+        {
+            activities_skipped_dup += 1;
             continue;
         }
         let metadata = serde_json::json!({
@@ -611,11 +690,18 @@ pub async fn import_zepp(
         activities_imported += 1;
     }
 
+    // Self-heal: also remove any pre-existing summary activities that duplicate a
+    // real activity (e.g. imported before this guard existed).
+    let duplicate_summaries_removed =
+        cleanup_duplicate_summary_activities(&state.db).await.map_err(internal)?;
+
     Ok(Json(ZeppImportResponse {
         source: imp.source_name,
         ingested: samples.len(),
         by_kind,
         activities_imported,
+        activities_skipped_dup,
+        duplicate_summaries_removed,
         skipped: imp.skipped,
     }))
 }

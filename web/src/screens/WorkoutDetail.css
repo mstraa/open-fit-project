@@ -68,5 +68,12 @@
 .rec-chip__x:disabled { opacity: .5; cursor: progress; }
 .rec-chip__x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.summary > div { min-width: 0; }
 @media (max-width: 1180px) { .summary { grid-template-columns: repeat(3, 1fr); } .layout { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 440px) {
+  .summary { grid-template-columns: 1fr 1fr; }
+  .summary > div { padding: 12px; }
+  .summary .val { font-size: 18px; }
+  .fusion__row { grid-template-columns: 1fr; gap: 8px; }
+}

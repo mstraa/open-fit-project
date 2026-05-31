@@ -191,7 +191,12 @@ function LineChartImpl({
   }, [samples, stroke, unit, label, height, theme, syncKey, valueFormat, yAxisFormat, invertY]);
 
   // Top margin reserves a strip for the value pill that floats above the plot.
-  return <div ref={containerRef} style={{ width: "100%", position: "relative", marginTop: 16 }} />;
+  return (
+    <div
+      ref={containerRef}
+      style={{ width: "100%", maxWidth: "100%", overflow: "hidden", position: "relative", marginTop: 16 }}
+    />
+  );
 }
 
 // Memoized so per-frame cursor state in the parent doesn't rebuild every chart.

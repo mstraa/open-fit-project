@@ -114,7 +114,12 @@ function MultiLineChartImpl({ x, series, height = 220, unit = "" }: MultiLineCha
     };
   }, [x, series, height, unit, theme]);
 
-  return <div ref={containerRef} style={{ width: "100%", position: "relative", marginTop: 8 }} />;
+  return (
+    <div
+      ref={containerRef}
+      style={{ width: "100%", maxWidth: "100%", overflow: "hidden", position: "relative", marginTop: 8 }}
+    />
+  );
 }
 
 export const MultiLineChart = memo(MultiLineChartImpl);

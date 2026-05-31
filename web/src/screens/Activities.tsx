@@ -249,21 +249,23 @@ export function Activities() {
         )}
 
         {state.kind === "ok" && rows.length > 0 && (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <SortTh label="Sport" col="sport" sort={sort} onSort={onSort} />
-                <SortTh label="Started" col="started_at" sort={sort} onSort={onSort} />
-                <SortTh label="Duration" col="duration_secs" sort={sort} onSort={onSort} num />
-                <SortTh label="Recordings" col="recording_count" sort={sort} onSort={onSort} num />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((a) => (
-                <ActivityRow key={a.id} a={a} onOpen={() => navigate(`/activities/${a.id}`)} />
-              ))}
-            </tbody>
-          </table>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <SortTh label="Sport" col="sport" sort={sort} onSort={onSort} />
+                  <SortTh label="Started" col="started_at" sort={sort} onSort={onSort} />
+                  <SortTh label="Duration" col="duration_secs" sort={sort} onSort={onSort} num />
+                  <SortTh label="Recordings" col="recording_count" sort={sort} onSort={onSort} num />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((a) => (
+                  <ActivityRow key={a.id} a={a} onOpen={() => navigate(`/activities/${a.id}`)} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </AppShell>

@@ -55,6 +55,18 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; }
 
+/* ---------- global overflow guard ----------
+   Any single wide child (a chart canvas, a table, a long mono token, a device
+   pill) would otherwise leak document-level horizontal scroll on a phone WebView.
+   Clamp the shell containers; use overflow-x:clip on inner ones so the sticky
+   topbar keeps working (overflow:hidden creates a scroll container that breaks
+   position:sticky). */
+html, body { max-width: 100%; overflow-x: hidden; }
+#root { max-width: 100%; overflow-x: clip; }
+.app  { max-width: 100%; overflow-x: clip; }
+.main { min-width: 0; max-width: 100%; overflow-x: clip; }
+.content { min-width: 0; }
+
 body {
   background: var(--bg);
   color: var(--fg);
@@ -233,6 +245,7 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 11px; font-weight: 600; padding: 3px 9px 3px 7px;
   border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border);
   color: var(--muted); letter-spacing: 0;
+  max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .src__dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .src--garmin .src__dot { background: var(--pace); }
@@ -276,8 +289,13 @@ button { font-family: inherit; cursor: pointer; }
   display: flex; align-items: center; gap: 12px; padding: 11px 15px;
   border-radius: var(--r); border: 1px solid var(--accent-dim);
   background: var(--accent-ghost); font-size: 12.5px;
+  flex-wrap: wrap; min-width: 0;
 }
 .banner svg { width: 17px; height: 17px; color: var(--accent); flex: none; }
+
+/* Horizontal-scroll container so wide tables scroll inside their card instead
+   of pushing the whole page wider on a phone. */
+.tbl-wrap { width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1180px) {
@@ -297,6 +315,15 @@ button { font-family: inherit; cursor: pointer; }
   .grid--stats { grid-template-columns: 1fr 1fr; }
   .grid--2 { grid-template-columns: 1fr; }
   .topbar__crumb { display: none; }
+}
+/* Phone tier — the Android WebView is ~360-414px wide. Tighten spacing that was
+   tuned for the 620px tablet tier so the layout feels native, not cramped. */
+@media (max-width: 440px) {
+  :root { --gap: 12px; }
+  .content { padding: 12px 12px 40px; }
+  .topbar { padding: 10px 12px; gap: 8px; }
+  .grid--stats { grid-template-columns: 1fr 1fr; }
+  .card { padding: 14px; }
 }
 .menu-btn { display: none; }
 

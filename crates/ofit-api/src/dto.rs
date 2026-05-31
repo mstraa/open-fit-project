@@ -327,8 +327,20 @@ pub struct ZeppImportResponse {
     pub by_kind: Vec<WellnessKindCount>,
     /// Summary activities created from the `SPORT` workout table.
     pub activities_imported: usize,
+    /// Summary workouts skipped because a real (streamed) activity already covers
+    /// the same effort (same sport, overlapping window).
+    pub activities_skipped_dup: usize,
+    /// Pre-existing summary activities removed because they duplicate a real one.
+    pub duplicate_summaries_removed: usize,
     /// Categories present in the export but deliberately not imported, with why.
     pub skipped: Vec<String>,
+}
+
+/// Response of `POST /api/maintenance/dedup-zepp-summaries`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DedupResponse {
+    /// Number of duplicate summary activities deleted.
+    pub deleted: usize,
 }
 
 /// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a

@@ -298,6 +298,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/maintenance/dedup-zepp-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/maintenance/dedup-zepp-summaries` — one-shot cleanup of summary
+         *     activities that duplicate a real streamed activity. Returns `{ deleted }`.
+         */
+        post: operations["dedup_zepp_summaries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/preferences": {
         parameters: {
             query?: never;
@@ -525,6 +545,11 @@ export interface components {
         Credentials: {
             password: string;
             username: string;
+        };
+        /** @description Response of `POST /api/maintenance/dedup-zepp-summaries`. */
+        DedupResponse: {
+            /** @description Number of duplicate summary activities deleted. */
+            deleted: number;
         };
         /** @description A derived scalar metric for a subject (chart/tile ready). */
         DerivedMetricDto: {
@@ -1018,8 +1043,15 @@ export interface components {
         ZeppImportResponse: {
             /** @description Summary activities created from the `SPORT` workout table. */
             activities_imported: number;
+            /**
+             * @description Summary workouts skipped because a real (streamed) activity already covers
+             *     the same effort (same sport, overlapping window).
+             */
+            activities_skipped_dup: number;
             /** @description Per-kind breakdown. */
             by_kind: components["schemas"]["WellnessKindCount"][];
+            /** @description Pre-existing summary activities removed because they duplicate a real one. */
+            duplicate_summaries_removed: number;
             /** @description Total readings ingested. */
             ingested: number;
             /** @description Categories present in the export but deliberately not imported, with why. */
@@ -1385,6 +1417,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ZeppImportResponse"];
+                };
+            };
+        };
+    };
+    dedup_zepp_summaries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DedupResponse"];
                 };
             };
         };

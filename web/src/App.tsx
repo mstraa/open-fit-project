@@ -5,14 +5,12 @@
 
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { Launcher } from "./screens/Launcher";
 import { Dashboard } from "./screens/Dashboard";
 import { Activities } from "./screens/Activities";
 import { Wellness } from "./screens/Wellness";
 import { Settings } from "./screens/Settings";
 import { Algorithms } from "./screens/Algorithms";
 import { Sleep } from "./screens/Sleep";
-import { ComingSoon } from "./screens/ComingSoon";
 import { Spinner } from "./ui/primitives";
 
 // Code-split the detail screen: it pulls in uPlot + MapLibre GL, which are heavy.
@@ -28,8 +26,8 @@ const BleDevices = lazy(() =>
 export function App() {
   return (
     <Routes>
-      {/* index.html is the launcher/overview surface (no rail). */}
-      <Route path="/" element={<Launcher />} />
+      {/* App opens directly to the dashboard (no separate launcher page). */}
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/activities" element={<Activities />} />
@@ -45,19 +43,7 @@ export function App() {
       <Route path="/settings" element={<Settings />} />
       <Route path="/algorithms" element={<Algorithms />} />
 
-      {/* Nav items without a module yet → generic empty-state screen. */}
       <Route path="/sleep" element={<Sleep />} />
-      <Route
-        path="/trends"
-        element={
-          <ComingSoon
-            title="Trends"
-            crumb="Long-term fitness & wellness trends"
-            phase="Phase 4"
-            hint="Trend analysis builds on accumulated activity and wellness history."
-          />
-        }
-      />
       <Route
         path="/devices"
         element={
@@ -67,8 +53,8 @@ export function App() {
         }
       />
 
-      {/* Unknown routes redirect to the launcher. */}
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Unknown routes redirect to the dashboard. */}
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }

@@ -77,6 +77,7 @@ struct Version {
         handlers::import,
         handlers::import_gadgetbridge,
         handlers::import_zepp,
+        handlers::dedup_zepp_summaries,
         handlers::list_sources,
         handlers::list_activities,
         handlers::get_activity,
@@ -98,6 +99,7 @@ struct Version {
         dto::GadgetbridgeImportResponse,
         dto::GadgetbridgeDeviceResult,
         dto::ZeppImportResponse,
+        dto::DedupResponse,
         dto::ActivitySummaryStats,
         dto::WellnessKindCount,
         dto::SourceDto,
@@ -207,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
             "/import/zepp",
             post(handlers::import_zepp).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
         )
+        .route("/maintenance/dedup-zepp-summaries", post(handlers::dedup_zepp_summaries))
         .route("/sources", get(handlers::list_sources))
         .route("/activities", get(handlers::list_activities))
         .route("/activities/:id", get(handlers::get_activity))
