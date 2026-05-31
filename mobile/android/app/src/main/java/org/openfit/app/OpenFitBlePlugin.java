@@ -17,8 +17,6 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 
-import androidx.annotation.NonNull;
-
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -28,32 +26,25 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import org.openfit.app.huami.HuamiSession;
+
 import java.util.ArrayDeque;
 import java.util.UUID;
 
 /**
- * OpenFit native BLE plugin — M0 of the direct-device port (see docs/NATIVE-BLE-PORT.md).
- *
- * This is the device-AGNOSTIC backbone every future device protocol plugs into:
- *  - a native {@link BluetoothGatt} connection (full control of MTU/notify/bonding,
- *    unlike the Web-Bluetooth bridge),
- *  - a SERIALIZED GATT operation queue (Android runs one GATT op at a time; each op
- *    waits for its callback before the next is issued),
- *  - JS↔native event streaming via {@code notifyListeners}.
- *
- * M0 proves the round-trip by reading the STANDARD Heart Rate service (0x180D / 0x2A37)
- * over this native path. The Huami (Helio) and Garmin protocols (M1+) reuse the same
- * queue/connection and add their auth + message parsers.
+ * OpenFit native BLE plugin. Two modes:
+ *  - "standard": read the standard Heart Rate service (0x180D/0x2A37). [M0]
+ *  - "huami":    Zepp-OS / Huami auth handshake + encrypted transport → realtime
+ *                HR over the standard 0x2A37 char, gated behind auth. [M1]
+ * See docs/NATIVE-BLE-PORT.md. The serialized GATT op queue + scan/connect are
+ * shared; the Huami protocol logic lives under org.openfit.app.huami.
  */
 @CapacitorPlugin(
     name = "OpenFitBle",
     permissions = {
         @Permission(
             alias = "ble",
-            strings = {
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            }
+            strings = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT}
         )
     }
 )
@@ -62,6 +53,8 @@ public class OpenFitBlePlugin extends Plugin {
     private static final UUID HR_SERVICE = uuid16("180d");
     private static final UUID HR_MEASUREMENT = uuid16("2a37");
     private static final UUID CCCD = uuid16("2902");
+    private static final UUID CHUNK_WRITE = UUID.fromString("00000016-0000-3512-2118-0009af100700");
+    private static final UUID CHUNK_READ = UUID.fromString("00000017-0000-3512-2118-0009af100700");
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -71,9 +64,14 @@ public class OpenFitBlePlugin extends Plugin {
 
     private BluetoothGatt gatt;
     private String connectedId;
+    private String mode = "standard";
+    private String authKey;
 
-    // Serialized GATT operation queue. Each op runs, then waits for the matching
-    // gatt callback (which calls opComplete()) before the next op is dequeued.
+    private HuamiSession huami;
+    private BluetoothGattCharacteristic chunkWriteChar;
+    private BluetoothGattCharacteristic chunkReadChar;
+    private BluetoothGattCharacteristic hrChar;
+
     private final ArrayDeque<Runnable> opQueue = new ArrayDeque<>();
     private boolean opInFlight = false;
 
@@ -106,7 +104,6 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("Bluetooth permission denied");
             return;
         }
-        // Resume whichever method asked (scan or connect) based on its name.
         if ("connect".equals(call.getMethodName())) {
             doConnect(call);
         } else {
@@ -144,7 +141,6 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("scan permission: " + e.getMessage());
             return;
         }
-        // Auto-stop after 10s (BLE scans should be time-boxed).
         main.postDelayed(this::stopScanInternal, 10_000);
         call.resolve();
     }
@@ -182,6 +178,12 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("deviceId required");
             return;
         }
+        mode = call.getString("deviceType", "standard");
+        authKey = call.getString("authKey");
+        if ("huami".equals(mode) && (authKey == null || authKey.isEmpty())) {
+            call.reject("authKey required for huami devices");
+            return;
+        }
         BluetoothAdapter a = adapter();
         if (a == null) {
             call.reject("No Bluetooth adapter");
@@ -217,6 +219,11 @@ public class OpenFitBlePlugin extends Plugin {
             opQueue.clear();
             opInFlight = false;
         }
+        if (huami != null) {
+            huami.stop();
+            huami = null;
+        }
+        chunkWriteChar = chunkReadChar = hrChar = null;
         if (gatt != null) {
             try {
                 gatt.disconnect();
@@ -236,6 +243,15 @@ public class OpenFitBlePlugin extends Plugin {
         notifyListeners("status", ev);
     }
 
+    private void emitSample(String kind, double value) {
+        JSObject ev = new JSObject();
+        ev.put("deviceId", connectedId);
+        ev.put("kind", kind);
+        ev.put("value", value);
+        ev.put("ts", System.currentTimeMillis());
+        notifyListeners("sample", ev);
+    }
+
     // --------------------------------------------------- serialized op queue
 
     private void enqueue(Runnable op) {
@@ -251,7 +267,6 @@ public class OpenFitBlePlugin extends Plugin {
             Runnable op = opQueue.poll();
             if (op == null) return;
             opInFlight = true;
-            // Run on main thread; the gatt callback will call opComplete().
             main.post(op);
         }
     }
@@ -261,6 +276,45 @@ public class OpenFitBlePlugin extends Plugin {
             opInFlight = false;
         }
         runNextOp();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void enqueueWrite(BluetoothGattCharacteristic c, byte[] value) {
+        enqueue(() -> {
+            try {
+                c.setValue(value);
+                c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                boolean ok = gatt != null && gatt.writeCharacteristic(c);
+                if (!ok) opComplete();
+            } catch (SecurityException e) {
+                opComplete();
+            }
+        });
+    }
+
+    private void enqueueNotify(BluetoothGattCharacteristic c) {
+        enqueue(() -> {
+            try {
+                gatt.setCharacteristicNotification(c, true);
+                BluetoothGattDescriptor d = c.getDescriptor(CCCD);
+                if (d == null) {
+                    opComplete();
+                    return;
+                }
+                d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                gatt.writeDescriptor(d); // → onDescriptorWrite → opComplete()
+            } catch (SecurityException e) {
+                opComplete();
+            }
+        });
+    }
+
+    private static BluetoothGattCharacteristic findChar(BluetoothGatt g, UUID uuid) {
+        for (BluetoothGattService s : g.getServices()) {
+            BluetoothGattCharacteristic c = s.getCharacteristic(uuid);
+            if (c != null) return c;
+        }
+        return null;
     }
 
     // -------------------------------------------------------- gatt callback
@@ -285,19 +339,18 @@ public class OpenFitBlePlugin extends Plugin {
                 emitStatus("error", "service discovery failed: " + status);
                 return;
             }
-            // M0: subscribe to the standard Heart Rate measurement, if present.
-            BluetoothGattService svc = g.getService(HR_SERVICE);
-            if (svc == null) {
-                emitStatus("ready", "no standard Heart Rate service");
-                return;
+            if ("huami".equals(mode)) {
+                setupHuami(g);
+            } else {
+                setupStandardHr(g);
             }
-            BluetoothGattCharacteristic hr = svc.getCharacteristic(HR_MEASUREMENT);
-            if (hr == null) {
-                emitStatus("ready", "no HR measurement characteristic");
-                return;
+        }
+
+        @Override
+        public void onMtuChanged(BluetoothGatt g, int mtu, int status) {
+            if ("huami".equals(mode)) {
+                startHuamiSession(g, mtu);
             }
-            enqueueEnableNotify(g, hr);
-            emitStatus("ready", "streaming heart rate");
         }
 
         @Override
@@ -305,32 +358,44 @@ public class OpenFitBlePlugin extends Plugin {
             opComplete();
         }
 
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+            opComplete();
+        }
+
         @SuppressWarnings("deprecation")
         @Override
         public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
-            if (HR_MEASUREMENT.equals(c.getUuid())) {
-                byte[] v = c.getValue();
-                Integer hr = parseHeartRate(v);
-                if (hr != null) emitSample("heart_rate", hr);
+            byte[] v = c.getValue();
+            UUID u = c.getUuid();
+            if (CHUNK_READ.equals(u)) {
+                if (huami != null) huami.onChunkedRead(v);
+            } else if (HR_MEASUREMENT.equals(u)) {
+                if (huami != null) {
+                    huami.onHrMeasurement(v);
+                } else {
+                    Integer hr = parseHeartRate(v);
+                    if (hr != null) emitSample("heart_rate", hr);
+                }
             }
         }
     };
 
-    private void enqueueEnableNotify(BluetoothGatt g, BluetoothGattCharacteristic c) {
-        enqueue(() -> {
-            try {
-                g.setCharacteristicNotification(c, true);
-                BluetoothGattDescriptor d = c.getDescriptor(CCCD);
-                if (d == null) {
-                    opComplete();
-                    return;
-                }
-                d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                g.writeDescriptor(d); // → onDescriptorWrite → opComplete()
-            } catch (SecurityException e) {
-                opComplete();
-            }
-        });
+    // -------------------------------------------------------- standard (M0)
+
+    private void setupStandardHr(BluetoothGatt g) {
+        BluetoothGattService svc = g.getService(HR_SERVICE);
+        if (svc == null) {
+            emitStatus("ready", "no standard Heart Rate service");
+            return;
+        }
+        BluetoothGattCharacteristic hr = svc.getCharacteristic(HR_MEASUREMENT);
+        if (hr == null) {
+            emitStatus("ready", "no HR measurement characteristic");
+            return;
+        }
+        enqueueNotify(hr);
+        emitStatus("ready", "streaming heart rate");
     }
 
     /** Heart Rate Measurement (0x2A37): flags byte, then uint8 or uint16 LE HR. */
@@ -344,13 +409,66 @@ public class OpenFitBlePlugin extends Plugin {
         return v[1] & 0xff;
     }
 
-    private void emitSample(String kind, double value) {
-        JSObject ev = new JSObject();
-        ev.put("deviceId", connectedId);
-        ev.put("kind", kind);
-        ev.put("value", value);
-        ev.put("ts", System.currentTimeMillis());
-        notifyListeners("sample", ev);
+    // ------------------------------------------------------------ huami (M1)
+
+    private void setupHuami(BluetoothGatt g) {
+        chunkWriteChar = findChar(g, CHUNK_WRITE);
+        chunkReadChar = findChar(g, CHUNK_READ);
+        hrChar = findChar(g, HR_MEASUREMENT);
+        if (chunkWriteChar == null || chunkReadChar == null) {
+            emitStatus("error", "Zepp-OS chunked-transfer characteristics not found");
+            return;
+        }
+        // Negotiate a large MTU first; the session starts in onMtuChanged.
+        boolean requested = false;
+        try {
+            requested = g.requestMtu(517);
+        } catch (SecurityException ignored) {
+        }
+        if (!requested) {
+            startHuamiSession(g, 23); // fall back to the BLE minimum
+        }
+    }
+
+    private void startHuamiSession(BluetoothGatt g, int mtu) {
+        if (huami != null) return; // onMtuChanged can fire once; guard re-entry
+        emitStatus("connected", "negotiated MTU " + mtu + ", authenticating…");
+        huami = new HuamiSession(
+            authKey,
+            mtu,
+            // writeChunk → chunked-write char
+            (chunk) -> enqueueWrite(chunkWriteChar, chunk),
+            // writeAck → chunked-read char (Gadgetbridge acks on the READ char)
+            (ack) -> enqueueWrite(chunkReadChar, ack),
+            new HuamiSession.Listener() {
+                @Override
+                public void onAuthSuccess() {
+                    main.post(() -> {
+                        emitStatus("ready", "authenticated · streaming heart rate");
+                        if (hrChar != null) enqueueNotify(hrChar);
+                        huami.enableHeartRate();
+                    });
+                }
+
+                @Override
+                public void onAuthFailed(String reason) {
+                    main.post(() -> emitStatus("error", "auth failed: " + reason));
+                }
+
+                @Override
+                public void onHeartRate(int bpm) {
+                    emitSample("heart_rate", bpm);
+                }
+
+                @Override
+                public void onLog(String msg) {
+                    emitStatus("connected", msg);
+                }
+            }
+        );
+        // Receive the handshake responses, then kick off auth.
+        enqueueNotify(chunkReadChar);
+        huami.startAuth();
     }
 
     // ------------------------------------------------------------- liveness
@@ -368,9 +486,5 @@ public class OpenFitBlePlugin extends Plugin {
         stopScanInternal();
         disconnectInternal();
         super.handleOnDestroy();
-    }
-
-    @SuppressWarnings("unused")
-    private void noop(@NonNull BluetoothGatt g) {
     }
 }

@@ -14,6 +14,7 @@
 // Works in the Android app (Capacitor BLE) and in Chrome (Web Bluetooth). All
 // BLE is verified on-device — there is no BLE in CI.
 
+import { useState } from "react";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
@@ -109,19 +110,39 @@ export function BleDevices() {
   );
 }
 
-/** M0 of the direct-device port: exercises the NATIVE BluetoothGatt plugin
- *  (docs/NATIVE-BLE-PORT.md) over the standard Heart Rate service. The Helio +
- *  Garmin protocols (M1+) build on this same native path. Android app only. */
+const HELIO_KEY_STORE = "ofit_helio_authkey";
+const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
+
+/** Direct-device port (docs/NATIVE-BLE-PORT.md). M0: standard-GATT HR over the
+ *  native path. M1: Zepp-OS / Huami (Helio) — auth handshake + encrypted
+ *  transport → live HR, by entering the device auth key. Android app only. */
 function NativeBleCard() {
   const { status, found, hr, message, deviceName, available, scan, connect, disconnect } = useNativeBle();
+  const [authKey, setAuthKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem(HELIO_KEY_STORE) ?? "";
+    } catch {
+      return "";
+    }
+  });
   if (!available) return null;
   const live = status === "connected" || status === "connecting";
+  const keyOk = /^(0x)?[0-9a-fA-F]{32}$/.test(authKey.trim());
+
+  const saveKey = (v: string) => {
+    setAuthKey(v);
+    try {
+      localStorage.setItem(HELIO_KEY_STORE, v);
+    } catch {
+      /* ignore */
+    }
+  };
 
   return (
     <div className="card" style={{ marginTop: 24 }}>
       <div className="card__head">
         <div className="card__title">
-          Native BLE<span className="sub">direct GATT · M0 (beta)</span>
+          Native BLE<span className="sub">direct GATT · Helio M1 (beta)</span>
         </div>
         <div className="card__tools">
           {live ? (
@@ -136,9 +157,21 @@ function NativeBleCard() {
         </div>
       </div>
       <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
-        Reads heart rate over the new native path (the backbone for direct Helio / Garmin sync).
-        Put your watch in <b>Broadcast HR</b> mode, or any standard HR strap.
+        Direct device sync, no Gadgetbridge. Standard HR works on any strap / watch in <b>Broadcast HR</b>;
+        for the <b>Helio (Zepp-OS)</b>, paste its 32-hex auth key, then connect with <b>Zepp-OS</b>.
       </p>
+
+      <label style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 12 }}>
+        <span className="stat__label">Helio auth key (32 hex)</span>
+        <input
+          className="inp"
+          value={authKey}
+          onChange={(e) => saveKey(e.target.value)}
+          placeholder="0123456789abcdef0123456789abcdef"
+          spellCheck={false}
+          autoCapitalize="none"
+        />
+      </label>
 
       {status === "connected" ? (
         <div className="grid grid--stats">
@@ -162,9 +195,22 @@ function NativeBleCard() {
                 <b>{d.name}</b>
                 <span>{d.rssi} dBm</span>
               </div>
-              <button type="button" className="btn btn--ghost" onClick={() => void connect(d)}>
-                Connect
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                {isZeppOs(d.name) && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!keyOk}
+                    title={keyOk ? "" : "Enter the 32-hex auth key first"}
+                    onClick={() => void connect(d, { authKey: authKey.trim() })}
+                  >
+                    Zepp-OS
+                  </button>
+                )}
+                <button type="button" className="btn btn--ghost" onClick={() => void connect(d)}>
+                  Standard HR
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -173,7 +219,7 @@ function NativeBleCard() {
           {status === "scanning" ? "Scanning…" : "Tap Native scan to list devices."}
         </span>
       )}
-      {message && status === "connected" && (
+      {message && status !== "error" && (
         <span className="faint" style={{ fontSize: 11, display: "block", marginTop: 8 }}>{message}</span>
       )}
     </div>

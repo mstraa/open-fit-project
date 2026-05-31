@@ -27,7 +27,13 @@ export interface OpenFitBlePlugin {
   echo(options: { value: string }): Promise<{ value: string; available: boolean }>;
   startScan(): Promise<void>;
   stopScan(): Promise<void>;
-  connect(options: { deviceId: string }): Promise<void>;
+  connect(options: {
+    deviceId: string;
+    /** "standard" (default) reads standard GATT HR; "huami" runs the Zepp-OS
+     *  auth handshake (requires authKey). */
+    deviceType?: "standard" | "huami";
+    authKey?: string;
+  }): Promise<void>;
   disconnect(): Promise<void>;
   addListener(event: "scanResult", cb: (e: NativeScanResult) => void): Promise<PluginListenerHandle>;
   addListener(event: "sample", cb: (e: NativeSample) => void): Promise<PluginListenerHandle>;

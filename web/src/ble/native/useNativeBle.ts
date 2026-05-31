@@ -81,12 +81,16 @@ export function useNativeBle() {
   }, [available]);
 
   const connect = useCallback(
-    async (dev: NativeScanResult) => {
+    async (dev: NativeScanResult, huami?: { authKey: string }) => {
       if (!available) return;
       setState((s) => ({ ...s, status: "connecting", deviceName: dev.name, message: undefined }));
       try {
         await OpenFitBle.stopScan().catch(() => undefined);
-        await OpenFitBle.connect({ deviceId: dev.deviceId });
+        await OpenFitBle.connect(
+          huami
+            ? { deviceId: dev.deviceId, deviceType: "huami", authKey: huami.authKey }
+            : { deviceId: dev.deviceId },
+        );
       } catch (e) {
         setState((s) => ({ ...s, status: "error", message: e instanceof Error ? e.message : String(e) }));
       }
