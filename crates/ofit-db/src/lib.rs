@@ -331,6 +331,16 @@ impl Db {
         Ok(())
     }
 
+    /// Delete all wellness samples from a source — used to make a re-import of a
+    /// device's export idempotent (replace, don't duplicate).
+    pub async fn delete_wellness_for_source(&self, source_id: Uuid) -> Result<u64> {
+        let r = sqlx::query(&self.p("DELETE FROM wellness_samples WHERE source_id = ?"))
+            .bind(source_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Get-or-create a [`Source`] by `(kind, name)`, returning its id. Used by the
     /// wellness ingest path to attribute streamed samples to a stable source.
     pub async fn ensure_source(&self, kind: SourceKind, name: &str) -> Result<Uuid> {

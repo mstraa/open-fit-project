@@ -457,6 +457,9 @@ pub async fn import_gadgetbridge(
         .await
         .map_err(internal)?;
 
+    // Idempotent: a re-import of this device's export replaces, not duplicates.
+    state.db.delete_wellness_for_source(source_id).await.map_err(internal)?;
+
     let mut counts: std::collections::HashMap<ofit_core::WellnessKind, usize> = std::collections::HashMap::new();
     let samples: Vec<ofit_core::WellnessSample> = imp
         .readings
