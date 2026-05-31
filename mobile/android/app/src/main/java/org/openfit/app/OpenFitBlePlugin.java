@@ -317,6 +317,10 @@ public class OpenFitBlePlugin extends Plugin {
     public void configure(PluginCall call) {
         apiBase = call.getString("apiBase");
         authToken = call.getString("token");
+        // Share the server URL + token so the workout recorder can upload its .fit
+        // (it has no connection of its own).
+        prefs().edit().putString("apiBase", apiBase == null ? "" : apiBase)
+            .putString("token", authToken == null ? "" : authToken).apply();
         ingestExec.execute(this::flushOutbox); // drain anything buffered while offline
         call.resolve();
     }

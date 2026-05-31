@@ -1,8 +1,11 @@
 package org.openfit.app;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Build;
+import android.util.Log;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -13,7 +16,15 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Controls the native workout {@link RecordingService} (Stage 1: GPS + IMU + HR
@@ -33,8 +44,16 @@ import java.util.UUID;
     }
 )
 public class RecordingPlugin extends Plugin {
+    private static final String TAG = "RecordingPlugin";
 
     private boolean listenerWired = false;
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
+
+    @Override
+    public void load() {
+        // Retry any workout .fit that didn't upload last time (offline on Stop).
+        io.execute(this::flushPendingUploads);
+    }
 
     @PluginMethod
     public void start(PluginCall call) {
@@ -131,7 +150,97 @@ public class RecordingPlugin extends Plugin {
                 ev.put("sessionDir", sessionDir);
                 ev.put("elapsedMs", elapsedMs);
                 notifyListeners("recordingStopped", ev);
+                io.execute(() -> encodeAndQueue(new File(sessionDir)));
             }
         });
+    }
+
+    /** Encode the recorded session to .fit, drop it in the pending-uploads dir, then
+     *  try to upload (offline → it stays queued and retries on next launch). */
+    private void encodeAndQueue(File sessionDir) {
+        try {
+            byte[] fit = FitEncoder.encode(sessionDir);
+            File pending = new File(getContext().getFilesDir(), "pending_uploads");
+            //noinspection ResultOfMethodCallIgnored
+            pending.mkdirs();
+            File out = new File(pending, "workout-" + sessionDir.getName() + ".fit");
+            try (FileOutputStream fos = new FileOutputStream(out)) {
+                fos.write(fit);
+            }
+            Log.i(TAG, "encoded " + fit.length + " bytes → " + out.getName());
+        } catch (Exception e) {
+            Log.w(TAG, "encode failed: " + e.getMessage());
+        }
+        flushPendingUploads();
+    }
+
+    /** Upload every queued .fit; delete each on success, keep the rest if offline. */
+    private void flushPendingUploads() {
+        SharedPreferences p = getContext().getSharedPreferences("ofit_ble", Context.MODE_PRIVATE);
+        String base = p.getString("apiBase", "");
+        String token = p.getString("token", "");
+        File pending = new File(getContext().getFilesDir(), "pending_uploads");
+        File[] files = pending.listFiles((d, n) -> n.endsWith(".fit"));
+        if (files == null || files.length == 0 || base == null || base.isEmpty()) return;
+        int ok = 0;
+        for (File f : files) {
+            if (postFit(base, token, f)) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+                ok++;
+            } else {
+                break; // server unreachable → keep the rest for next time
+            }
+        }
+        if (ok > 0) {
+            Log.i(TAG, "uploaded " + ok + " workout file(s)");
+            final int n = ok;
+            getActivity().runOnUiThread(() -> {
+                JSObject ev = new JSObject();
+                ev.put("count", n);
+                notifyListeners("recordingUploaded", ev);
+            });
+        }
+    }
+
+    /** Multipart POST one .fit to {base}/api/import (field name "file", filename .fit). */
+    private boolean postFit(String base, String token, File file) {
+        String boundary = "----ofit" + System.currentTimeMillis();
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(base + "/api/import").openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(20000);
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            if (token != null && !token.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + token);
+            byte[] fileBytes = readAll(file);
+            String preamble = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"file\"; filename=\"" + file.getName() + "\"\r\n"
+                + "Content-Type: application/octet-stream\r\n\r\n";
+            String epilogue = "\r\n--" + boundary + "--\r\n";
+            try (OutputStream os = c.getOutputStream()) {
+                os.write(preamble.getBytes(StandardCharsets.UTF_8));
+                os.write(fileBytes);
+                os.write(epilogue.getBytes(StandardCharsets.UTF_8));
+            }
+            int code = c.getResponseCode();
+            return code >= 200 && code < 300;
+        } catch (Exception e) {
+            Log.w(TAG, "upload failed: " + e.getMessage());
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private static byte[] readAll(File f) throws Exception {
+        byte[] buf = new byte[(int) f.length()];
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            int off = 0, n;
+            while (off < buf.length && (n = in.read(buf, off, buf.length - off)) > 0) off += n;
+        }
+        return buf;
     }
 }

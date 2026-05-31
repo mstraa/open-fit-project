@@ -167,6 +167,12 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private final Runnable ticker = new Runnable() {
         @Override
         public void run() {
+            // Record HR into the file at 1 Hz (it arrives from the Helio stream, not
+            // a sensor callback, so the ticker is where we sample it).
+            if (!paused) {
+                int hr = snapHr();
+                if (hr > 0) writeLine("{\"k\":\"hr\",\"t\":" + nowMs() + ",\"v\":" + hr + "}");
+            }
             LiveListener l = liveListener;
             if (l != null) {
                 l.onTick(snapElapsedMs(), snapDistanceM(), snapSpeedMps(), snapHr(),

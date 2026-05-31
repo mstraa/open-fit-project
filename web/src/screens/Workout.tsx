@@ -4,6 +4,7 @@
 // later stage. Android app only.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
@@ -41,7 +42,7 @@ export function Workout() {
   const [state, setState] = useState<State>("idle");
   const [sport, setSport] = useState<string>("running");
   const [tick, setTick] = useState<RecordingTick | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
+  const [uploaded, setUploaded] = useState(false);
   const [holdPct, setHoldPct] = useState(0);
   const subs = useRef<PluginListenerHandle[]>([]);
   const holdTimer = useRef<number | null>(null);
@@ -56,10 +57,11 @@ export function Workout() {
           setTick(t);
           setState(t.paused ? "paused" : "recording");
         }),
-        OpenFitRecording.addListener("recordingStopped", (s) => {
+        OpenFitRecording.addListener("recordingStopped", () => {
           setState("saved");
-          setSaved(s.sessionDir);
+          setUploaded(false);
         }),
+        OpenFitRecording.addListener("recordingUploaded", () => setUploaded(true)),
       ]);
       if (!alive) {
         handles.forEach((h) => void h.remove());
@@ -77,7 +79,6 @@ export function Workout() {
   }, []);
 
   const start = useCallback(async () => {
-    setSaved(null);
     setTick(null);
     try {
       await OpenFitRecording.start({ sport });
@@ -130,8 +131,15 @@ export function Workout() {
             <div className="card__title">Start a workout</div>
           </div>
           {state === "saved" && (
-            <div className="pill pill--good" style={{ marginBottom: 14 }}>
-              Saved · {fmtTime(tick?.elapsedMs ?? 0)} · {saved?.split("/").pop()}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+              <span className="pill pill--good">
+                {uploaded ? "Synced to your activities" : "Saved · uploading…"}
+              </span>
+              {uploaded && (
+                <Link to="/activities" className="pill">
+                  View activity →
+                </Link>
+              )}
             </div>
           )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>

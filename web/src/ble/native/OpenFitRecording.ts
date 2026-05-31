@@ -25,6 +25,7 @@ export interface OpenFitRecordingPlugin {
   isActive(): Promise<{ active: boolean }>;
   addListener(event: "tick", cb: (t: RecordingTick) => void): Promise<PluginListenerHandle>;
   addListener(event: "recordingStopped", cb: (s: RecordingStopped) => void): Promise<PluginListenerHandle>;
+  addListener(event: "recordingUploaded", cb: (e: { count: number }) => void): Promise<PluginListenerHandle>;
 }
 
 export const OpenFitRecording = registerPlugin<OpenFitRecordingPlugin>("OpenFitRecording");
