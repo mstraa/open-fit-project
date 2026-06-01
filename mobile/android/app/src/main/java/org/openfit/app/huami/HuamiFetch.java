@@ -190,6 +190,24 @@ public class HuamiFetch {
                 sink.sample("steps", steps, ts);
                 emitted++;
             }
+            // Sleep stage is byte 0 (rawKind), per Gadgetbridge's
+            // HuamiExtendedSampleProvider: 120=light, 121=deep, 122=rem, 123=awake.
+            // (Our earlier guess at bytes 5-7 was wrong; THIS is the real source —
+            // the 0x78 records in the byte dump were light-sleep minutes.) Codes
+            // match SleepStage: 1=light, 2=deep, 3=rem, 0=awake.
+            int rawKind = bytes[i] & 0xff;
+            int stage = -1;
+            switch (rawKind) {
+                case 120: stage = 1; break; // light
+                case 121: stage = 2; break; // deep
+                case 122: stage = 3; break; // rem
+                case 123: stage = 0; break; // awake
+                default: break;
+            }
+            if (stage >= 0) {
+                sink.sample("sleep_stage", stage, ts);
+                emitted++;
+            }
         }
         sink.log("fetch: activity " + (bytes.length / size) + " min, emitted " + emitted);
     }

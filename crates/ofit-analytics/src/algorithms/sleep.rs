@@ -117,17 +117,26 @@ impl RunnableAlgorithm for Sleep {
             return out;
         }
 
-        // Bucket each minute-sample into its night. Each sample represents ~1
-        // minute in the named stage (the importers emit one per minute).
-        let mut nights: BTreeMap<NaiveDate, Night> = BTreeMap::new();
+        // De-duplicate to ONE stage per clock-minute per night first, so multiple
+        // sources covering the same night (e.g. the Zepp import + the device's own
+        // BLE-fetched stages) don't double-count into a 16-hour "night".
+        let mut per_minute: BTreeMap<NaiveDate, BTreeMap<i64, SleepStage>> = BTreeMap::new();
         for p in &stages {
-            let n = nights.entry(sleep_date(p.ts)).or_default();
-            match decode_stage(p.value) {
-                Some(SleepStage::Light) => n.light += 1.0,
-                Some(SleepStage::Deep) => n.deep += 1.0,
-                Some(SleepStage::Rem) => n.rem += 1.0,
-                Some(SleepStage::Awake) => n.awake += 1.0,
-                None => {}
+            if let Some(st) = decode_stage(p.value) {
+                let minute = p.ts.timestamp() / 60;
+                per_minute.entry(sleep_date(p.ts)).or_default().insert(minute, st);
+            }
+        }
+        let mut nights: BTreeMap<NaiveDate, Night> = BTreeMap::new();
+        for (date, minutes) in &per_minute {
+            let n = nights.entry(*date).or_default();
+            for st in minutes.values() {
+                match st {
+                    SleepStage::Light => n.light += 1.0,
+                    SleepStage::Deep => n.deep += 1.0,
+                    SleepStage::Rem => n.rem += 1.0,
+                    SleepStage::Awake => n.awake += 1.0,
+                }
             }
         }
 
