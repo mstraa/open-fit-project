@@ -964,6 +964,11 @@ public class OpenFitBlePlugin extends Plugin {
                 public void onGfdiMessage(int id, byte[] payload) {
                     // Stage C will route file-sync messages here.
                 }
+
+                @Override
+                public void onHeartRate(int bpm) {
+                    emitSample("heart_rate", bpm);
+                }
             });
         garmin.setMaxWriteSize(mtu);
         emitStatus("connected", "negotiated MTU " + mtu + ", Garmin handshake…");

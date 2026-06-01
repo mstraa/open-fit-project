@@ -26,7 +26,7 @@ public class GarminSession {
 
     // ML request types (ordinals)
     private static final int REGISTER_ML_REQ = 0, REGISTER_ML_RESP = 1, CLOSE_ALL_REQ = 5, CLOSE_ALL_RESP = 6;
-    private static final int SERVICE_GFDI = 1;
+    private static final int SERVICE_GFDI = 1, SERVICE_REALTIME_HR = 6, SERVICE_REALTIME_STEPS = 7;
     private static final long CLIENT_ID = 2L;
 
     // GFDI message ids
@@ -40,6 +40,7 @@ public class GarminSession {
         void onLog(String msg);
         void onReady();
         void onGfdiMessage(int msgId, byte[] payload);
+        void onHeartRate(int bpm);
     }
 
     private final Consumer<byte[]> write; // → send characteristic (op queue chunks further if needed)
@@ -48,6 +49,7 @@ public class GarminSession {
     private final GarminCobs cobs = new GarminCobs();
     private int maxWriteSize = 20;
     private int gfdiHandle = -1;
+    private int hrHandle = -1;
     private boolean ready = false;
     private boolean initialized = false;
 
@@ -86,7 +88,19 @@ public class GarminSession {
             while ((msg = cobs.retrieve()) != null) {
                 handleGfdiFrame(msg);
             }
+            return;
         }
+        if (handle == hrHandle && value.length >= 3) {
+            // realtime HR: raw bytes (NO COBS/CRC), [handle][type][hr][resting]…
+            int hr = value[2] & 0xFF;
+            if (hr > 0) listener.onHeartRate(hr);
+        }
+    }
+
+    /** Enable realtime heart-rate streaming (after the link is ready). */
+    public void enableRealtimeHr() {
+        Log.i(TAG, "enable realtime HR");
+        write.accept(mlFrame(REGISTER_ML_REQ, SERVICE_REALTIME_HR, 0));
     }
 
     // ---- ML handle management (handle 0x00) ----
@@ -99,11 +113,20 @@ public class GarminSession {
             write.accept(mlFrame(REGISTER_ML_REQ, SERVICE_GFDI, 0));
         } else if (type == REGISTER_ML_RESP) {
             // [0]=ml handle, [1]=type, [2..9]=clientId, [10,11]=service, [12]=status, [13]=handle, [14]=reliable
+            int service = v.length > 11 ? u16(v, 10) : -1;
             int status = v.length > 12 ? v[12] & 0xFF : 0xFF;
-            gfdiHandle = v.length > 13 ? v[13] & 0xFF : -1;
-            Log.i(TAG, "ML REGISTER_ML_RESP status=" + status + " gfdiHandle=" + gfdiHandle);
-            listener.onLog("garmin: ML registered (handle " + gfdiHandle + ")");
-            ready = (status == 0 && gfdiHandle >= 0);
+            int handle = v.length > 13 ? v[13] & 0xFF : -1;
+            Log.i(TAG, "ML REGISTER_ML_RESP service=" + service + " status=" + status + " handle=" + handle);
+            if (status == 0 && handle >= 0) {
+                if (service == SERVICE_GFDI) {
+                    gfdiHandle = handle;
+                    ready = true;
+                    listener.onLog("garmin: ML registered (handle " + handle + ")");
+                } else if (service == SERVICE_REALTIME_HR) {
+                    hrHandle = handle;
+                    listener.onLog("garmin: live HR enabled");
+                }
+            }
             // The watch now drives the GFDI handshake (DeviceInformation, etc.).
         } else {
             Log.i(TAG, "ML other type=" + type);
@@ -161,6 +184,7 @@ public class GarminSession {
         listener.onLog("garmin: link ready");
         sendGfdi(gfdiFrame(SUPPORTED_FILE_TYPES_REQUEST, new byte[0]));
         sendGfdi(gfdiFrame(SYSTEM_EVENT, new byte[]{(byte) SYS_EVENT_SYNC_READY}));
+        enableRealtimeHr(); // start live HR streaming
         listener.onReady();
     }
 
