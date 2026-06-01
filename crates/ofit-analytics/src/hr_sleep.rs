@@ -17,77 +17,90 @@ use std::collections::BTreeMap;
 const MIN_BLOCK_MIN: usize = 150; // a real night's main block is ≥ 2.5 h
 const MAX_GAP_MIN: i64 = 15; // bridge short HR dropouts within a block
 
-/// The night a timestamp belongs to, labelled by **wake date** (the morning you
-/// got up) — matching how Zepp/most trackers display "last night": evening
-/// (≥18:00) → the next date; small hours (<18:00) → that date. So 31 May 23:00 …
-/// 1 Jun 06:00 are all the "1 Jun" night. A whole night maps to ONE bucket.
+/// The night a timestamp belongs to, labelled by **bed-time date** (the evening
+/// you fell asleep): evening (≥18:00) → that date; small hours (<18:00) → the
+/// previous date. So 31 May 23:00 … 1 Jun 06:00 are all the "31 May" night, and
+/// today stays empty until tonight. A whole night maps to ONE bucket.
 pub fn night_of(ts: DateTime<Utc>) -> NaiveDate {
-    if ts.hour() >= 18 {
-        ts.date_naive() + Duration::days(1)
+    if ts.hour() < 18 {
+        ts.date_naive() - Duration::days(1)
     } else {
         ts.date_naive()
     }
 }
 
-/// HR-offset (bpm above the night's floor) boundaries between stages.
+/// What fraction of a night is each stage, plus the "awake" HR-offset ceiling.
+/// Staging by absolute HR over-calls deep on flat nights, so we instead match the
+/// stage *proportions* learned from real nights (deep = lowest-HR minutes, etc.).
 #[derive(Debug, Clone, Copy)]
 pub struct SleepModel {
-    pub deep_light: f64, // ≤ → deep
-    pub light_rem: f64,  // ≤ → light
-    pub rem_awake: f64,  // ≤ → rem, else awake (also the "still asleep" ceiling)
+    pub deep_frac: f64, // share of asleep minutes that are deep (lowest HR)
+    pub rem_frac: f64,  // share that are rem (highest HR among asleep)
+    pub rem_awake: f64, // off (bpm above floor) above which a minute is awake
 }
 impl Default for SleepModel {
     fn default() -> Self {
-        Self { deep_light: 4.0, light_rem: 11.0, rem_awake: 18.0 }
+        // typical adult: deep ~16%, rem ~22%, light the rest
+        Self { deep_frac: 0.16, rem_frac: 0.22, rem_awake: 20.0 }
     }
 }
 
-/// Learn stage thresholds from labelled `(ts, stage, hr)` minutes (real staged
-/// nights with matching HR). Falls back to [`SleepModel::default`] when there
-/// isn't enough clean data or the learned order is implausible.
+/// Learn the stage proportions (and awake ceiling) from labelled `(ts, stage, hr)`
+/// minutes (real staged nights with matching HR). Falls back to the default mix
+/// when there isn't enough clean data.
 pub fn calibrate(labeled: &[(DateTime<Utc>, f64, f64)]) -> SleepModel {
     let mut by_night: BTreeMap<NaiveDate, Vec<(f64, f64)>> = BTreeMap::new();
     for (ts, stage, hr) in labeled {
         by_night.entry(night_of(*ts)).or_default().push((*stage, *hr));
     }
-    // per stage code (0..3): collected (hr - night_floor) offsets
-    let mut offs: [Vec<f64>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut deep_fr = Vec::new();
+    let mut rem_fr = Vec::new();
+    let mut awake_offs = Vec::new();
     for (_, v) in by_night {
-        if v.len() < 60 {
+        if v.len() < 120 {
             continue;
         }
-        let mut asleep: Vec<f64> = v.iter().filter(|(s, _)| *s != 0.0).map(|(_, h)| *h).collect();
-        if asleep.len() < 30 {
+        let (mut deep, mut light, mut rem) = (0.0, 0.0, 0.0);
+        for (s, _) in &v {
+            match *s as i32 {
+                2 => deep += 1.0,
+                1 => light += 1.0,
+                3 => rem += 1.0,
+                _ => {}
+            }
+        }
+        let asleep = deep + light + rem;
+        if asleep < 60.0 {
             continue;
         }
-        asleep.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let base = asleep[asleep.len() / 20]; // 5th pct = the night's HR floor
-        for (s, h) in v {
-            let idx = s as usize;
-            if idx < 4 {
-                offs[idx].push(h - base);
+        deep_fr.push(deep / asleep);
+        rem_fr.push(rem / asleep);
+        // awake-offset = how far above the night's floor the awake minutes sit
+        let mut all: Vec<f64> = v.iter().map(|(_, h)| *h).collect();
+        all.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let base = all[all.len() / 20];
+        for (s, h) in &v {
+            if *s == 0.0 {
+                awake_offs.push(*h - base);
             }
         }
     }
-    let mean = |v: &Vec<f64>| {
-        if v.len() < 30 {
-            None
-        } else {
-            Some(v.iter().sum::<f64>() / v.len() as f64)
+    let avg = |v: &Vec<f64>| if v.is_empty() { None } else { Some(v.iter().sum::<f64>() / v.len() as f64) };
+    let mut m = SleepModel::default();
+    if deep_fr.len() >= 3 {
+        if let Some(d) = avg(&deep_fr) {
+            m.deep_frac = d.clamp(0.05, 0.35);
         }
-    };
-    if let (Some(d), Some(l), Some(r)) = (mean(&offs[2]), mean(&offs[1]), mean(&offs[3])) {
-        let dl = (d + l) / 2.0;
-        let lr = (l + r) / 2.0;
-        let ra = match mean(&offs[0]) {
-            Some(a) => (r + a) / 2.0,
-            None => r + 6.0,
-        };
-        if dl < lr && lr < ra && ra > 2.0 {
-            return SleepModel { deep_light: dl.max(1.0), light_rem: lr, rem_awake: ra };
+        if let Some(r) = avg(&rem_fr) {
+            m.rem_frac = r.clamp(0.05, 0.40);
         }
     }
-    SleepModel::default()
+    if let Some(a) = avg(&awake_offs) {
+        if a > 10.0 {
+            m.rem_awake = a.clamp(14.0, 30.0);
+        }
+    }
+    m
 }
 
 /// Per-minute `(ts, stage_code)` for the estimated main sleep block of each night.
@@ -182,18 +195,38 @@ pub fn hr_derived_sleep(hr: &[(DateTime<Utc>, f64)], model: &SleepModel) -> Vec<
             continue;
         }
 
-        for &(m, v) in &night[start..end] {
-            let off = v - base;
-            let code = if off <= model.deep_light {
-                2.0
-            } else if off <= model.light_rem {
-                1.0
-            } else if off <= model.rem_awake {
-                3.0
+        // Stage by HR RANK to match the learned proportions (so a flat night can't
+        // become all-deep). Minutes clearly above the floor are awake; the rest are
+        // ranked low→high and split deep (lowest HR) / light / rem (highest).
+        let core: Vec<usize> = (start..end).collect();
+        let asleep: Vec<usize> = core
+            .iter()
+            .copied()
+            .filter(|&k| night[k].1 - base <= model.rem_awake)
+            .collect();
+        let mut by_hr = asleep.clone();
+        by_hr.sort_by(|&a, &b| night[a].1.partial_cmp(&night[b].1).unwrap());
+        let n = by_hr.len();
+        let n_deep = (n as f64 * model.deep_frac).round() as usize;
+        let n_rem = (n as f64 * model.rem_frac).round() as usize;
+        let mut stage: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+        for (rank, &k) in by_hr.iter().enumerate() {
+            let code = if rank < n_deep {
+                2.0 // deep = lowest HR
+            } else if rank >= n.saturating_sub(n_rem) {
+                3.0 // rem = highest HR among asleep
             } else {
-                0.0
+                1.0 // light
             };
-            if let Some(ts) = DateTime::from_timestamp(m * 60, 0) {
+            stage.insert(k, code);
+        }
+        for &k in &core {
+            let code = if night[k].1 - base > model.rem_awake {
+                0.0 // awake arousal mid-sleep
+            } else {
+                *stage.get(&k).unwrap_or(&1.0)
+            };
+            if let Some(ts) = DateTime::from_timestamp(night[k].0 * 60, 0) {
                 out.push((ts, code));
             }
         }
@@ -228,7 +261,7 @@ mod tests {
     use chrono::{TimeZone, Timelike};
 
     #[test]
-    fn finds_one_overnight_block_labelled_by_wake_date() {
+    fn finds_one_overnight_block_labelled_by_bedtime() {
         // Sleep 23:00 (31 Jan) → 06:00 (1 Feb): low HR with deep dips; awake ~80.
         let mut hr = Vec::new();
         let base = Utc.with_ymd_and_hms(2026, 1, 31, 12, 0, 0).unwrap();
@@ -244,9 +277,9 @@ mod tests {
         }
         let out = hr_derived_sleep(&hr, &SleepModel::default());
         assert!(out.len() >= MIN_BLOCK_MIN, "block too short: {}", out.len());
-        // the whole night maps to ONE bucket, labelled by wake date (1 Feb)
+        // the whole night maps to ONE bucket, labelled by bed-time date (31 Jan)
         let nights: std::collections::BTreeSet<NaiveDate> = out.iter().map(|(t, _)| night_of(*t)).collect();
         assert_eq!(nights.len(), 1);
-        assert_eq!(*nights.iter().next().unwrap(), NaiveDate::from_ymd_opt(2026, 2, 1).unwrap());
+        assert_eq!(*nights.iter().next().unwrap(), NaiveDate::from_ymd_opt(2026, 1, 31).unwrap());
     }
 }
