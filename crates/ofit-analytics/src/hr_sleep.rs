@@ -152,14 +152,37 @@ pub fn hr_derived_sleep(hr: &[(DateTime<Utc>, f64)], model: &SleepModel) -> Vec<
 
     let mut out = Vec::new();
     for (_, nblocks) in by_night {
-        let total: usize = nblocks.iter().map(|b| b.len()).sum();
-        if total < MIN_BLOCK_MIN {
+        let mut night: Vec<(i64, f64)> = nblocks.into_iter().flatten().collect();
+        night.sort_by_key(|x| x.0);
+        if night.len() < MIN_BLOCK_MIN {
             continue;
         }
-        let mut allvals: Vec<f64> = nblocks.iter().flatten().map(|x| x.1).collect();
-        allvals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let base = allvals[allvals.len() / 20]; // night floor across the whole night
-        for (m, v) in nblocks.iter().flatten() {
+        let mut sorted: Vec<f64> = night.iter().map(|x| x.1).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let base = sorted[sorted.len() / 20]; // night HR floor
+
+        // Trim the awake EDGES: lying in bed before sleep and lounging after waking
+        // keep HR low-ish but above the sleep floor. Walk in from both ends past any
+        // run whose SMOOTHED HR sits above a "clearly asleep" ceiling, so the block
+        // starts at true sleep onset and ends at wake-up — not at the loose ceiling.
+        // Onset/offset use a TIGHT fixed band off the floor (the wake transition is
+        // sharp); the calibrated thresholds are for staging WITHIN the block, where
+        // they'd otherwise let post-wake lounging (HR a touch high) read as sleep.
+        let sm = smooth(&night.iter().map(|x| x.1).collect::<Vec<_>>(), 9);
+        let asleep_ceiling = base + 12.0;
+        let mut start = 0;
+        while start < night.len() && sm[start] > asleep_ceiling {
+            start += 1;
+        }
+        let mut end = night.len();
+        while end > start && sm[end - 1] > asleep_ceiling {
+            end -= 1;
+        }
+        if end - start < MIN_BLOCK_MIN {
+            continue;
+        }
+
+        for &(m, v) in &night[start..end] {
             let off = v - base;
             let code = if off <= model.deep_light {
                 2.0
@@ -170,13 +193,27 @@ pub fn hr_derived_sleep(hr: &[(DateTime<Utc>, f64)], model: &SleepModel) -> Vec<
             } else {
                 0.0
             };
-            if let Some(ts) = DateTime::from_timestamp(*m * 60, 0) {
+            if let Some(ts) = DateTime::from_timestamp(m * 60, 0) {
                 out.push((ts, code));
             }
         }
     }
     out.sort_by_key(|(ts, _)| *ts);
     out
+}
+
+/// Centered rolling mean (window `w`) to ignore single-minute HR blips when
+/// finding sleep onset/offset.
+fn smooth(v: &[f64], w: usize) -> Vec<f64> {
+    let n = v.len();
+    let half = w / 2;
+    (0..n)
+        .map(|i| {
+            let a = i.saturating_sub(half);
+            let b = (i + half + 1).min(n);
+            v[a..b].iter().sum::<f64>() / (b - a) as f64
+        })
+        .collect()
 }
 
 /// UTC hour ∈ [21, 11) — a generous overnight window (HR depth does the real work).
