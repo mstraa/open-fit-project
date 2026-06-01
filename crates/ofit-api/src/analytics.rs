@@ -187,7 +187,7 @@ pub struct RecomputeResponse {
 pub async fn recompute(
     State(state): State<AppState>,
 ) -> Result<Json<RecomputeResponse>, ApiError> {
-    let input = build_analytics_input(&state).await?;
+    let mut input = build_analytics_input(&state).await?;
     let computed_at = Utc::now();
 
     // Derive a daily resting HR from the per-minute HR feed and fill any day that
@@ -258,6 +258,51 @@ pub async fn recompute(
             let samples: Vec<WellnessSample> = bb
                 .into_iter()
                 .map(|(ts, v)| WellnessSample::scalar(src, WellnessKind::BodyBattery, v, ts))
+                .collect();
+            state
+                .db
+                .insert_wellness_samples(&samples)
+                .await
+                .map_err(internal)?;
+        }
+    }
+
+    // Estimate sleep from overnight HR for nights the device/import don't cover
+    // (recent nights: the Helio records HR but no sleep stages in realtime mode).
+    // Gap-fill only — never override a night that already has real staged sleep.
+    {
+        let hr: Vec<(DateTime<Utc>, f64)> = input
+            .wellness
+            .iter()
+            .filter(|w| w.kind == WellnessKind::HeartRate)
+            .map(|w| (w.ts, w.value))
+            .collect();
+        let have_sleep: std::collections::HashSet<NaiveDate> = input
+            .wellness
+            .iter()
+            .filter(|w| w.kind == WellnessKind::SleepStage)
+            .map(|w| w.ts.date_naive())
+            .collect();
+        let derived: Vec<(DateTime<Utc>, f64)> = ofit_analytics::hr_derived_sleep(&hr)
+            .into_iter()
+            .filter(|(ts, _)| !have_sleep.contains(&ts.date_naive()))
+            .collect();
+        // Feed the estimate into THIS run's input so the sleep algorithm stages it
+        // now (not only on the next recompute).
+        input.wellness.extend(derived.iter().map(|(ts, code)| AnWellnessPoint {
+            kind: WellnessKind::SleepStage,
+            value: *code,
+            ts: *ts,
+        }));
+        if !derived.is_empty() {
+            let src = state
+                .db
+                .ensure_source(SourceKind::Unknown, "Computed")
+                .await
+                .map_err(internal)?;
+            let samples: Vec<WellnessSample> = derived
+                .into_iter()
+                .map(|(ts, code)| WellnessSample::scalar(src, WellnessKind::SleepStage, code, ts))
                 .collect();
             state
                 .db
