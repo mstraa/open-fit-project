@@ -132,6 +132,11 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
               userSync.current = false;
               window.setTimeout(() => window.dispatchEvent(new Event("ofit:data-updated")), 800);
             }
+            // The native side ran an analytics recompute (new sleep/body-battery/
+            // resting-HR) — soft-refresh so the views pick up the derived metrics.
+            if (e.message === "recomputed") {
+              window.dispatchEvent(new Event("ofit:data-updated"));
+            }
             if (done) userSync.current = false;
           } else if (e.status === "error") {
             setState((s) => ({ ...s, status: "error", message: e.message, syncing: false }));

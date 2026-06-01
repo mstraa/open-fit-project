@@ -114,6 +114,7 @@ public class OpenFitBlePlugin extends Plugin {
     private static final long SYNC_OVERLAP_MS = 10L * 60 * 1000;        // re-pull last 10 min (idempotent)
     private static final long AUTO_SYNC_MIN_INTERVAL_MS = 10L * 60 * 1000; // throttle auto-sync on (re)connect
     private static final long PERIODIC_SYNC_MS = 15L * 60 * 1000;        // background refresh while connected
+    private static final long RECOMPUTE_MIN_INTERVAL_MS = 20L * 60 * 1000; // throttle auto-recompute after sync
     private long maxFetchedTs = 0L;                                      // newest ts seen this sync → next watermark
 
     private static UUID uuid16(String s) {
@@ -483,6 +484,38 @@ public class OpenFitBlePlugin extends Plugin {
                 appendOutbox(samples);
             } else {
                 flushOutbox();
+            }
+        });
+    }
+
+    /** After a sync that wrote new data, run the analytics recompute server-side so
+     *  derived metrics (sleep, body battery, resting HR) refresh automatically.
+     *  Throttled, queued AFTER the batch flush (same single ingest thread), and
+     *  signals the UI to soft-refresh when done. */
+    private void maybeRecompute() {
+        if (apiBase == null || apiBase.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (now - prefs().getLong("last_recompute", 0L) < RECOMPUTE_MIN_INTERVAL_MS) return;
+        prefs().edit().putLong("last_recompute", now).apply();
+        final String base = apiBase;
+        final String tok = authToken;
+        ingestExec.execute(() -> {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(base + "/api/analytics/recompute").openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(180000); // a full recompute can take a while
+                c.setRequestMethod("POST");
+                if (tok != null && !tok.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + tok);
+                int code = c.getResponseCode();
+                Log.i(TAG, "auto-recompute → " + code);
+                if (code >= 200 && code < 300) {
+                    main.post(() -> emitStatus("ready", "recomputed"));
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "auto-recompute failed: " + e.getMessage());
+            } finally {
+                if (c != null) c.disconnect();
             }
         });
     }
@@ -911,6 +944,9 @@ public class OpenFitBlePlugin extends Plugin {
                     if (ok && gotData && connectedId != null) {
                         prefs().edit().putLong("wm_" + connectedId, maxFetchedTs).apply();
                     }
+                    // New data landed → refresh the derived metrics (sleep, body
+                    // battery, resting HR) without the user pressing Recompute.
+                    if (ok && gotData) maybeRecompute();
                     main.post(() -> {
                         // "sync complete" signals the UI to reload (new data landed);
                         // "sync up to date" finishes quietly so auto-sync isn't noisy.
