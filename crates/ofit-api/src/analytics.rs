@@ -47,11 +47,12 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 
 /// The wellness kinds the built-in algorithms consume; we load each once and
 /// flatten into [`AnalyticsInput::wellness`].
-const ANALYTICS_WELLNESS_KINDS: [WellnessKind; 4] = [
+const ANALYTICS_WELLNESS_KINDS: [WellnessKind; 5] = [
     WellnessKind::Hrv,
     WellnessKind::RestingHeartRate,
     WellnessKind::HeartRate,
     WellnessKind::SleepStage,
+    WellnessKind::Stress,
 ];
 
 /// Assemble the full algorithm registry: built-ins + any WASM plugins under the
@@ -228,6 +229,35 @@ pub async fn recompute(
                         Utc.from_utc_datetime(&ndt),
                     ))
                 })
+                .collect();
+            state
+                .db
+                .insert_wellness_samples(&samples)
+                .await
+                .map_err(internal)?;
+        }
+    }
+
+    // Derive a continuous body-battery (0–100) from the stress series — Zepp's own
+    // value isn't fetchable over BLE, so we model our own energy that recharges at
+    // rest and drains under load. Upserted under the "Computed" source.
+    {
+        let stress: Vec<(DateTime<Utc>, f64)> = input
+            .wellness
+            .iter()
+            .filter(|w| w.kind == WellnessKind::Stress)
+            .map(|w| (w.ts, w.value))
+            .collect();
+        let bb = ofit_analytics::body_battery(&stress);
+        if !bb.is_empty() {
+            let src = state
+                .db
+                .ensure_source(SourceKind::Unknown, "Computed")
+                .await
+                .map_err(internal)?;
+            let samples: Vec<WellnessSample> = bb
+                .into_iter()
+                .map(|(ts, v)| WellnessSample::scalar(src, WellnessKind::BodyBattery, v, ts))
                 .collect();
             state
                 .db
