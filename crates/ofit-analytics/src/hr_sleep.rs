@@ -17,12 +17,13 @@ use std::collections::BTreeMap;
 const MIN_BLOCK_MIN: usize = 150; // a real night's main block is ≥ 2.5 h
 const MAX_GAP_MIN: i64 = 15; // bridge short HR dropouts within a block
 
-/// The night a timestamp belongs to, labelled by **bed-time date** (the evening
-/// you fell asleep): evening (≥18:00) → that date; small hours (<18:00) → the
-/// previous date. So 31 May 23:00 … 1 Jun 06:00 are all the "31 May" night.
+/// The night a timestamp belongs to, labelled by **wake date** (the morning you
+/// got up) — matching how Zepp/most trackers display "last night": evening
+/// (≥18:00) → the next date; small hours (<18:00) → that date. So 31 May 23:00 …
+/// 1 Jun 06:00 are all the "1 Jun" night. A whole night maps to ONE bucket.
 pub fn night_of(ts: DateTime<Utc>) -> NaiveDate {
-    if ts.hour() < 18 {
-        ts.date_naive() - Duration::days(1)
+    if ts.hour() >= 18 {
+        ts.date_naive() + Duration::days(1)
     } else {
         ts.date_naive()
     }
@@ -190,7 +191,7 @@ mod tests {
     use chrono::{TimeZone, Timelike};
 
     #[test]
-    fn finds_one_overnight_block_labelled_by_bedtime() {
+    fn finds_one_overnight_block_labelled_by_wake_date() {
         // Sleep 23:00 (31 Jan) → 06:00 (1 Feb): low HR with deep dips; awake ~80.
         let mut hr = Vec::new();
         let base = Utc.with_ymd_and_hms(2026, 1, 31, 12, 0, 0).unwrap();
@@ -206,9 +207,9 @@ mod tests {
         }
         let out = hr_derived_sleep(&hr, &SleepModel::default());
         assert!(out.len() >= MIN_BLOCK_MIN, "block too short: {}", out.len());
-        // the whole night is labelled 31 Jan (bedtime), not 1 Feb
+        // the whole night maps to ONE bucket, labelled by wake date (1 Feb)
         let nights: std::collections::BTreeSet<NaiveDate> = out.iter().map(|(t, _)| night_of(*t)).collect();
         assert_eq!(nights.len(), 1);
-        assert_eq!(*nights.iter().next().unwrap(), NaiveDate::from_ymd_opt(2026, 1, 31).unwrap());
+        assert_eq!(*nights.iter().next().unwrap(), NaiveDate::from_ymd_opt(2026, 2, 1).unwrap());
     }
 }
