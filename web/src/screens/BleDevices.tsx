@@ -115,6 +115,7 @@ export function BleDevices() {
 
 const HELIO_KEY_STORE = "ofit_helio_authkey";
 const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
+const isGarmin = (name: string) => /garmin|forerunner|fenix|epix|venu|instinct|945|945|fr\d/i.test(name);
 
 /** Direct-device port (docs/NATIVE-BLE-PORT.md). M0: standard-GATT HR. M1:
  *  Zepp-OS / Huami (Helio) — auth handshake + encrypted transport → live HR.
@@ -321,16 +322,21 @@ function NativeBleCard() {
                 <b>{d.name}</b>
                 <span>{d.rssi} dBm</span>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {isZeppOs(d.name) && (
                   <button
                     type="button"
                     className="btn"
                     disabled={!keyOk}
                     title={keyOk ? "" : "Enter the 32-hex auth key first"}
-                    onClick={() => void addAndConnect(d, { authKey: authKey.trim() })}
+                    onClick={() => void addAndConnect(d, { type: "huami", authKey: authKey.trim() })}
                   >
                     Add · Zepp-OS
+                  </button>
+                )}
+                {isGarmin(d.name) && (
+                  <button type="button" className="btn" onClick={() => void addAndConnect(d, { type: "garmin" })}>
+                    Add · Garmin
                   </button>
                 )}
                 <button type="button" className="btn btn--ghost" onClick={() => void addAndConnect(d)}>

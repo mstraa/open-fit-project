@@ -72,6 +72,10 @@ public class OpenFitBlePlugin extends Plugin {
     private static final UUID CHUNK_READ = UUID.fromString("00000017-0000-3512-2118-0009af100700");
     private static final UUID ACTIVITY_CONTROL = UUID.fromString("00000004-0000-3512-2118-0009af100700");
     private static final UUID ACTIVITY_DATA = UUID.fromString("00000005-0000-3512-2118-0009af100700");
+    // Garmin GFDI multi-link service + first receive(notify)/send(write) pair.
+    private static final UUID GARMIN_ML_SERVICE = UUID.fromString("6a4e2800-667b-11e3-949a-0800200c9a66");
+    private static final UUID GARMIN_ML_RECV = UUID.fromString("6a4e2810-667b-11e3-949a-0800200c9a66");
+    private static final UUID GARMIN_ML_SEND = UUID.fromString("6a4e2820-667b-11e3-949a-0800200c9a66");
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -85,6 +89,8 @@ public class OpenFitBlePlugin extends Plugin {
     private String authKey;
 
     private HuamiSession huami;
+    private org.openfit.app.garmin.GarminSession garmin;
+    private BluetoothGattCharacteristic garminSend;
     private BluetoothGattCharacteristic chunkWriteChar;
     private BluetoothGattCharacteristic chunkReadChar;
     private BluetoothGattCharacteristic hrChar;
@@ -274,6 +280,8 @@ public class OpenFitBlePlugin extends Plugin {
             huami.stop();
             huami = null;
         }
+        garmin = null;
+        garminSend = null;
         chunkWriteChar = chunkReadChar = hrChar = null;
         if (gatt != null) {
             try {
@@ -788,6 +796,8 @@ public class OpenFitBlePlugin extends Plugin {
             }
             if ("huami".equals(mode)) {
                 setupHuami(g);
+            } else if ("garmin".equals(mode)) {
+                setupGarmin(g);
             } else {
                 setupStandardHr(g);
             }
@@ -797,6 +807,8 @@ public class OpenFitBlePlugin extends Plugin {
         public void onMtuChanged(BluetoothGatt g, int mtu, int status) {
             if ("huami".equals(mode)) {
                 startHuamiSession(g, mtu);
+            } else if ("garmin".equals(mode)) {
+                startGarminSession(g, mtu);
             }
         }
 
@@ -824,6 +836,8 @@ public class OpenFitBlePlugin extends Plugin {
                 if (huami != null) huami.onActivityControl(v);
             } else if (ACTIVITY_DATA.equals(u)) {
                 if (huami != null) huami.onActivityData(v);
+            } else if (GARMIN_ML_RECV.equals(u)) {
+                if (garmin != null) garmin.onNotify(v);
             } else if (HR_MEASUREMENT.equals(u)) {
                 if (huami != null) {
                     huami.onHrMeasurement(v);
@@ -850,6 +864,65 @@ public class OpenFitBlePlugin extends Plugin {
         }
         enqueueNotify(hr);
         emitStatus("ready", "streaming heart rate");
+    }
+
+    // -------------------------------------------------------- garmin (GFDI)
+
+    private void setupGarmin(BluetoothGatt g) {
+        if (g.getService(GARMIN_ML_SERVICE) == null) {
+            emitStatus("error", "no Garmin GFDI service (bond it + remove from Garmin Connect)");
+            return;
+        }
+        emitStatus("connected", "Garmin found, negotiating MTU…");
+        boolean requested = false;
+        try {
+            requested = g.requestMtu(515);
+        } catch (SecurityException ignored) {
+        }
+        if (!requested) startGarminSession(g, 23);
+    }
+
+    private void startGarminSession(BluetoothGatt g, int mtu) {
+        if (garmin != null) return; // onMtuChanged can fire once; guard re-entry
+        BluetoothGattService svc = g.getService(GARMIN_ML_SERVICE);
+        if (svc == null) {
+            emitStatus("error", "Garmin service missing");
+            return;
+        }
+        BluetoothGattCharacteristic recv = svc.getCharacteristic(GARMIN_ML_RECV);
+        garminSend = svc.getCharacteristic(GARMIN_ML_SEND);
+        if (recv == null || garminSend == null) {
+            emitStatus("error", "Garmin GFDI characteristics missing");
+            return;
+        }
+        String btName = "OpenFit";
+        try {
+            if (adapter() != null && adapter().getName() != null) btName = adapter().getName();
+        } catch (SecurityException ignored) {
+        }
+        garmin = new org.openfit.app.garmin.GarminSession(
+            btName,
+            (chunk) -> enqueueWrite(garminSend, chunk),
+            new org.openfit.app.garmin.GarminSession.Listener() {
+                @Override
+                public void onLog(String msg) {
+                    main.post(() -> emitStatus("connected", msg));
+                }
+
+                @Override
+                public void onReady() {
+                    main.post(() -> emitStatus("ready", "Garmin connected"));
+                }
+
+                @Override
+                public void onGfdiMessage(int id, byte[] payload) {
+                    // Stage C will route file-sync messages here.
+                }
+            });
+        garmin.setMaxWriteSize(mtu);
+        emitStatus("connected", "negotiated MTU " + mtu + ", Garmin handshake…");
+        enqueueNotify(recv);
+        garmin.start();
     }
 
     /** Heart Rate Measurement (0x2A37): flags byte, then uint8 or uint16 LE HR. */

@@ -34,7 +34,7 @@ export interface OpenFitBlePlugin {
     deviceId: string;
     /** "standard" (default) reads standard GATT HR; "huami" runs the Zepp-OS
      *  auth handshake (requires authKey). */
-    deviceType?: "standard" | "huami";
+    deviceType?: "standard" | "huami" | "garmin";
     authKey?: string;
   }): Promise<void>;
   disconnect(): Promise<void>;

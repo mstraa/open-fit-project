@@ -26,7 +26,7 @@ export type NativeConnStatus = "idle" | "scanning" | "connecting" | "connected" 
 export interface SavedDevice {
   deviceId: string;
   name: string;
-  type: "standard" | "huami";
+  type: "standard" | "huami" | "garmin";
   authKey?: string;
 }
 
@@ -43,7 +43,7 @@ interface NativeBleApi extends NativeBleState {
   available: boolean;
   connectedCount: number;
   scan: () => Promise<void>;
-  addAndConnect: (dev: NativeScanResult, huami?: { authKey: string }) => Promise<void>;
+  addAndConnect: (dev: NativeScanResult, opts?: { type?: "huami" | "garmin"; authKey?: string }) => Promise<void>;
   forget: () => Promise<void>;
   sync: (days?: number) => Promise<void>;
 }
@@ -96,7 +96,9 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
       await OpenFitBle.connect(
         d.type === "huami"
           ? { deviceId: d.deviceId, deviceType: "huami", authKey: d.authKey }
-          : { deviceId: d.deviceId },
+          : d.type === "garmin"
+            ? { deviceId: d.deviceId, deviceType: "garmin" }
+            : { deviceId: d.deviceId },
       );
     } catch (e) {
       setState((s) => ({ ...s, status: "error", message: e instanceof Error ? e.message : String(e) }));
@@ -186,12 +188,12 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
   }, [available]);
 
   const addAndConnect = useCallback(
-    async (dev: NativeScanResult, huami?: { authKey: string }) => {
+    async (dev: NativeScanResult, opts?: { type?: "huami" | "garmin"; authKey?: string }) => {
       const saved: SavedDevice = {
         deviceId: dev.deviceId,
         name: dev.name,
-        type: huami ? "huami" : "standard",
-        authKey: huami?.authKey,
+        type: opts?.type ?? "standard",
+        authKey: opts?.authKey,
       };
       saveSaved(saved);
       await OpenFitBle.stopScan().catch(() => undefined);
