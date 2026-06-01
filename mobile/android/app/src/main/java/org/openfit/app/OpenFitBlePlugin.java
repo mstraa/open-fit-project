@@ -17,7 +17,9 @@ import android.bluetooth.BluetoothStatusCodes;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
@@ -247,10 +249,32 @@ public class OpenFitBlePlugin extends Plugin {
             return;
         }
         connectedId = id;
+        // Garmin uses BLE passkey pairing — explicitly createBond() so Android shows
+        // the code-entry dialog (the watch displays the passkey). GATT comes after.
+        if ("garmin".equals(mode) && device.getBondState() != BluetoothDevice.BOND_BONDED) {
+            registerBondReceiver();
+            try {
+                if (!device.createBond()) {
+                    call.reject("couldn't start pairing with the watch");
+                    return;
+                }
+            } catch (SecurityException e) {
+                call.reject("bond permission: " + e.getMessage());
+                return;
+            }
+            emitStatus("connecting", "pairing — enter the code shown on your watch");
+            call.resolve();
+            return; // proceedConnect() runs on BOND_BONDED
+        }
+        proceedConnect(device);
+        call.resolve();
+    }
+
+    private void proceedConnect(BluetoothDevice device) {
         try {
             gatt = device.connectGatt(getContext(), false, gattCallback, BluetoothDevice.TRANSPORT_LE);
         } catch (SecurityException e) {
-            call.reject("connect permission: " + e.getMessage());
+            emitStatus("error", "connect permission: " + e.getMessage());
             return;
         }
         // Keep the process alive in the background so the connection + ingest
@@ -260,7 +284,28 @@ public class OpenFitBlePlugin extends Plugin {
         } catch (Exception e) {
             Log.w(TAG, "foreground service start failed: " + e.getMessage());
         }
-        call.resolve();
+    }
+
+    private BroadcastReceiver bondReceiver;
+
+    private void registerBondReceiver() {
+        if (bondReceiver != null) return;
+        bondReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context ctx, Intent intent) {
+                BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1);
+                if (d == null || connectedId == null || !connectedId.equals(d.getAddress())) return;
+                if (state == BluetoothDevice.BOND_BONDED) {
+                    Log.i(TAG, "bond complete → connecting GATT");
+                    emitStatus("connecting", "paired — connecting…");
+                    main.post(() -> proceedConnect(d));
+                } else if (state == BluetoothDevice.BOND_NONE) {
+                    emitStatus("error", "pairing failed or was cancelled");
+                }
+            }
+        };
+        getContext().registerReceiver(bondReceiver, new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
     }
 
     @PluginMethod
@@ -1052,6 +1097,13 @@ public class OpenFitBlePlugin extends Plugin {
     protected void handleOnDestroy() {
         stopScanInternal();
         disconnectInternal();
+        if (bondReceiver != null) {
+            try {
+                getContext().unregisterReceiver(bondReceiver);
+            } catch (Exception ignored) {
+            }
+            bondReceiver = null;
+        }
         super.handleOnDestroy();
     }
 }
