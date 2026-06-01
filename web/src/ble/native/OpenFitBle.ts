@@ -37,8 +37,9 @@ export interface OpenFitBlePlugin {
     deviceType?: "standard" | "huami" | "garmin";
     authKey?: string;
   }): Promise<void>;
-  disconnect(): Promise<void>;
-  /** Pull the connected Zepp-OS device's stored wellness since `sinceMillis`. */
+  /** Disconnect one device (by id) or, with no id, all connected devices. */
+  disconnect(options?: { deviceId?: string }): Promise<void>;
+  /** Pull stored wellness since `sinceMillis` from every connected Zepp-OS device. */
   syncNow(options: { sinceMillis?: number }): Promise<void>;
   /** Offline-buffer status: queued sample count, the cap, and file size in bytes. */
   getOutboxStatus(): Promise<{ count: number; maxLines: number; bytes: number }>;

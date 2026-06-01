@@ -1,9 +1,8 @@
-// App-global native-BLE connection (mounted ABOVE the router, see main.tsx) so a
-// connected device keeps streaming as you move between screens — previously the
-// connection lived in the Devices screen and was torn down on navigation (the
-// "preview works but Wellness shows nothing" bug). It also persists an "added"
-// device and auto-reconnects it when the link drops, and exposes a connected
-// count for the dashboard/wellness indicator. Android app only.
+// App-global native-BLE connections (mounted ABOVE the router, see main.tsx) so
+// connected devices keep streaming as you move between screens. Supports MULTIPLE
+// devices at once — e.g. the Helio (Zepp-OS) and a Garmin 945 streaming live HR
+// simultaneously. Each added device is persisted and auto-reconnected when its
+// link drops or on app start. Android app only.
 
 import {
   createContext,
@@ -30,39 +29,48 @@ export interface SavedDevice {
   authKey?: string;
 }
 
-interface NativeBleState {
-  status: NativeConnStatus;
-  found: NativeScanResult[];
-  hr: number | null;
-  message?: string;
-  device: SavedDevice | null; // the active/added device
-  syncing: boolean;
-}
-
-interface NativeBleApi extends NativeBleState {
+interface NativeBleApi {
   available: boolean;
+  status: NativeConnStatus; // aggregate (for the global indicator)
+  found: NativeScanResult[];
+  hr: number | null; // latest HR from any device
+  devices: SavedDevice[];
   connectedCount: number;
+  syncing: boolean;
+  /** Per-device link state. */
+  statusOf: (deviceId: string) => NativeConnStatus;
+  messageOf: (deviceId: string) => string | undefined;
+  hrOf: (deviceId: string) => number | null;
   scan: () => Promise<void>;
   addAndConnect: (dev: NativeScanResult, opts?: { type?: "huami" | "garmin"; authKey?: string }) => Promise<void>;
-  forget: () => Promise<void>;
+  forget: (deviceId: string) => Promise<void>;
   sync: (days?: number) => Promise<void>;
 }
 
 const Ctx = createContext<NativeBleApi | null>(null);
-const STORE = "ofit_native_device";
+const STORE = "ofit_native_devices";
+const LEGACY_STORE = "ofit_native_device"; // pre-multi-device single-device key
 
-function loadSaved(): SavedDevice | null {
+function loadSaved(): SavedDevice[] {
   try {
     const raw = localStorage.getItem(STORE);
-    return raw ? (JSON.parse(raw) as SavedDevice) : null;
+    if (raw) return JSON.parse(raw) as SavedDevice[];
+    // One-time migration from the old single-device key.
+    const legacy = localStorage.getItem(LEGACY_STORE);
+    if (legacy) {
+      const d = JSON.parse(legacy) as SavedDevice;
+      localStorage.setItem(STORE, JSON.stringify([d]));
+      localStorage.removeItem(LEGACY_STORE);
+      return [d];
+    }
+    return [];
   } catch {
-    return null;
+    return [];
   }
 }
-function saveSaved(d: SavedDevice | null) {
+function saveSaved(d: SavedDevice[]) {
   try {
-    if (d) localStorage.setItem(STORE, JSON.stringify(d));
-    else localStorage.removeItem(STORE);
+    localStorage.setItem(STORE, JSON.stringify(d));
   } catch {
     /* ignore */
   }
@@ -70,25 +78,33 @@ function saveSaved(d: SavedDevice | null) {
 
 export function NativeBleProvider({ children }: { children: ReactNode }) {
   const available = isNativeApp();
-  const [state, setState] = useState<NativeBleState>(() => ({
-    status: "idle",
-    found: [],
-    hr: null,
-    device: loadSaved(),
-    syncing: false,
-  }));
+  const [devices, setDevices] = useState<SavedDevice[]>(() => loadSaved());
+  const [found, setFound] = useState<NativeScanResult[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [statuses, setStatuses] = useState<Record<string, NativeConnStatus>>({});
+  const [messages, setMessages] = useState<Record<string, string>>({});
+  const [hrById, setHrById] = useState<Record<string, number>>({});
+  const [hr, setHr] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
   const subs = useRef<PluginListenerHandle[]>([]);
-  const userDisconnect = useRef(false);
+  const devicesRef = useRef<SavedDevice[]>(devices);
+  devicesRef.current = devices;
+  // Devices the user explicitly disconnected — don't auto-reconnect these.
+  const userDisconnect = useRef<Set<string>>(new Set());
   // True only while a user-tapped sync is in flight, so background/periodic syncs
   // don't reload the page out from under the user.
   const userSync = useRef(false);
-  const deviceRef = useRef<SavedDevice | null>(state.device);
-  deviceRef.current = state.device;
 
-  // Open (or re-open) the connection for a saved device.
+  const setStatus = useCallback((id: string, s: NativeConnStatus) => {
+    setStatuses((m) => ({ ...m, [id]: s }));
+  }, []);
+
+  // Open (or re-open) the connection for one saved device.
   const open = useCallback(async (d: SavedDevice) => {
-    userDisconnect.current = false;
-    setState((s) => ({ ...s, status: "connecting", device: d, message: undefined }));
+    userDisconnect.current.delete(d.deviceId);
+    setStatus(d.deviceId, "connecting");
+    setMessages((m) => ({ ...m, [d.deviceId]: "" }));
     try {
       // Give the native side the server URL + token so it can POST samples even
       // while the screen is locked (the WebView/JS is suspended then).
@@ -101,9 +117,10 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
             : { deviceId: d.deviceId },
       );
     } catch (e) {
-      setState((s) => ({ ...s, status: "error", message: e instanceof Error ? e.message : String(e) }));
+      setStatus(d.deviceId, "error");
+      setMessages((m) => ({ ...m, [d.deviceId]: e instanceof Error ? e.message : String(e) }));
     }
-  }, []);
+  }, [setStatus]);
 
   // Register native listeners ONCE for the provider's lifetime.
   useEffect(() => {
@@ -112,53 +129,60 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     (async () => {
       const handles = await Promise.all([
         OpenFitBle.addListener("scanResult", (r) => {
-          setState((s) =>
-            s.found.some((f) => f.deviceId === r.deviceId)
-              ? s
-              : { ...s, found: [...s.found, r].sort((a, b) => b.rssi - a.rssi) },
-          );
+          setFound((f) => (f.some((x) => x.deviceId === r.deviceId) ? f : [...f, r].sort((a, b) => b.rssi - a.rssi)));
         }),
         OpenFitBle.addListener("status", (e: NativeStatus) => {
+          const id = e.deviceId;
           if (e.status === "connected" || e.status === "ready") {
             const done =
               e.message === "sync complete" ||
               e.message === "sync up to date" ||
               e.message === "sync failed" ||
               e.message === "sync timed out";
-            setState((s) => ({ ...s, status: "connected", message: e.message, syncing: done ? false : s.syncing }));
+            if (id) setStatus(id, "connected");
+            if (e.message) setMessages((m) => (id ? { ...m, [id]: e.message! } : m));
+            if (done) setSyncing(false);
             // Surface new history after a user-tapped sync with a SOFT refresh (a
-            // data-updated event that remounts the screen) — not a page reload,
-            // which would re-run the boot and bounce an offline session to the
-            // connect screen. Background syncs stay silent.
+            // data-updated event that remounts the screen) — not a page reload.
             if (e.message === "sync complete" && userSync.current) {
               userSync.current = false;
               window.setTimeout(() => window.dispatchEvent(new Event("ofit:data-updated")), 800);
             }
-            // The native side ran an analytics recompute (new sleep/body-battery/
-            // resting-HR) — soft-refresh so the views pick up the derived metrics.
+            // The native side ran an analytics recompute — soft-refresh so the
+            // views pick up the derived metrics. (Global, no deviceId.)
             if (e.message === "recomputed") {
               window.dispatchEvent(new Event("ofit:data-updated"));
             }
             if (done) userSync.current = false;
           } else if (e.status === "error") {
-            setState((s) => ({ ...s, status: "error", message: e.message, syncing: false }));
+            if (id) {
+              setStatus(id, "error");
+              if (e.message) setMessages((m) => ({ ...m, [id]: e.message! }));
+            }
+            setSyncing(false);
           } else if (e.status === "disconnected") {
-            // Auto-reconnect an added device unless the user asked to disconnect.
-            const d = deviceRef.current;
-            if (d && !userDisconnect.current) {
-              setState((s) => ({ ...s, status: "reconnecting", hr: null, syncing: false }));
+            if (!id) return;
+            // Auto-reconnect a saved device unless the user asked to disconnect.
+            const saved = devicesRef.current.find((d) => d.deviceId === id);
+            if (saved && !userDisconnect.current.has(id)) {
+              setStatus(id, "reconnecting");
+              setHrById((m) => ({ ...m, [id]: 0 }));
               window.setTimeout(() => {
-                if (deviceRef.current && !userDisconnect.current) void open(deviceRef.current);
+                const still = devicesRef.current.find((d) => d.deviceId === id);
+                if (still && !userDisconnect.current.has(id)) void open(still);
               }, 2500);
             } else {
-              setState((s) => ({ ...s, status: "idle", hr: null }));
+              setStatus(id, "idle");
             }
           }
         }),
         OpenFitBle.addListener("sample", (e) => {
-          // Native side POSTs to /api/wellness (so it survives screen-lock); here
-          // we only mirror the latest HR for the UI.
-          if (e.kind === "heart_rate") setState((s) => ({ ...s, hr: Math.round(e.value) }));
+          // Native side POSTs to /api/wellness; here we only mirror the latest HR.
+          if (e.kind === "heart_rate") {
+            const v = Math.round(e.value);
+            setHr(v);
+            if (e.deviceId) setHrById((m) => ({ ...m, [e.deviceId]: v }));
+          }
         }),
       ]);
       if (!alive) {
@@ -166,24 +190,25 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
         return;
       }
       subs.current = handles;
-      // Auto-connect a previously added device on app start.
-      if (deviceRef.current) void open(deviceRef.current);
+      // Auto-connect every previously added device on app start.
+      for (const d of devicesRef.current) void open(d);
     })();
     return () => {
       alive = false;
       subs.current.forEach((h) => void h.remove());
       subs.current = [];
     };
-  }, [available, open]);
+  }, [available, open, setStatus]);
 
   const scan = useCallback(async () => {
     if (!available) return;
-    setState((s) => ({ ...s, status: s.status === "connected" ? s.status : "scanning", found: [], message: undefined }));
+    setScanning(true);
+    setFound([]);
     try {
       await OpenFitBle.startScan();
-      window.setTimeout(() => setState((s) => (s.status === "scanning" ? { ...s, status: "idle" } : s)), 10_500);
-    } catch (e) {
-      setState((s) => ({ ...s, status: "error", message: e instanceof Error ? e.message : String(e) }));
+      window.setTimeout(() => setScanning(false), 10_500);
+    } catch {
+      setScanning(false);
     }
   }, [available]);
 
@@ -195,39 +220,92 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
         type: opts?.type ?? "standard",
         authKey: opts?.authKey,
       };
-      saveSaved(saved);
+      // Add (or replace) without dropping other connected devices.
+      setDevices((list) => {
+        const next = [...list.filter((d) => d.deviceId !== saved.deviceId), saved];
+        saveSaved(next);
+        devicesRef.current = next;
+        return next;
+      });
       await OpenFitBle.stopScan().catch(() => undefined);
+      setScanning(false);
       await open(saved);
     },
     [open],
   );
 
-  // Incremental by default: the native side pulls from its per-device watermark
-  // (only NEW data), or the full 40-day window the first time. Pass `days` to
-  // force a specific window (e.g. a manual full re-sync).
+  // Incremental by default; pass `days` to force a full re-sync window. Syncs
+  // every connected Zepp-OS device (Garmin links are live-only).
   const sync = useCallback(async (days?: number) => {
     if (!available) return;
-    userSync.current = true; // user-tapped → reload the views when it completes
-    setState((s) => ({ ...s, syncing: true, message: "Syncing stored data…" }));
+    userSync.current = true;
+    setSyncing(true);
     try {
       await OpenFitBle.syncNow(days ? { sinceMillis: Date.now() - days * 86_400_000 } : {});
     } catch (e) {
-      setState((s) => ({ ...s, syncing: false, message: `sync error: ${e instanceof Error ? e.message : String(e)}` }));
+      setSyncing(false);
+      console.warn("sync error", e);
     }
   }, [available]);
 
-  const forget = useCallback(async () => {
-    userDisconnect.current = true;
-    saveSaved(null);
-    setState((s) => ({ ...s, device: null, status: "idle", hr: null }));
-    await OpenFitBle.disconnect().catch(() => undefined);
+  const forget = useCallback(async (deviceId: string) => {
+    userDisconnect.current.add(deviceId);
+    setDevices((list) => {
+      const next = list.filter((d) => d.deviceId !== deviceId);
+      saveSaved(next);
+      devicesRef.current = next;
+      return next;
+    });
+    setStatuses((m) => {
+      const next = { ...m };
+      delete next[deviceId];
+      return next;
+    });
+    setHrById((m) => {
+      const next = { ...m };
+      delete next[deviceId];
+      return next;
+    });
+    await OpenFitBle.disconnect({ deviceId }).catch(() => undefined);
   }, []);
 
-  const connectedCount = state.status === "connected" ? 1 : 0;
+  const connectedCount = useMemo(
+    () => devices.filter((d) => statuses[d.deviceId] === "connected").length,
+    [devices, statuses],
+  );
+
+  // Aggregate status for the global indicator.
+  const status: NativeConnStatus = useMemo(() => {
+    if (scanning) return "scanning";
+    const vals = devices.map((d) => statuses[d.deviceId]);
+    if (vals.some((v) => v === "connected")) return "connected";
+    if (vals.some((v) => v === "connecting" || v === "reconnecting")) return "reconnecting";
+    if (vals.some((v) => v === "error")) return "error";
+    return "idle";
+  }, [devices, statuses, scanning]);
+
+  const statusOf = useCallback((id: string): NativeConnStatus => statuses[id] ?? "idle", [statuses]);
+  const messageOf = useCallback((id: string) => messages[id], [messages]);
+  const hrOf = useCallback((id: string) => (hrById[id] ? hrById[id] : null), [hrById]);
 
   const value = useMemo<NativeBleApi>(
-    () => ({ ...state, available, connectedCount, scan, addAndConnect, forget, sync }),
-    [state, available, connectedCount, scan, addAndConnect, forget, sync],
+    () => ({
+      available,
+      status,
+      found,
+      hr,
+      devices,
+      connectedCount,
+      syncing,
+      statusOf,
+      messageOf,
+      hrOf,
+      scan,
+      addAndConnect,
+      forget,
+      sync,
+    }),
+    [available, status, found, hr, devices, connectedCount, syncing, statusOf, messageOf, hrOf, scan, addAndConnect, forget, sync],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

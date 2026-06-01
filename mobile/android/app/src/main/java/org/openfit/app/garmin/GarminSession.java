@@ -8,38 +8,46 @@ import java.util.Arrays;
 import java.util.function.Consumer;
 
 /**
- * Drives a Garmin GFDI session over the multi-link (ML) transport:
- *   1. ML handshake — CLOSE_ALL_REQ → REGISTER_ML_REQ(GFDI) → REGISTER_ML_RESP
- *      (yields the 1-byte GFDI handle that prefixes every GFDI write).
- *   2. GFDI handshake — the watch sends DeviceInformation (5024) + AuthNegotiation
- *      (5101); we ACK + reply, then on its capabilities we completeInitialization
- *      (SupportedFileTypes + SYNC_READY) → link ready for file sync.
+ * Drives a Garmin GFDI session over the multi-link (ML) transport for a LIVE
+ * connection (realtime heart rate). File sync is intentionally not implemented:
+ * the Forerunner 945 does not stage activity/wellness files over BLE for a
+ * non-Garmin-Connect partner (its directory stays empty and FileSyncService
+ * returns nothing), so activities are imported from Garmin Connect exports
+ * instead. See docs/GARMIN-GFDI-DESIGN.md.
+ *
+ * Handshake:
+ *   1. ML — CLOSE_ALL_REQ → REGISTER_ML_REQ(GFDI) → REGISTER_ML_RESP (yields the
+ *      1-byte GFDI handle that prefixes every GFDI write).
+ *   2. GFDI — the watch sends DeviceInformation (5024) + AuthNegotiation (5101);
+ *      we ACK + reply, and on Configuration (5050) we completeInitialization
+ *      (device settings + time + SYNC_READY) and register the realtime-HR link.
+ *   3. Protobuf requests (5043) the watch sends are status-acked so it stops
+ *      retransmitting; we don't otherwise act on them.
  *
  * Transport-agnostic: the plugin supplies a write callback (→ the send char,
  * already chunked by the op queue) and feeds inbound notifications via onNotify.
- * Ported from Gadgetbridge's Garmin support (AGPLv3). See
- * docs/GARMIN-GFDI-DESIGN.md §2–3. Stage A/B; file sync (Stage C) hooks via the
- * listener's onGfdiMessage.
+ * Ported from Gadgetbridge's Garmin support (AGPLv3).
  */
 public class GarminSession {
     private static final String TAG = "GarminSession";
 
     // ML request types (ordinals)
     private static final int REGISTER_ML_REQ = 0, REGISTER_ML_RESP = 1, CLOSE_ALL_REQ = 5, CLOSE_ALL_RESP = 6;
-    private static final int SERVICE_GFDI = 1, SERVICE_REALTIME_HR = 6, SERVICE_REALTIME_STEPS = 7;
+    private static final int SERVICE_GFDI = 1, SERVICE_REALTIME_HR = 6;
     private static final long CLIENT_ID = 2L;
 
     // GFDI message ids
     private static final int RESPONSE = 5000, DEVICE_SETTINGS = 5026, SYSTEM_EVENT = 5030,
-        SUPPORTED_FILE_TYPES_REQUEST = 5031, DEVICE_INFORMATION = 5024, PROTOBUF_REQUEST = 5043,
-        CONFIGURATION = 5050, AUTH_NEGOTIATION = 5101;
+        SUPPORTED_FILE_TYPES_REQUEST = 5031, DEVICE_INFORMATION = 5024,
+        PROTOBUF_REQUEST = 5043, CONFIGURATION = 5050, AUTH_NEGOTIATION = 5101;
     private static final int STATUS_ACK = 0;
+    private static final int SYS_EVENT_PAIR_COMPLETE = 4;
     private static final int SYS_EVENT_SYNC_READY = 8;
+    private static final int SYS_EVENT_TIME_UPDATED = 16;
 
     public interface Listener {
         void onLog(String msg);
         void onReady();
-        void onGfdiMessage(int msgId, byte[] payload);
         void onHeartRate(int bpm);
     }
 
@@ -50,7 +58,6 @@ public class GarminSession {
     private int maxWriteSize = 20;
     private int gfdiHandle = -1;
     private int hrHandle = -1;
-    private boolean ready = false;
     private boolean initialized = false;
 
     public GarminSession(String btName, Consumer<byte[]> write, Listener listener) {
@@ -120,7 +127,6 @@ public class GarminSession {
             if (status == 0 && handle >= 0) {
                 if (service == SERVICE_GFDI) {
                     gfdiHandle = handle;
-                    ready = true;
                     listener.onLog("garmin: ML registered (handle " + handle + ")");
                 } else if (service == SERVICE_REALTIME_HR) {
                     hrHandle = handle;
@@ -141,22 +147,16 @@ public class GarminSession {
         int type = u16(msg, 2);
         boolean statusChannel = (type & 0x8000) != 0;
         int id = statusChannel ? ((type & 0xFF) + 5000) : type;
-        // CRC check (lenient: log mismatch but proceed)
-        if (len <= msg.length && len >= 6) {
-            int want = u16(msg, len - 2);
-            int got = GarminCrc.crc16(msg, 0, len - 2);
-            if (want != got) Log.w(TAG, "GFDI CRC mismatch id=" + id + " want=" + want + " got=" + got);
-        }
         byte[] payload = (len >= 6 && len <= msg.length)
             ? Arrays.copyOfRange(msg, 4, len - 2)
             : new byte[0];
-        Log.i(TAG, "GFDIDBG recv id=" + id + (statusChannel ? " (status)" : "") + " len=" + len + " plen=" + payload.length);
 
         if (statusChannel) {
-            // an ACK/status for something we sent — nothing to do
-            return;
+            return; // an ACK/status for something we sent — nothing to do
         }
         switch (id) {
+            case RESPONSE:
+                return; // a reply to something WE sent — responses are never re-ACKed
             case DEVICE_INFORMATION:
                 listener.onLog("garmin: device info");
                 sendGfdi(deviceInfoReply(payload));
@@ -166,29 +166,76 @@ public class GarminSession {
                 sendGfdi(authReply());
                 break;
             case PROTOBUF_REQUEST:
+                handleProtobufRequest(payload);
+                break;
             case CONFIGURATION:
                 sendGfdi(genericAck(id));
-                completeInitialization();
+                completeInitialization(); // CONFIGURATION arrives once per connect
                 break;
             default:
                 sendGfdi(genericAck(id));
                 break;
         }
-        listener.onGfdiMessage(id, payload);
     }
 
     private void completeInitialization() {
         if (initialized) return;
         initialized = true;
-        Log.i(TAG, "completeInitialization → SUPPORTED_FILE_TYPES + SYNC_READY");
+        Log.i(TAG, "completeInitialization → settings + time + SYNC_READY");
         listener.onLog("garmin: link ready");
+        // Mirror Garmin Connect's init so the watch is happy on the link.
         sendGfdi(gfdiFrame(SUPPORTED_FILE_TYPES_REQUEST, new byte[0]));
-        sendGfdi(gfdiFrame(SYSTEM_EVENT, new byte[]{(byte) SYS_EVENT_SYNC_READY}));
+        sendGfdi(deviceSettingsMsg());
+        sendGfdi(systemEvent(SYS_EVENT_TIME_UPDATED));
+        sendGfdi(systemEvent(SYS_EVENT_SYNC_READY));
+        sendGfdi(systemEvent(SYS_EVENT_PAIR_COMPLETE));
         enableRealtimeHr(); // start live HR streaming
         listener.onReady();
     }
 
+    // ---- protobuf (GdiSmartProto) ----
+    // The watch coordinates over protobuf; every PROTOBUF_REQUEST needs a protobuf
+    // *status* ack (not the plain RESPONSE ack) or the watch retries forever.
+
+    private void handleProtobufRequest(byte[] p) {
+        if (p.length < 14) {
+            sendGfdi(genericAck(PROTOBUF_REQUEST));
+            return;
+        }
+        int reqId = u16(p, 0);
+        long dataOffset = u32(p, 2);
+        sendGfdi(protobufStatusAck(reqId, (int) dataOffset));
+    }
+
+    /** RESPONSE(5000) wrapping a ProtobufStatusMessage:
+     *  [u16 5043][u8 ACK][u16 reqId][u32 dataOffset][u8 KEPT=0][u8 NO_ERROR=0]. */
+    private static byte[] protobufStatusAck(int reqId, int dataOffset) {
+        Writer w = new Writer();
+        w.u16(PROTOBUF_REQUEST);
+        w.u8(STATUS_ACK);
+        w.u16(reqId);
+        w.u32(dataOffset);
+        w.u8(0); // ProtobufChunkStatus.KEPT
+        w.u8(0); // ProtobufStatusCode.NO_ERROR
+        return gfdiFrame(RESPONSE, w.bytes());
+    }
+
     // ---- message builders ----
+
+    /** SystemEvent (5030): [u8 eventType][u8 value]. */
+    private static byte[] systemEvent(int eventType) {
+        return gfdiFrame(SYSTEM_EVENT, new byte[]{(byte) eventType, 0});
+    }
+
+    /** SetDeviceSettings (5026): enable auto-upload + weather conditions. */
+    private static byte[] deviceSettingsMsg() {
+        Writer w = new Writer();
+        w.u8(3);                       // setting count
+        w.u8(6); w.u8(1); w.u8(1);     // AUTO_UPLOAD_ENABLED = bool true
+        w.u8(7); w.u8(1); w.u8(1);     // WEATHER_CONDITIONS_ENABLED = bool true
+        w.u8(8); w.u8(1); w.u8(0);     // WEATHER_ALERTS_ENABLED = bool false
+        return gfdiFrame(DEVICE_SETTINGS, w.bytes());
+    }
 
     private byte[] deviceInfoReply(byte[] incoming) {
         int inProto = incoming.length >= 2 ? u16(incoming, 0) : 0;
@@ -271,6 +318,10 @@ public class GarminSession {
 
     private static int u16(byte[] b, int o) {
         return (b[o] & 0xFF) | ((b[o + 1] & 0xFF) << 8);
+    }
+
+    private static long u32(byte[] b, int o) {
+        return (b[o] & 0xFFL) | ((b[o + 1] & 0xFFL) << 8) | ((b[o + 2] & 0xFFL) << 16) | ((b[o + 3] & 0xFFL) << 24);
     }
 
     /** Little-endian writer. */

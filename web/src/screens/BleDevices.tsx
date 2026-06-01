@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
-import { useNativeBle } from "../ble/native/NativeBleProvider";
+import { useNativeBle, type NativeConnStatus } from "../ble/native/NativeBleProvider";
 import { OpenFitBle } from "../ble/native/OpenFitBle";
 import { isNativeApp } from "../gadgetbridge/autoImportConfig";
 
@@ -220,7 +220,8 @@ function OutboxCard() {
 }
 
 function NativeBleCard() {
-  const { status, found, hr, message, device, syncing, available, scan, addAndConnect, forget, sync } = useNativeBle();
+  const { status, found, devices, syncing, available, scan, addAndConnect, forget, sync, statusOf, messageOf, hrOf } =
+    useNativeBle();
   const [authKey, setAuthKey] = useState<string>(() => {
     try {
       return localStorage.getItem(HELIO_KEY_STORE) ?? "";
@@ -229,8 +230,9 @@ function NativeBleCard() {
     }
   });
   if (!available) return null;
-  const linked = status === "connected" || status === "connecting" || status === "reconnecting";
   const keyOk = /^(0x)?[0-9a-fA-F]{32}$/.test(authKey.trim());
+  // Only offer to add devices that aren't already saved.
+  const addable = found.filter((d) => !devices.some((x) => x.deviceId === d.deviceId));
 
   const saveKey = (v: string) => {
     setAuthKey(v);
@@ -241,6 +243,17 @@ function NativeBleCard() {
     }
   };
 
+  const statusLabel = (s: NativeConnStatus) =>
+    s === "connected"
+      ? "streaming → wellness"
+      : s === "reconnecting"
+        ? "reconnecting…"
+        : s === "connecting"
+          ? "connecting…"
+          : s === "error"
+            ? "error"
+            : "added";
+
   return (
     <div className="card" style={{ marginTop: 24 }}>
       <div className="card__head">
@@ -248,21 +261,15 @@ function NativeBleCard() {
           Native BLE<span className="sub">direct GATT · auto-reconnect</span>
         </div>
         <div className="card__tools">
-          {device ? (
-            <button type="button" className="btn btn--ghost" onClick={() => void forget()}>
-              Forget
-            </button>
-          ) : (
-            <button type="button" className="btn" disabled={status === "scanning"} onClick={() => void scan()}>
-              {status === "scanning" ? "Scanning…" : "Native scan"}
-            </button>
-          )}
+          <button type="button" className="btn" disabled={status === "scanning"} onClick={() => void scan()}>
+            {status === "scanning" ? "Scanning…" : "Native scan"}
+          </button>
         </div>
       </div>
       <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
-        Direct device sync, no Gadgetbridge. Standard HR works on any strap / watch in <b>Broadcast HR</b>;
-        for the <b>Helio (Zepp-OS)</b>, paste its 32-hex auth key, then add it with <b>Zepp-OS</b>. Added
-        devices keep streaming across the app and reconnect automatically.{" "}
+        Direct device sync, no Gadgetbridge. The <b>Helio (Zepp-OS)</b> and a <b>Garmin</b> can stay connected
+        and stream live HR at the same time. For the Helio, paste its 32-hex auth key, then add it with{" "}
+        <b>Zepp-OS</b>. Added devices keep streaming across the app and reconnect automatically.{" "}
         <b>First unpair the Helio in Android → Bluetooth settings</b> so it doesn&apos;t fight the Zepp app.
       </p>
 
@@ -278,45 +285,50 @@ function NativeBleCard() {
         />
       </label>
 
-      {device ? (
-        <div className="grid grid--stats">
-          <div className="card stat">
-            <div className="stat__ico t-hr">
-              <BleIcon />
-            </div>
-            <div className="stat__label">
-              {device.name} ·{" "}
-              {status === "connected"
-                ? "streaming → wellness"
-                : status === "reconnecting"
-                  ? "reconnecting…"
-                  : status === "connecting"
-                    ? "connecting…"
-                    : status === "error"
-                      ? "error"
-                      : "added"}
-            </div>
-            <div className="stat__val num" style={{ fontSize: 26 }}>
-              {status === "connected" && hr != null ? hr : "—"} <small>bpm</small>
-            </div>
-          </div>
-          {device.type === "huami" && status === "connected" && (
-            <div className="card stat" style={{ justifyContent: "center", gap: 10 }}>
-              <div className="stat__label">Stored data</div>
-              <button type="button" className="btn" disabled={syncing} onClick={() => void sync()}>
-                {syncing ? "Syncing…" : "Sync now"}
-              </button>
-              <span className="faint" style={{ fontSize: 10.5 }}>
-                {message && (syncing || message.startsWith("sync") || message.startsWith("fetch") || message.startsWith("auto"))
-                  ? message
-                  : "Auto-syncs on connect · pulls only new steps + per-minute HR & sleep."}
-              </span>
-            </div>
-          )}
+      {/* Saved devices — each its own live card. */}
+      {devices.length > 0 && (
+        <div className="grid grid--stats" style={{ marginBottom: addable.length > 0 ? 16 : 0 }}>
+          {devices.map((device) => {
+            const s = statusOf(device.deviceId);
+            const hr = hrOf(device.deviceId);
+            const message = messageOf(device.deviceId);
+            const showSync = device.type === "huami" && s === "connected";
+            return (
+              <div key={device.deviceId} className="card stat">
+                <div className="stat__ico t-hr">
+                  <BleIcon />
+                </div>
+                <div className="stat__label">
+                  {device.name} · {statusLabel(s)}
+                </div>
+                <div className="stat__val num" style={{ fontSize: 26 }}>
+                  {s === "connected" && hr != null ? hr : "—"} <small>bpm</small>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  {showSync && (
+                    <button type="button" className="btn" disabled={syncing} onClick={() => void sync()}>
+                      {syncing ? "Syncing…" : "Sync now"}
+                    </button>
+                  )}
+                  <button type="button" className="btn btn--ghost" onClick={() => void forget(device.deviceId)}>
+                    Forget
+                  </button>
+                </div>
+                {message && (s === "error" || message.startsWith("sync") || message.startsWith("auto")) && (
+                  <span className={s === "error" ? "pill pill--bad" : "faint"} style={{ fontSize: 10.5, marginTop: 6 }}>
+                    {message}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
-      ) : found.length > 0 ? (
+      )}
+
+      {/* Scan results — add new devices without dropping the connected ones. */}
+      {addable.length > 0 ? (
         <div className="card card--pad0">
-          {found.map((d) => (
+          {addable.map((d) => (
             <div key={d.deviceId} className="dev" style={{ padding: "12px 16px" }}>
               <div className="dev__b">
                 <b>{d.name}</b>
@@ -346,16 +358,11 @@ function NativeBleCard() {
             </div>
           ))}
         </div>
-      ) : (
+      ) : devices.length === 0 ? (
         <span className="faint" style={{ fontSize: 11 }}>
           {status === "scanning" ? "Scanning…" : "Tap Native scan to list devices."}
         </span>
-      )}
-      {message && (status === "error" || (linked && status !== "connected")) && (
-        <span className={status === "error" ? "pill pill--bad" : "faint"} style={{ fontSize: 11, display: status === "error" ? "flex" : "block", marginTop: 8, justifyContent: "flex-start" }}>
-          {message}
-        </span>
-      )}
+      ) : null}
     </div>
   );
 }

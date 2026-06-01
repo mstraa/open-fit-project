@@ -86,30 +86,15 @@ public class OpenFitBlePlugin extends Plugin {
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
 
-    private BluetoothGatt gatt;
-    private String connectedId;
-    private String mode = "standard";
-    private String authKey;
+    // Each added device gets its own DeviceLink (independent GATT + op queue), so
+    // the Helio and the Garmin can stream live simultaneously. Keyed by deviceId.
+    private final java.util.Map<String, DeviceLink> links = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private HuamiSession huami;
-    private org.openfit.app.garmin.GarminSession garmin;
-    private BluetoothGattCharacteristic garminSend;
-    private BluetoothGattCharacteristic chunkWriteChar;
-    private BluetoothGattCharacteristic chunkReadChar;
-    private BluetoothGattCharacteristic hrChar;
-    private BluetoothGattCharacteristic activityControlChar;
-    private BluetoothGattCharacteristic activityDataChar;
-
-    // Batched POST of fetched (historical) samples → /api/wellness.
-    private final java.util.List<String> fetchBatch = new java.util.ArrayList<>();
     private static final java.text.SimpleDateFormat RFC3339;
     static {
         RFC3339 = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US);
         RFC3339.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
     }
-
-    private final ArrayDeque<Runnable> opQueue = new ArrayDeque<>();
-    private boolean opInFlight = false;
 
     // Native ingest (survives screen-lock; the WebView JS is suspended then).
     private final ExecutorService ingestExec = Executors.newSingleThreadExecutor();
@@ -124,7 +109,6 @@ public class OpenFitBlePlugin extends Plugin {
     private static final long AUTO_SYNC_MIN_INTERVAL_MS = 10L * 60 * 1000; // throttle auto-sync on (re)connect
     private static final long PERIODIC_SYNC_MS = 15L * 60 * 1000;        // background refresh while connected
     private static final long RECOMPUTE_MIN_INTERVAL_MS = 20L * 60 * 1000; // throttle auto-recompute after sync
-    private long maxFetchedTs = 0L;                                      // newest ts seen this sync → next watermark
 
     private static UUID uuid16(String s) {
         return UUID.fromString("0000" + s + "-0000-1000-8000-00805f9b34fb");
@@ -229,8 +213,8 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("deviceId required");
             return;
         }
-        mode = call.getString("deviceType", "standard");
-        authKey = call.getString("authKey");
+        String mode = call.getString("deviceType", "standard");
+        String authKey = call.getString("authKey");
         if ("huami".equals(mode) && (authKey == null || authKey.isEmpty())) {
             call.reject("authKey required for huami devices");
             return;
@@ -241,7 +225,9 @@ public class OpenFitBlePlugin extends Plugin {
             return;
         }
         stopScanInternal();
-        disconnectInternal();
+        // Replace any existing link to the same device; OTHER devices stay connected.
+        DeviceLink old = links.remove(id);
+        if (old != null) old.teardown();
         BluetoothDevice device;
         try {
             device = a.getRemoteDevice(id);
@@ -249,42 +235,29 @@ public class OpenFitBlePlugin extends Plugin {
             call.reject("bad deviceId");
             return;
         }
-        connectedId = id;
+        DeviceLink link = new DeviceLink(id, mode, authKey);
+        links.put(id, link);
         // Garmin uses BLE passkey pairing — explicitly createBond() so Android shows
         // the code-entry dialog (the watch displays the passkey). GATT comes after.
         if ("garmin".equals(mode) && device.getBondState() != BluetoothDevice.BOND_BONDED) {
             registerBondReceiver();
             try {
                 if (!device.createBond()) {
+                    links.remove(id);
                     call.reject("couldn't start pairing with the watch");
                     return;
                 }
             } catch (SecurityException e) {
+                links.remove(id);
                 call.reject("bond permission: " + e.getMessage());
                 return;
             }
-            emitStatus("connecting", "pairing — enter the code shown on your watch");
+            emitStatus(id, "connecting", "pairing — enter the code shown on your watch");
             call.resolve();
             return; // proceedConnect() runs on BOND_BONDED
         }
-        proceedConnect(device);
+        link.proceedConnect(device);
         call.resolve();
-    }
-
-    private void proceedConnect(BluetoothDevice device) {
-        try {
-            gatt = device.connectGatt(getContext(), false, gattCallback, BluetoothDevice.TRANSPORT_LE);
-        } catch (SecurityException e) {
-            emitStatus("error", "connect permission: " + e.getMessage());
-            return;
-        }
-        // Keep the process alive in the background so the connection + ingest
-        // survive a screen lock (needed for workout recording).
-        try {
-            BleForegroundService.start(getContext(), "Connected — streaming wellness");
-        } catch (Exception e) {
-            Log.w(TAG, "foreground service start failed: " + e.getMessage());
-        }
     }
 
     private BroadcastReceiver bondReceiver;
@@ -296,13 +269,15 @@ public class OpenFitBlePlugin extends Plugin {
             public void onReceive(Context ctx, Intent intent) {
                 BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1);
-                if (d == null || connectedId == null || !connectedId.equals(d.getAddress())) return;
+                if (d == null) return;
+                DeviceLink link = links.get(d.getAddress());
+                if (link == null) return;
                 if (state == BluetoothDevice.BOND_BONDED) {
                     Log.i(TAG, "bond complete → connecting GATT");
-                    emitStatus("connecting", "paired — connecting…");
-                    main.post(() -> proceedConnect(d));
+                    emitStatus(d.getAddress(), "connecting", "paired — connecting…");
+                    main.post(() -> link.proceedConnect(d));
                 } else if (state == BluetoothDevice.BOND_NONE) {
-                    emitStatus("error", "pairing failed or was cancelled");
+                    emitStatus(d.getAddress(), "error", "pairing failed or was cancelled");
                 }
             }
         };
@@ -311,50 +286,40 @@ public class OpenFitBlePlugin extends Plugin {
 
     @PluginMethod
     public void disconnect(PluginCall call) {
-        disconnectInternal();
+        String id = call.getString("deviceId");
+        if (id != null) {
+            DeviceLink link = links.remove(id);
+            if (link != null) link.teardown();
+        } else {
+            disconnectAll();
+        }
+        if (links.isEmpty()) stopForegroundService();
         call.resolve();
     }
 
-    private void disconnectInternal() {
-        fetchInProgress = false;
-        main.removeCallbacks(periodicSync);
-        synchronized (opQueue) {
-            opQueue.clear();
-            opInFlight = false;
-        }
-        if (huami != null) {
-            huami.stop();
-            huami = null;
-        }
-        garmin = null;
-        garminSend = null;
-        chunkWriteChar = chunkReadChar = hrChar = null;
-        if (gatt != null) {
-            try {
-                gatt.disconnect();
-                gatt.close();
-            } catch (SecurityException ignored) {
-            }
-            gatt = null;
-        }
-        connectedId = null;
+    private void disconnectAll() {
+        for (DeviceLink link : links.values()) link.teardown();
+        links.clear();
+    }
+
+    private void stopForegroundService() {
         try {
             BleForegroundService.stop(getContext());
         } catch (Exception ignored) {
         }
     }
 
-    private void emitStatus(String status, String message) {
+    private void emitStatus(String deviceId, String status, String message) {
         JSObject ev = new JSObject();
-        ev.put("deviceId", connectedId);
+        ev.put("deviceId", deviceId);
         ev.put("status", status);
         if (message != null) ev.put("message", message);
         notifyListeners("status", ev);
     }
 
-    private void emitSample(String kind, double value) {
+    private void emitSample(String deviceId, String kind, double value) {
         JSObject ev = new JSObject();
-        ev.put("deviceId", connectedId);
+        ev.put("deviceId", deviceId);
         ev.put("kind", kind);
         ev.put("value", value);
         ev.put("ts", System.currentTimeMillis());
@@ -395,117 +360,24 @@ public class OpenFitBlePlugin extends Plugin {
         });
     }
 
-    /** Pull stored wellness since `sinceMillis` (default: 2 days) from the Helio. */
-    private boolean fetchInProgress = false;
-
+    /** Pull stored wellness from every connected device that supports it (Helio).
+     *  Garmin links are live-only here (history is imported from Garmin Connect). */
     @PluginMethod
     public void syncNow(PluginCall call) {
-        Log.i(TAG, "syncNow called, huami=" + (huami != null) + " inProgress=" + fetchInProgress);
-        if (huami == null) {
-            call.reject("not connected to a Zepp-OS device");
+        if (links.isEmpty()) {
+            call.reject("no device connected");
             return;
         }
-        if (fetchInProgress) {
-            call.reject("already syncing");
-            return;
-        }
-        // Explicit sinceMillis forces a window; otherwise pull from the watermark
-        // (or the full 40-day window the first time).
         Double sinceD = call.getDouble("sinceMillis");
-        long since = sinceD != null ? sinceD.longValue() : computeSince(connectedId);
-        beginSync(since);
+        Long since = sinceD != null ? sinceD.longValue() : null;
+        for (DeviceLink link : links.values()) {
+            if (link.huami != null) link.syncNow(since);
+        }
         call.resolve();
-    }
-
-    /** Recover if a fetch stalls (e.g. the link drops mid-sync). Cancelled on done. */
-    private final Runnable fetchWatchdog = () -> {
-        if (fetchInProgress) {
-            fetchInProgress = false;
-            flushFetchBatch();
-            emitStatus("ready", "sync timed out");
-            if (huami != null) huami.enableHeartRate();
-        }
-    };
-
-    /** Start a stored-data fetch from {@code since} (pauses live HR, resumes on done). */
-    private void beginSync(long since) {
-        if (huami == null || fetchInProgress) return;
-        fetchInProgress = true;
-        maxFetchedTs = 0L;
-        synchronized (fetchBatch) {
-            fetchBatch.clear();
-        }
-        main.removeCallbacks(fetchWatchdog);
-        // A first-time 40-day pull is far larger than an incremental one — be generous.
-        main.postDelayed(fetchWatchdog, 180_000);
-        huami.startActivityFetch(since);
-    }
-
-    /** Lower bound for the next sync: the saved watermark (minus a small overlap),
-     *  clamped to the device's ~40-day retention; full window if never synced. */
-    private long computeSince(String deviceId) {
-        long now = System.currentTimeMillis();
-        long floor = now - DEFAULT_WINDOW_MS;
-        long wm = deviceId != null ? prefs().getLong("wm_" + deviceId, 0L) : 0L;
-        return wm <= 0 ? floor : Math.max(floor, wm - SYNC_OVERLAP_MS);
-    }
-
-    /** Auto-sync shortly after a (re)connect, throttled so reconnect storms don't
-     *  thrash. With the watermark, a no-new-data sync returns near-instantly. */
-    private void maybeAutoSync() {
-        long now = System.currentTimeMillis();
-        if (now - prefs().getLong("last_autosync", 0L) < AUTO_SYNC_MIN_INTERVAL_MS) return;
-        main.postDelayed(() -> {
-            if (huami == null || fetchInProgress || connectedId == null) return;
-            prefs().edit().putLong("last_autosync", System.currentTimeMillis()).apply();
-            emitStatus("connected", "auto-syncing stored data…");
-            beginSync(computeSince(connectedId));
-        }, 4000);
     }
 
     private SharedPreferences prefs() {
         return getContext().getSharedPreferences("ofit_ble", Context.MODE_PRIVATE);
-    }
-
-    /** Background refresh while connected: pull only new data every PERIODIC_SYNC_MS
-     *  so history stays current without any taps (survives screen-lock via the
-     *  foreground service). Self-reschedules; cancelled on disconnect. */
-    private final Runnable periodicSync = new Runnable() {
-        @Override
-        public void run() {
-            if (huami != null && !fetchInProgress && connectedId != null) {
-                beginSync(computeSince(connectedId));
-            }
-            main.postDelayed(this, PERIODIC_SYNC_MS);
-        }
-    };
-
-    private void startPeriodicSync() {
-        main.removeCallbacks(periodicSync);
-        main.postDelayed(periodicSync, PERIODIC_SYNC_MS);
-    }
-
-    /** Accumulate a fetched historical sample; flush in batches of 1000. */
-    private void addFetchSample(String kind, double value, long tsMillis) {
-        if (tsMillis > maxFetchedTs) maxFetchedTs = tsMillis;
-        synchronized (fetchBatch) {
-            fetchBatch.add("{\"kind\":\"" + kind + "\",\"value\":" + value
-                + ",\"ts\":\"" + RFC3339.format(new java.util.Date(tsMillis)) + "\"}");
-            if (fetchBatch.size() >= 1000) flushFetchBatchLocked();
-        }
-    }
-
-    private void flushFetchBatch() {
-        synchronized (fetchBatch) {
-            flushFetchBatchLocked();
-        }
-    }
-
-    private void flushFetchBatchLocked() {
-        if (fetchBatch.isEmpty()) return;
-        java.util.List<String> batch = new java.util.ArrayList<>(fetchBatch);
-        fetchBatch.clear();
-        sendOrQueue(batch);
     }
 
     /** Live HR sample → ingest (throttled). Carries its own ts so it stays correct
@@ -564,7 +436,7 @@ public class OpenFitBlePlugin extends Plugin {
                 int code = c.getResponseCode();
                 Log.i(TAG, "auto-recompute → " + code);
                 if (code >= 200 && code < 300) {
-                    main.post(() -> emitStatus("ready", "recomputed"));
+                    main.post(() -> emitStatus(null, "ready", "recomputed"));
                 }
             } catch (Exception e) {
                 Log.w(TAG, "auto-recompute failed: " + e.getMessage());
@@ -709,106 +581,7 @@ public class OpenFitBlePlugin extends Plugin {
         }
     }
 
-    // --------------------------------------------------- serialized op queue
-
-    private void enqueue(Runnable op) {
-        synchronized (opQueue) {
-            opQueue.add(op);
-            if (!opInFlight) runNextOp();
-        }
-    }
-
-    private void runNextOp() {
-        synchronized (opQueue) {
-            if (opInFlight) return;
-            Runnable op = opQueue.poll();
-            if (op == null) return;
-            opInFlight = true;
-            main.post(op);
-        }
-    }
-
-    private void opComplete() {
-        synchronized (opQueue) {
-            opInFlight = false;
-        }
-        runNextOp();
-    }
-
     private static final String TAG = "OpenFitBle";
-
-    @SuppressWarnings("deprecation")
-    private void enqueueWrite(BluetoothGattCharacteristic c, byte[] value) {
-        enqueue(() -> {
-            try {
-                if (gatt == null) {
-                    opComplete();
-                    return;
-                }
-                // Pick the write type the characteristic actually supports. The
-                // Huami chunked-write char typically advertises WRITE_NO_RESPONSE.
-                int props = c.getProperties();
-                int writeType = (props & BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
-                    ? BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
-                boolean ok;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    int r = gatt.writeCharacteristic(c, value, writeType);
-                    ok = r == BluetoothStatusCodes.SUCCESS;
-                    if (!ok) Log.w(TAG, "writeCharacteristic " + c.getUuid() + " failed code=" + r);
-                } else {
-                    c.setValue(value);
-                    c.setWriteType(writeType);
-                    ok = gatt.writeCharacteristic(c);
-                    if (!ok) Log.w(TAG, "writeCharacteristic(legacy) " + c.getUuid() + " returned false");
-                }
-                Log.i(TAG, "write " + c.getUuid() + " len=" + value.length + " wt=" + writeType + " props=0x" + Integer.toHexString(props) + " ok=" + ok);
-                // For write-without-response, onCharacteristicWrite still fires; if
-                // it somehow doesn't, the queue would stall — but DEFAULT/NO_RESPONSE
-                // both deliver the callback on Android.
-                if (!ok) opComplete();
-            } catch (SecurityException e) {
-                opComplete();
-            }
-        });
-    }
-
-    @SuppressWarnings("deprecation")
-    private void enqueueNotify(BluetoothGattCharacteristic c) {
-        enqueue(() -> {
-            try {
-                if (gatt == null) {
-                    opComplete();
-                    return;
-                }
-                gatt.setCharacteristicNotification(c, true);
-                BluetoothGattDescriptor d = c.getDescriptor(CCCD);
-                if (d == null) {
-                    Log.w(TAG, "no CCCD on " + c.getUuid());
-                    opComplete();
-                    return;
-                }
-                // Notify vs indicate, based on the characteristic's properties.
-                byte[] enable = (c.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
-                    ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
-                boolean ok;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    int r = gatt.writeDescriptor(d, enable);
-                    ok = r == BluetoothStatusCodes.SUCCESS;
-                    if (!ok) Log.w(TAG, "writeDescriptor " + c.getUuid() + " failed code=" + r);
-                } else {
-                    d.setValue(enable);
-                    ok = gatt.writeDescriptor(d);
-                    if (!ok) Log.w(TAG, "writeDescriptor(legacy) " + c.getUuid() + " returned false");
-                }
-                Log.i(TAG, "notify " + c.getUuid() + " ok=" + ok);
-                if (!ok) opComplete(); // else → onDescriptorWrite → opComplete()
-            } catch (SecurityException e) {
-                opComplete();
-            }
-        });
-    }
 
     private static BluetoothGattCharacteristic findChar(BluetoothGatt g, UUID uuid) {
         for (BluetoothGattService s : g.getServices()) {
@@ -816,164 +589,6 @@ public class OpenFitBlePlugin extends Plugin {
             if (c != null) return c;
         }
         return null;
-    }
-
-    // -------------------------------------------------------- gatt callback
-
-    private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
-        @Override
-        public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                emitStatus("connected", null);
-                try {
-                    g.discoverServices();
-                } catch (SecurityException ignored) {
-                }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                emitStatus("disconnected", "status=" + status);
-            }
-        }
-
-        @Override
-        public void onServicesDiscovered(BluetoothGatt g, int status) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                emitStatus("error", "service discovery failed: " + status);
-                return;
-            }
-            if ("huami".equals(mode)) {
-                setupHuami(g);
-            } else if ("garmin".equals(mode)) {
-                setupGarmin(g);
-            } else {
-                setupStandardHr(g);
-            }
-        }
-
-        @Override
-        public void onMtuChanged(BluetoothGatt g, int mtu, int status) {
-            if ("huami".equals(mode)) {
-                startHuamiSession(g, mtu);
-            } else if ("garmin".equals(mode)) {
-                startGarminSession(g, mtu);
-            }
-        }
-
-        @Override
-        public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor descriptor, int status) {
-            Log.i(TAG, "onDescriptorWrite " + descriptor.getCharacteristic().getUuid() + " status=" + status);
-            opComplete();
-        }
-
-        @Override
-        public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
-            Log.i(TAG, "onCharacteristicWrite " + c.getUuid() + " status=" + status);
-            opComplete();
-        }
-
-        @SuppressWarnings("deprecation")
-        @Override
-        public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
-            byte[] v = c.getValue();
-            UUID u = c.getUuid();
-            Log.i(TAG, "notif " + u + " len=" + (v != null ? v.length : -1));
-            if (CHUNK_READ.equals(u)) {
-                if (huami != null) huami.onChunkedRead(v);
-            } else if (ACTIVITY_CONTROL.equals(u)) {
-                if (huami != null) huami.onActivityControl(v);
-            } else if (ACTIVITY_DATA.equals(u)) {
-                if (huami != null) huami.onActivityData(v);
-            } else if (GARMIN_ML_RECV.equals(u)) {
-                if (garmin != null) garmin.onNotify(v);
-            } else if (HR_MEASUREMENT.equals(u)) {
-                if (huami != null) {
-                    huami.onHrMeasurement(v);
-                } else {
-                    Integer hr = parseHeartRate(v);
-                    if (hr != null) emitSample("heart_rate", hr);
-                }
-            }
-        }
-    };
-
-    // -------------------------------------------------------- standard (M0)
-
-    private void setupStandardHr(BluetoothGatt g) {
-        BluetoothGattService svc = g.getService(HR_SERVICE);
-        if (svc == null) {
-            emitStatus("ready", "no standard Heart Rate service");
-            return;
-        }
-        BluetoothGattCharacteristic hr = svc.getCharacteristic(HR_MEASUREMENT);
-        if (hr == null) {
-            emitStatus("ready", "no HR measurement characteristic");
-            return;
-        }
-        enqueueNotify(hr);
-        emitStatus("ready", "streaming heart rate");
-    }
-
-    // -------------------------------------------------------- garmin (GFDI)
-
-    private void setupGarmin(BluetoothGatt g) {
-        if (g.getService(GARMIN_ML_SERVICE) == null) {
-            emitStatus("error", "no Garmin GFDI service (bond it + remove from Garmin Connect)");
-            return;
-        }
-        emitStatus("connected", "Garmin found, negotiating MTU…");
-        boolean requested = false;
-        try {
-            requested = g.requestMtu(515);
-        } catch (SecurityException ignored) {
-        }
-        if (!requested) startGarminSession(g, 23);
-    }
-
-    private void startGarminSession(BluetoothGatt g, int mtu) {
-        if (garmin != null) return; // onMtuChanged can fire once; guard re-entry
-        BluetoothGattService svc = g.getService(GARMIN_ML_SERVICE);
-        if (svc == null) {
-            emitStatus("error", "Garmin service missing");
-            return;
-        }
-        BluetoothGattCharacteristic recv = svc.getCharacteristic(GARMIN_ML_RECV);
-        garminSend = svc.getCharacteristic(GARMIN_ML_SEND);
-        if (recv == null || garminSend == null) {
-            emitStatus("error", "Garmin GFDI characteristics missing");
-            return;
-        }
-        String btName = "OpenFit";
-        try {
-            if (adapter() != null && adapter().getName() != null) btName = adapter().getName();
-        } catch (SecurityException ignored) {
-        }
-        garmin = new org.openfit.app.garmin.GarminSession(
-            btName,
-            (chunk) -> enqueueWrite(garminSend, chunk),
-            new org.openfit.app.garmin.GarminSession.Listener() {
-                @Override
-                public void onLog(String msg) {
-                    main.post(() -> emitStatus("connected", msg));
-                }
-
-                @Override
-                public void onReady() {
-                    main.post(() -> emitStatus("ready", "Garmin connected"));
-                }
-
-                @Override
-                public void onGfdiMessage(int id, byte[] payload) {
-                    // Stage C will route file-sync messages here.
-                }
-
-                @Override
-                public void onHeartRate(int bpm) {
-                    emitSample("heart_rate", bpm);
-                }
-            });
-        garmin.setMaxWriteSize(mtu);
-        emitStatus("connected", "negotiated MTU " + mtu + ", Garmin handshake…");
-        enqueueNotify(recv);
-        garmin.start();
     }
 
     /** Heart Rate Measurement (0x2A37): flags byte, then uint8 or uint16 LE HR. */
@@ -987,106 +602,496 @@ public class OpenFitBlePlugin extends Plugin {
         return v[1] & 0xff;
     }
 
-    // ------------------------------------------------------------ huami (M1)
+    // ============================================================= DeviceLink
+    // One per added device: its own GATT, serialized op queue, characteristics,
+    // and protocol session. Multiple links run concurrently (Helio + Garmin),
+    // each streaming live independently. Huami links also do stored-data sync.
 
-    private void setupHuami(BluetoothGatt g) {
-        chunkWriteChar = findChar(g, CHUNK_WRITE);
-        chunkReadChar = findChar(g, CHUNK_READ);
-        hrChar = findChar(g, HR_MEASUREMENT);
-        activityControlChar = findChar(g, ACTIVITY_CONTROL);
-        activityDataChar = findChar(g, ACTIVITY_DATA);
-        if (chunkWriteChar == null || chunkReadChar == null) {
-            emitStatus("error", "Zepp-OS chunked-transfer characteristics not found");
-            return;
+    private final class DeviceLink {
+        final String deviceId;
+        final String mode;
+        final String authKey;
+        private BluetoothGatt gatt;
+
+        private final ArrayDeque<Runnable> opQueue = new ArrayDeque<>();
+        private boolean opInFlight = false;
+
+        private HuamiSession huami;
+        private org.openfit.app.garmin.GarminSession garmin;
+        private BluetoothGattCharacteristic garminSend;
+        private BluetoothGattCharacteristic chunkWriteChar;
+        private BluetoothGattCharacteristic chunkReadChar;
+        private BluetoothGattCharacteristic hrChar;
+        private BluetoothGattCharacteristic activityControlChar;
+        private BluetoothGattCharacteristic activityDataChar;
+
+        // Stored-data fetch state (Huami only).
+        private boolean fetchInProgress = false;
+        private long maxFetchedTs = 0L;
+        private final java.util.List<String> fetchBatch = new java.util.ArrayList<>();
+
+        DeviceLink(String deviceId, String mode, String authKey) {
+            this.deviceId = deviceId;
+            this.mode = mode;
+            this.authKey = authKey;
         }
-        Log.i(TAG, "huami chars: write props=0x" + Integer.toHexString(chunkWriteChar.getProperties())
-            + " read props=0x" + Integer.toHexString(chunkReadChar.getProperties()));
-        // Negotiate a large MTU first; the session starts in onMtuChanged.
-        boolean requested = false;
-        try {
-            requested = g.requestMtu(517);
-        } catch (SecurityException ignored) {
+
+        void proceedConnect(BluetoothDevice device) {
+            try {
+                gatt = device.connectGatt(getContext(), false, gattCallback, BluetoothDevice.TRANSPORT_LE);
+            } catch (SecurityException e) {
+                emitStatus(deviceId, "error", "connect permission: " + e.getMessage());
+                return;
+            }
+            // Keep the process alive in the background so the connection + ingest
+            // survive a screen lock (needed for workout recording).
+            try {
+                BleForegroundService.start(getContext(), "Connected — streaming wellness");
+            } catch (Exception e) {
+                Log.w(TAG, "foreground service start failed: " + e.getMessage());
+            }
         }
-        if (!requested) {
-            startHuamiSession(g, 23); // fall back to the BLE minimum
+
+        void teardown() {
+            fetchInProgress = false;
+            main.removeCallbacks(periodicSync);
+            main.removeCallbacks(fetchWatchdog);
+            synchronized (opQueue) {
+                opQueue.clear();
+                opInFlight = false;
+            }
+            if (huami != null) {
+                huami.stop();
+                huami = null;
+            }
+            garmin = null;
+            garminSend = null;
+            chunkWriteChar = chunkReadChar = hrChar = null;
+            if (gatt != null) {
+                try {
+                    gatt.disconnect();
+                    gatt.close();
+                } catch (SecurityException ignored) {
+                }
+                gatt = null;
+            }
         }
-    }
 
-    private void startHuamiSession(BluetoothGatt g, int mtu) {
-        if (huami != null) return; // onMtuChanged can fire once; guard re-entry
-        Log.i(TAG, "startHuamiSession mtu=" + mtu + " write=" + (chunkWriteChar != null)
-            + " read=" + (chunkReadChar != null) + " hr=" + (hrChar != null));
-        emitStatus("connected", "negotiated MTU " + mtu + ", authenticating…");
-        huami = new HuamiSession(
-            authKey,
-            mtu,
-            // writeChunk → chunked-write char
-            (chunk) -> enqueueWrite(chunkWriteChar, chunk),
-            // writeAck → chunked-read char (Gadgetbridge acks on the READ char)
-            (ack) -> enqueueWrite(chunkReadChar, ack),
-            new HuamiSession.Listener() {
-                @Override
-                public void onAuthSuccess() {
-                    main.post(() -> {
-                        emitStatus("ready", "authenticated · streaming heart rate");
-                        if (hrChar != null) enqueueNotify(hrChar);
-                        if (activityControlChar != null) enqueueNotify(activityControlChar);
-                        if (activityDataChar != null) enqueueNotify(activityDataChar);
-                        huami.enableHeartRate();
-                        maybeAutoSync();      // zero-tap pull on (re)connect / app launch
-                        startPeriodicSync();  // …and keep refreshing every 15 min
-                    });
-                }
+        // ----- stored-data sync (Huami only) -----
 
-                @Override
-                public void onAuthFailed(String reason) {
-                    main.post(() -> emitStatus("error", "auth failed: " + reason));
-                }
+        void syncNow(Long sinceMillis) {
+            if (huami == null || fetchInProgress) return;
+            long since = sinceMillis != null ? sinceMillis : computeSince();
+            beginSync(since);
+        }
 
-                @Override
-                public void onHeartRate(int bpm) {
-                    emitSample("heart_rate", bpm);
-                }
+        private void beginSync(long since) {
+            if (huami == null || fetchInProgress) return;
+            fetchInProgress = true;
+            maxFetchedTs = 0L;
+            synchronized (fetchBatch) {
+                fetchBatch.clear();
+            }
+            main.removeCallbacks(fetchWatchdog);
+            main.postDelayed(fetchWatchdog, 180_000);
+            huami.startActivityFetch(since);
+        }
 
-                @Override
-                public void onLog(String msg) {
-                    emitStatus("connected", msg);
-                }
-
-                @Override
-                public void onFetchSample(String kind, double value, long tsMillis) {
-                    addFetchSample(kind, value, tsMillis);
-                }
-
-                @Override
-                public void onFetchDone(boolean ok) {
+        private final Runnable fetchWatchdog = new Runnable() {
+            @Override
+            public void run() {
+                if (fetchInProgress) {
                     fetchInProgress = false;
-                    main.removeCallbacks(fetchWatchdog);
                     flushFetchBatch();
-                    final boolean gotData = maxFetchedTs > 0;
-                    // Advance the watermark so the next sync only pulls newer data.
-                    if (ok && gotData && connectedId != null) {
-                        prefs().edit().putLong("wm_" + connectedId, maxFetchedTs).apply();
-                    }
-                    // New data landed → refresh the derived metrics (sleep, body
-                    // battery, resting HR) without the user pressing Recompute.
-                    if (ok && gotData) maybeRecompute();
-                    main.post(() -> {
-                        // "sync complete" signals the UI to reload (new data landed);
-                        // "sync up to date" finishes quietly so auto-sync isn't noisy.
-                        emitStatus("ready", !ok ? "sync failed" : gotData ? "sync complete" : "sync up to date");
-                        if (huami != null) huami.enableHeartRate(); // resume live HR
-                    });
+                    emitStatus(deviceId, "ready", "sync timed out");
+                    if (huami != null) huami.enableHeartRate();
                 }
             }
-        );
-        // Fetch (M2) writes its control commands raw to char 0x0004.
-        if (activityControlChar != null) {
-            huami.setActivityControlWriter((cmd) -> enqueueWrite(activityControlChar, cmd));
+        };
+
+        private long computeSince() {
+            long now = System.currentTimeMillis();
+            long floor = now - DEFAULT_WINDOW_MS;
+            long wm = prefs().getLong("wm_" + deviceId, 0L);
+            return wm <= 0 ? floor : Math.max(floor, wm - SYNC_OVERLAP_MS);
         }
-        // Receive the handshake responses, then kick off auth.
-        enqueueNotify(chunkReadChar);
-        huami.startAuth();
+
+        private void maybeAutoSync() {
+            long now = System.currentTimeMillis();
+            if (now - prefs().getLong("last_autosync_" + deviceId, 0L) < AUTO_SYNC_MIN_INTERVAL_MS) return;
+            main.postDelayed(() -> {
+                if (huami == null || fetchInProgress) return;
+                prefs().edit().putLong("last_autosync_" + deviceId, System.currentTimeMillis()).apply();
+                emitStatus(deviceId, "connected", "auto-syncing stored data…");
+                beginSync(computeSince());
+            }, 4000);
+        }
+
+        private final Runnable periodicSync = new Runnable() {
+            @Override
+            public void run() {
+                if (huami != null && !fetchInProgress) {
+                    beginSync(computeSince());
+                }
+                main.postDelayed(this, PERIODIC_SYNC_MS);
+            }
+        };
+
+        private void startPeriodicSync() {
+            main.removeCallbacks(periodicSync);
+            main.postDelayed(periodicSync, PERIODIC_SYNC_MS);
+        }
+
+        private void addFetchSample(String kind, double value, long tsMillis) {
+            if (tsMillis > maxFetchedTs) maxFetchedTs = tsMillis;
+            synchronized (fetchBatch) {
+                fetchBatch.add("{\"kind\":\"" + kind + "\",\"value\":" + value
+                    + ",\"ts\":\"" + RFC3339.format(new java.util.Date(tsMillis)) + "\"}");
+                if (fetchBatch.size() >= 1000) flushFetchBatchLocked();
+            }
+        }
+
+        private void flushFetchBatch() {
+            synchronized (fetchBatch) {
+                flushFetchBatchLocked();
+            }
+        }
+
+        private void flushFetchBatchLocked() {
+            if (fetchBatch.isEmpty()) return;
+            java.util.List<String> batch = new java.util.ArrayList<>(fetchBatch);
+            fetchBatch.clear();
+            sendOrQueue(batch);
+        }
+
+        // ----- serialized op queue (per GATT) -----
+
+        private void enqueue(Runnable op) {
+            synchronized (opQueue) {
+                opQueue.add(op);
+                if (!opInFlight) runNextOp();
+            }
+        }
+
+        private void runNextOp() {
+            synchronized (opQueue) {
+                if (opInFlight) return;
+                Runnable op = opQueue.poll();
+                if (op == null) return;
+                opInFlight = true;
+                main.post(op);
+            }
+        }
+
+        private void opComplete() {
+            synchronized (opQueue) {
+                opInFlight = false;
+            }
+            runNextOp();
+        }
+
+        @SuppressWarnings("deprecation")
+        private void enqueueWrite(BluetoothGattCharacteristic c, byte[] value) {
+            enqueue(() -> {
+                try {
+                    if (gatt == null) {
+                        opComplete();
+                        return;
+                    }
+                    int props = c.getProperties();
+                    int writeType = (props & BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                        ? BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                        : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
+                    boolean ok;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        int r = gatt.writeCharacteristic(c, value, writeType);
+                        ok = r == BluetoothStatusCodes.SUCCESS;
+                        if (!ok) Log.w(TAG, "writeCharacteristic " + c.getUuid() + " failed code=" + r);
+                    } else {
+                        c.setValue(value);
+                        c.setWriteType(writeType);
+                        ok = gatt.writeCharacteristic(c);
+                        if (!ok) Log.w(TAG, "writeCharacteristic(legacy) " + c.getUuid() + " returned false");
+                    }
+                    if (!ok) opComplete();
+                } catch (SecurityException e) {
+                    opComplete();
+                }
+            });
+        }
+
+        @SuppressWarnings("deprecation")
+        private void enqueueNotify(BluetoothGattCharacteristic c) {
+            enqueue(() -> {
+                try {
+                    if (gatt == null) {
+                        opComplete();
+                        return;
+                    }
+                    gatt.setCharacteristicNotification(c, true);
+                    BluetoothGattDescriptor d = c.getDescriptor(CCCD);
+                    if (d == null) {
+                        Log.w(TAG, "no CCCD on " + c.getUuid());
+                        opComplete();
+                        return;
+                    }
+                    byte[] enable = (c.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
+                        ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
+                    boolean ok;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        int r = gatt.writeDescriptor(d, enable);
+                        ok = r == BluetoothStatusCodes.SUCCESS;
+                        if (!ok) Log.w(TAG, "writeDescriptor " + c.getUuid() + " failed code=" + r);
+                    } else {
+                        d.setValue(enable);
+                        ok = gatt.writeDescriptor(d);
+                        if (!ok) Log.w(TAG, "writeDescriptor(legacy) " + c.getUuid() + " returned false");
+                    }
+                    if (!ok) opComplete(); // else → onDescriptorWrite → opComplete()
+                } catch (SecurityException e) {
+                    opComplete();
+                }
+            });
+        }
+
+        // ----- GATT callback (per link) -----
+
+        private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+            @Override
+            public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    emitStatus(deviceId, "connected", null);
+                    try {
+                        g.discoverServices();
+                    } catch (SecurityException ignored) {
+                    }
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    emitStatus(deviceId, "disconnected", "status=" + status);
+                }
+            }
+
+            @Override
+            public void onServicesDiscovered(BluetoothGatt g, int status) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    emitStatus(deviceId, "error", "service discovery failed: " + status);
+                    return;
+                }
+                if ("huami".equals(mode)) {
+                    setupHuami(g);
+                } else if ("garmin".equals(mode)) {
+                    setupGarmin(g);
+                } else {
+                    setupStandardHr(g);
+                }
+            }
+
+            @Override
+            public void onMtuChanged(BluetoothGatt g, int mtu, int status) {
+                if ("huami".equals(mode)) {
+                    startHuamiSession(g, mtu);
+                } else if ("garmin".equals(mode)) {
+                    startGarminSession(g, mtu);
+                }
+            }
+
+            @Override
+            public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor descriptor, int status) {
+                opComplete();
+            }
+
+            @Override
+            public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+                opComplete();
+            }
+
+            @SuppressWarnings("deprecation")
+            @Override
+            public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
+                byte[] v = c.getValue();
+                UUID u = c.getUuid();
+                if (CHUNK_READ.equals(u)) {
+                    if (huami != null) huami.onChunkedRead(v);
+                } else if (ACTIVITY_CONTROL.equals(u)) {
+                    if (huami != null) huami.onActivityControl(v);
+                } else if (ACTIVITY_DATA.equals(u)) {
+                    if (huami != null) huami.onActivityData(v);
+                } else if (GARMIN_ML_RECV.equals(u)) {
+                    if (garmin != null) garmin.onNotify(v);
+                } else if (HR_MEASUREMENT.equals(u)) {
+                    if (huami != null) {
+                        huami.onHrMeasurement(v);
+                    } else {
+                        Integer hr = parseHeartRate(v);
+                        if (hr != null) emitSample(deviceId, "heart_rate", hr);
+                    }
+                }
+            }
+        };
+
+        // ----- standard HR (M0) -----
+
+        private void setupStandardHr(BluetoothGatt g) {
+            BluetoothGattService svc = g.getService(HR_SERVICE);
+            if (svc == null) {
+                emitStatus(deviceId, "ready", "no standard Heart Rate service");
+                return;
+            }
+            BluetoothGattCharacteristic hr = svc.getCharacteristic(HR_MEASUREMENT);
+            if (hr == null) {
+                emitStatus(deviceId, "ready", "no HR measurement characteristic");
+                return;
+            }
+            enqueueNotify(hr);
+            emitStatus(deviceId, "ready", "streaming heart rate");
+        }
+
+        // ----- garmin (GFDI live HR) -----
+
+        private void setupGarmin(BluetoothGatt g) {
+            if (g.getService(GARMIN_ML_SERVICE) == null) {
+                emitStatus(deviceId, "error", "no Garmin GFDI service (bond it + remove from Garmin Connect)");
+                return;
+            }
+            emitStatus(deviceId, "connected", "Garmin found, negotiating MTU…");
+            boolean requested = false;
+            try {
+                requested = g.requestMtu(515);
+            } catch (SecurityException ignored) {
+            }
+            if (!requested) startGarminSession(g, 23);
+        }
+
+        private void startGarminSession(BluetoothGatt g, int mtu) {
+            if (garmin != null) return; // onMtuChanged can fire once; guard re-entry
+            BluetoothGattService svc = g.getService(GARMIN_ML_SERVICE);
+            if (svc == null) {
+                emitStatus(deviceId, "error", "Garmin service missing");
+                return;
+            }
+            BluetoothGattCharacteristic recv = svc.getCharacteristic(GARMIN_ML_RECV);
+            garminSend = svc.getCharacteristic(GARMIN_ML_SEND);
+            if (recv == null || garminSend == null) {
+                emitStatus(deviceId, "error", "Garmin GFDI characteristics missing");
+                return;
+            }
+            String btName = "OpenFit";
+            try {
+                if (adapter() != null && adapter().getName() != null) btName = adapter().getName();
+            } catch (SecurityException ignored) {
+            }
+            garmin = new org.openfit.app.garmin.GarminSession(
+                btName,
+                (chunk) -> enqueueWrite(garminSend, chunk),
+                new org.openfit.app.garmin.GarminSession.Listener() {
+                    @Override
+                    public void onLog(String msg) {
+                        main.post(() -> emitStatus(deviceId, "connected", msg));
+                    }
+
+                    @Override
+                    public void onReady() {
+                        main.post(() -> emitStatus(deviceId, "ready", "Garmin connected"));
+                    }
+
+                    @Override
+                    public void onHeartRate(int bpm) {
+                        emitSample(deviceId, "heart_rate", bpm);
+                    }
+                });
+            garmin.setMaxWriteSize(mtu);
+            emitStatus(deviceId, "connected", "negotiated MTU " + mtu + ", Garmin handshake…");
+            enqueueNotify(recv);
+            garmin.start();
+        }
+
+        // ----- huami (M1/M2) -----
+
+        private void setupHuami(BluetoothGatt g) {
+            chunkWriteChar = findChar(g, CHUNK_WRITE);
+            chunkReadChar = findChar(g, CHUNK_READ);
+            hrChar = findChar(g, HR_MEASUREMENT);
+            activityControlChar = findChar(g, ACTIVITY_CONTROL);
+            activityDataChar = findChar(g, ACTIVITY_DATA);
+            if (chunkWriteChar == null || chunkReadChar == null) {
+                emitStatus(deviceId, "error", "Zepp-OS chunked-transfer characteristics not found");
+                return;
+            }
+            boolean requested = false;
+            try {
+                requested = g.requestMtu(517);
+            } catch (SecurityException ignored) {
+            }
+            if (!requested) {
+                startHuamiSession(g, 23); // fall back to the BLE minimum
+            }
+        }
+
+        private void startHuamiSession(BluetoothGatt g, int mtu) {
+            if (huami != null) return; // onMtuChanged can fire once; guard re-entry
+            emitStatus(deviceId, "connected", "negotiated MTU " + mtu + ", authenticating…");
+            huami = new HuamiSession(
+                authKey,
+                mtu,
+                (chunk) -> enqueueWrite(chunkWriteChar, chunk),
+                (ack) -> enqueueWrite(chunkReadChar, ack),
+                new HuamiSession.Listener() {
+                    @Override
+                    public void onAuthSuccess() {
+                        main.post(() -> {
+                            emitStatus(deviceId, "ready", "authenticated · streaming heart rate");
+                            if (hrChar != null) enqueueNotify(hrChar);
+                            if (activityControlChar != null) enqueueNotify(activityControlChar);
+                            if (activityDataChar != null) enqueueNotify(activityDataChar);
+                            huami.enableHeartRate();
+                            maybeAutoSync();      // zero-tap pull on (re)connect / app launch
+                            startPeriodicSync();  // …and keep refreshing every 15 min
+                        });
+                    }
+
+                    @Override
+                    public void onAuthFailed(String reason) {
+                        main.post(() -> emitStatus(deviceId, "error", "auth failed: " + reason));
+                    }
+
+                    @Override
+                    public void onHeartRate(int bpm) {
+                        emitSample(deviceId, "heart_rate", bpm);
+                    }
+
+                    @Override
+                    public void onLog(String msg) {
+                        emitStatus(deviceId, "connected", msg);
+                    }
+
+                    @Override
+                    public void onFetchSample(String kind, double value, long tsMillis) {
+                        addFetchSample(kind, value, tsMillis);
+                    }
+
+                    @Override
+                    public void onFetchDone(boolean ok) {
+                        fetchInProgress = false;
+                        main.removeCallbacks(fetchWatchdog);
+                        flushFetchBatch();
+                        final boolean gotData = maxFetchedTs > 0;
+                        if (ok && gotData) {
+                            prefs().edit().putLong("wm_" + deviceId, maxFetchedTs).apply();
+                        }
+                        if (ok && gotData) maybeRecompute();
+                        main.post(() -> {
+                            emitStatus(deviceId, "ready", !ok ? "sync failed" : gotData ? "sync complete" : "sync up to date");
+                            if (huami != null) huami.enableHeartRate(); // resume live HR
+                        });
+                    }
+                }
+            );
+            if (activityControlChar != null) {
+                huami.setActivityControlWriter((cmd) -> enqueueWrite(activityControlChar, cmd));
+            }
+            enqueueNotify(chunkReadChar);
+            huami.startAuth();
+        }
     }
 
     // ------------------------------------------------------------- liveness
@@ -1102,7 +1107,8 @@ public class OpenFitBlePlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         stopScanInternal();
-        disconnectInternal();
+        disconnectAll();
+        stopForegroundService();
         if (bondReceiver != null) {
             try {
                 getContext().unregisterReceiver(bondReceiver);
