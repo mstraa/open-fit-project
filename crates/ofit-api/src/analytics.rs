@@ -187,6 +187,16 @@ pub struct RecomputeResponse {
 pub async fn recompute(
     State(state): State<AppState>,
 ) -> Result<Json<RecomputeResponse>, ApiError> {
+    // Clear last run's HR-derived sleep estimate first, so it doesn't masquerade as
+    // real staged sleep (calibration + gap-fill) and a tighter estimate replaces a
+    // looser one cleanly. (Other "Computed" series upsert at stable timestamps.)
+    if let Ok(src) = state.db.ensure_source(SourceKind::Unknown, "Computed").await {
+        let _ = state
+            .db
+            .delete_wellness_kind_for_source(src, WellnessKind::SleepStage)
+            .await;
+    }
+
     let mut input = build_analytics_input(&state).await?;
     let computed_at = Utc::now();
 
@@ -277,15 +287,28 @@ pub async fn recompute(
             .filter(|w| w.kind == WellnessKind::HeartRate)
             .map(|w| (w.ts, w.value))
             .collect();
-        let have_sleep: std::collections::HashSet<NaiveDate> = input
+        // Nights that already have REAL staged sleep (Zepp import / device fetch) —
+        // bucketed by night (bed-time date), so we don't re-estimate them.
+        let have_nights: std::collections::HashSet<NaiveDate> = input
             .wellness
             .iter()
             .filter(|w| w.kind == WellnessKind::SleepStage)
-            .map(|w| w.ts.date_naive())
+            .map(|w| ofit_analytics::night_of(w.ts))
             .collect();
-        let derived: Vec<(DateTime<Utc>, f64)> = ofit_analytics::hr_derived_sleep(&hr)
+        // Calibrate the HR→stage thresholds from those labelled nights (join each
+        // staged minute with its HR), so the estimate matches this person.
+        let hr_by_min: std::collections::HashMap<i64, f64> =
+            hr.iter().map(|(ts, v)| (ts.timestamp() / 60, *v)).collect();
+        let labeled: Vec<(DateTime<Utc>, f64, f64)> = input
+            .wellness
+            .iter()
+            .filter(|w| w.kind == WellnessKind::SleepStage)
+            .filter_map(|w| hr_by_min.get(&(w.ts.timestamp() / 60)).map(|h| (w.ts, w.value, *h)))
+            .collect();
+        let model = ofit_analytics::calibrate(&labeled);
+        let derived: Vec<(DateTime<Utc>, f64)> = ofit_analytics::hr_derived_sleep(&hr, &model)
             .into_iter()
-            .filter(|(ts, _)| !have_sleep.contains(&ts.date_naive()))
+            .filter(|(ts, _)| !have_nights.contains(&ofit_analytics::night_of(*ts)))
             .collect();
         // Feed the estimate into THIS run's input so the sleep algorithm stages it
         // now (not only on the next recompute).

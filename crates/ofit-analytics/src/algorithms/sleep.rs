@@ -26,7 +26,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use ofit_core::analytics::{AlgorithmInput, AlgorithmKind, AlgorithmOutput, AlgorithmSpec};
 use ofit_core::{Algorithm, DerivedSubject, SleepStage, WellnessKind};
 
@@ -97,12 +97,11 @@ impl Night {
 
 /// The "sleep date" a timestamp belongs to: evening (≥18:00) rolls into the next
 /// morning, so a night that crosses midnight is keyed by the wake-up date.
+/// A night is labelled by its **bed-time date** (the evening you fell asleep), so
+/// the night that ends this morning is "yesterday". Shared with the HR-sleep
+/// estimator so both bucket nights identically.
 fn sleep_date(ts: DateTime<Utc>) -> NaiveDate {
-    if ts.hour() >= 18 {
-        ts.date_naive() + Duration::days(1)
-    } else {
-        ts.date_naive()
-    }
+    crate::hr_sleep::night_of(ts)
 }
 
 impl RunnableAlgorithm for Sleep {

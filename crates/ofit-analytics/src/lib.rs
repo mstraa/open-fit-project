@@ -29,7 +29,7 @@ pub mod runner;
 
 pub use algorithms::{AnomalyFlag, Readiness, Sleep, TrainingLoad, TssMethod};
 pub use energy::body_battery;
-pub use hr_sleep::hr_derived_sleep;
+pub use hr_sleep::{calibrate, hr_derived_sleep, night_of, SleepModel};
 pub use input::{ActivityInput, AnalyticsInput, MetricSeries, WellnessPoint};
 pub use params::{AthleteThresholds, LoadTimeConstants, ReadinessParams};
 pub use resting::daily_resting_hr;

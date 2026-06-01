@@ -347,6 +347,21 @@ impl Db {
         Ok(())
     }
 
+    /// Delete one kind of wellness sample from a source — used to fully replace a
+    /// recomputed estimate (e.g. the "Computed" HR-derived sleep) each run.
+    pub async fn delete_wellness_kind_for_source(
+        &self,
+        source_id: Uuid,
+        kind: ofit_core::WellnessKind,
+    ) -> Result<u64> {
+        let r = sqlx::query(&self.p("DELETE FROM wellness_samples WHERE source_id = ? AND kind = ?"))
+            .bind(source_id.to_string())
+            .bind(serde_plain(&kind))
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Delete all wellness samples from a source — used to make a re-import of a
     /// device's export idempotent (replace, don't duplicate).
     pub async fn delete_wellness_for_source(&self, source_id: Uuid) -> Result<u64> {
