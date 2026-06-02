@@ -2,10 +2,11 @@ name: release
 
 # Tag-driven release. Push a tag like `v0.3.0` (see scripts/bump-version.sh) and
 # this builds + publishes everything for that version:
-#   - GHCR image   ghcr.io/<owner>/ofit-api:<version> + :latest
 #   - Linux x86_64 binary  ofit-api  (self-contained, UI embedded)
 #   - Android debug APK    open-fit-<version>.apk
 #   - a GitHub Release carrying the binary + APK (+ checksums)
+#   - GHCR image (opt-in): only when the repo variable ENABLE_GHCR == 'true'
+#     (Settings → Secrets and variables → Actions → Variables). Off by default.
 #
 # Can also be run manually (workflow_dispatch) with an explicit version, which
 # creates the matching tag.
@@ -46,6 +47,8 @@ jobs:
   image:
     name: GHCR image
     needs: meta
+    # Opt-in: set repo variable ENABLE_GHCR=true to publish container images.
+    if: ${{ vars.ENABLE_GHCR == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +139,9 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [meta, image, binary, apk]
+    # Note: `image` is intentionally NOT a dependency — it's opt-in and may be
+    # skipped, which would otherwise skip the release too.
+    needs: [meta, binary, apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

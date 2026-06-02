@@ -86,11 +86,16 @@ docker compose -f docker/docker-compose.full.yml up -d
 Both compose files keep a `build:` block, so `docker compose build` still builds
 the image from source for local development.
 
-> **First release only:** GHCR packages default to **private** even on a public
-> repo. After the first `release` workflow run, open the package at
-> `github.com/users/mstraa/packages/container/ofit-api/settings` and set its
-> visibility to **Public** so `docker compose pull` works without auth. (The LXC
-> native path is unaffected — public-repo release assets download anonymously.)
+> **GHCR is opt-in (off by default).** The release workflow only builds/pushes a
+> container image when the repo variable `ENABLE_GHCR` is set to `true`
+> (Settings → Secrets and variables → Actions → Variables). Until then, releases
+> ship the Linux binary + APK only, and the LXC native path is the supported
+> Docker-free route.
+>
+> When you do enable it: GHCR packages default to **private** even on a public
+> repo, so after the first image push, set the package public at
+> `github.com/users/mstraa/packages/container/ofit-api/settings` for anonymous
+> `docker compose pull`.
 
 ---
 
@@ -106,10 +111,10 @@ git push && git push origin v0.3.0       # → triggers the release workflow
 
 Pushing the `v*` tag builds and publishes, for that version:
 
-- **GHCR image** — `ghcr.io/mstraa/ofit-api:0.3.0` and `:latest`
 - **Linux x86_64 binary** — `ofit-api` (+ `ofit-api.sha256`), used by the LXC install/update
 - **Android debug APK** — `open-fit-0.3.0.apk`
 - a **GitHub Release** carrying the binary + APK (+ checksums) with generated notes
+- **GHCR image** — `ghcr.io/mstraa/ofit-api:0.3.0` and `:latest`, **only when `ENABLE_GHCR=true`** (see above)
 
 `bump-version.sh` keeps the Cargo workspace, `web`, `mobile`, and Android
 (`versionName` + auto-incremented `versionCode`) in sync.
@@ -120,7 +125,7 @@ Pushing the `v*` tag builds and publishes, for that version:
 |----------|---------|------|
 | [`ci.yml`](../.github/workflows/ci.yml) | push to `main`, PRs | `cargo check`/`test` workspace; web typecheck + build |
 | [`android.yml`](../.github/workflows/android.yml) | `mobile/**` or `web/**` changes, manual | Build debug APK, upload as artifact |
-| [`release.yml`](../.github/workflows/release.yml) | tag `v*`, manual | Image + binary + APK + GitHub Release |
+| [`release.yml`](../.github/workflows/release.yml) | tag `v*`, manual | Binary + APK + GitHub Release (GHCR image if `ENABLE_GHCR=true`) |
 
 The Android workflow builds an **unsigned debug APK** (no secrets needed),
 installable for personal sideloading. To ship a Play-Store / F-Droid-style
