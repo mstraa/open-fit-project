@@ -29,3 +29,10 @@ chrono.workspace = true
 uuid.workspace = true
 argon2.workspace = true
 rand.workspace = true
+# Embed the built web SPA (../../web/dist) into the release binary so a single
+# self-contained `ofit-api` serves both the API and the UI on one port — no
+# nginx, no separate web bundle. Debug builds read web/dist from disk at runtime
+# (so `npm run dev` / a fresh `vite build` is picked up without recompiling).
+# `build.rs` guarantees the folder exists at compile time.
+rust-embed = "8"
+mime_guess = "2"

@@ -32,6 +32,7 @@ mod analytics;
 mod auth;
 mod dto;
 mod handlers;
+mod static_assets;
 
 /// Shared application state handed to every handler.
 #[derive(Clone)]
@@ -242,6 +243,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .nest("/api", api)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        // Anything not matched above is the embedded web SPA (web/dist): serve
+        // the static file if present, else index.html so client-side routes
+        // resolve on reload. API/doc namespaces are 404-guarded in the handler.
+        .fallback(static_assets::handler)
         .layer(TraceLayer::new_for_http())
         // Session cookies are credentialed, so we reflect the request origin
         // (a wildcard `*` is invalid with credentials). Same-origin prod needs

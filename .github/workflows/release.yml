@@ -1,0 +1,156 @@
+name: release
+
+# Tag-driven release. Push a tag like `v0.3.0` (see scripts/bump-version.sh) and
+# this builds + publishes everything for that version:
+#   - GHCR image   ghcr.io/<owner>/ofit-api:<version> + :latest
+#   - Linux x86_64 binary  ofit-api  (self-contained, UI embedded)
+#   - Android debug APK    open-fit-<version>.apk
+#   - a GitHub Release carrying the binary + APK (+ checksums)
+#
+# Can also be run manually (workflow_dispatch) with an explicit version, which
+# creates the matching tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.3.0 — no leading v)'
+        required: true
+
+permissions:
+  contents: write   # create the GitHub Release
+  packages: write   # push to GHCR
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$v"
+
+  image:
+    name: GHCR image
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR namespaces must be lowercase; repository_owner preserves casing.
+      - id: ns
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.ns.outputs.owner }}/ofit-api:${{ needs.meta.outputs.version }}
+            ghcr.io/${{ steps.ns.outputs.owner }}/ofit-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  binary:
+    name: Linux binary (x86_64)
+    needs: meta
+    # glibc 2.35 → the binary runs on Debian 12 (glibc 2.36) LXC containers.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build web (embedded into the binary)
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release -p ofit-api
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/ofit-api dist/ofit-api
+          ( cd dist && sha256sum ofit-api > ofit-api.sha256 )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ofit-api-linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  apk:
+    name: Debug APK
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      # Provision the Android SDK + accept licenses (don't rely on the runner image).
+      - uses: android-actions/setup-android@v3
+      - name: Build web + sync Capacitor
+        run: |
+          npm --prefix web ci
+          npm --prefix mobile ci
+          npm --prefix mobile run sync
+      - name: Assemble debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+             dist/open-fit-${{ needs.meta.outputs.version }}.apk
+          ( cd dist && sha256sum *.apk > apk.sha256 )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-fit-apk
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [meta, image, binary, apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect release assets
+        run: |
+          mkdir -p out
+          cp artifacts/ofit-api-linux-x86_64/* out/
+          cp artifacts/open-fit-apk/* out/
+          ls -l out
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.meta.outputs.version }}
+          name: Open Fit v${{ needs.meta.outputs.version }}
+          generate_release_notes: true
+          files: out/*

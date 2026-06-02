@@ -24,9 +24,20 @@ Rust workspace (`crates/`) + React/Vite frontend (`web/`) + Android app (`mobile
 | `ofit-api` | axum REST + WebSocket/SSE, OpenAPI (utoipa), single-user auth |
 | `ofit-mcp` | (later) MCP server over the API |
 
-## Deployment — 2 tiers
-- **simple**: single `ofit-api` binary + SQLite (first-run wizard).
-- **full**: Docker Compose (api + Postgres/Timescale).
+## Deployment
+The web UI is **embedded in the `ofit-api` binary**, so one process serves both
+the API and the dashboard on port `8087` — no nginx, no separate web bundle.
+SQLite by default; point `DATABASE_URL` at Postgres/Timescale for the full tier.
+
+- **Proxmox LXC** (primary, native + systemd): one-liner on the Proxmox host —
+  ```sh
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/mstraa/open-fit-project/main/scripts/lxc/openfit-lxc.sh)"
+  ```
+- **Docker**: image from `ghcr.io/mstraa/ofit-api`, compose in [`docker/`](docker) (simple SQLite / full Postgres+Timescale).
+- **Bare binary**: download from [Releases](https://github.com/mstraa/open-fit-project/releases).
+
+Releases are tag-driven (`vX.Y.Z` → GHCR image + Linux binary + Android APK).
+Full guide: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## Develop
 ```sh

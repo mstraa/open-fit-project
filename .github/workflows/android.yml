@@ -1,0 +1,59 @@
+name: android
+
+# Builds the debug APK (web build → cap sync → gradle assembleDebug) and
+# uploads it as a workflow artifact. Runs only when the app or web sources
+# change, plus on demand. Release builds attach the APK to the GitHub Release
+# instead — see release.yml.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'web/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - 'web/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      # Provision the Android SDK + accept licenses (don't rely on the runner image).
+      - uses: android-actions/setup-android@v3
+      - name: Install web + mobile deps
+        run: |
+          npm --prefix web ci
+          npm --prefix mobile ci
+      - name: Build web + sync Capacitor
+        run: npm --prefix mobile run sync
+      - name: Assemble debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+             dist/open-fit-debug-${GITHUB_SHA::7}.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-fit-debug-apk
+          path: dist/*.apk
+          if-no-files-found: error
