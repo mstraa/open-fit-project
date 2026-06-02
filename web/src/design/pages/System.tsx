@@ -1378,6 +1378,15 @@ function DevicesManager() {
     if (s.kind === "device") lastSyncByName.set(s.name.trim().toLowerCase(), s.last_synced_at ?? null);
   }
 
+  // Device-type detection + the freshly discovered (not-yet-added) devices a
+  // scan turned up, so the user has something to select. (This rendering was
+  // dropped in the redesign — the scan ran but nothing showed.)
+  const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
+  const isGarmin = (name: string) => /garmin|forerunner|fenix|epix|venu|instinct|fr\d|945/i.test(name);
+  const keyOk = /^[0-9a-f]{32}$/i.test(authKey.trim());
+  const addable = native.found.filter((d) => !native.devices.some((x) => x.deviceId === d.deviceId));
+  const scanning = native.status === "scanning";
+
   return (
     <div className="stack">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1494,6 +1503,66 @@ function DevicesManager() {
             <Row title="No devices added" sub="Tap Scan above to pair a sensor over Bluetooth" right={<span className="pill">idle</span>} />
           )}
         </div>
+
+        {/* Discovered devices from the latest scan — select one to pair. The Helio
+            needs its 32-hex auth key (above) before Add · Zepp-OS is enabled. */}
+        {(scanning || addable.length > 0) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
+            <SectionLabel>
+              {scanning ? "Scanning…" : `Discovered (${addable.length})`}
+            </SectionLabel>
+            {scanning && addable.length === 0 && (
+              <Row
+                title="Looking for sensors…"
+                sub="Make sure the device is awake and nearby"
+                right={
+                  <span className="pill live">
+                    <i />
+                    scanning
+                  </span>
+                }
+              />
+            )}
+            {addable.map((d) => (
+              <Row
+                key={d.deviceId}
+                title={d.name || d.deviceId}
+                sub={`${d.rssi} dBm signal`}
+                right={
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {isZeppOs(d.name) && (
+                      <button
+                        className="pill"
+                        disabled={!keyOk}
+                        title={keyOk ? "" : "Enter the 32-hex Helio auth key first"}
+                        style={{
+                          color: keyOk ? "var(--blue)" : "var(--text-faint)",
+                          background: tint("var(--blue)", keyOk ? 13 : 6),
+                          cursor: keyOk ? "pointer" : "not-allowed",
+                        }}
+                        onClick={() => void native.addAndConnect(d, { type: "huami", authKey: authKey.trim() })}
+                      >
+                        Add · Zepp-OS
+                      </button>
+                    )}
+                    {isGarmin(d.name) && (
+                      <button
+                        className="pill"
+                        style={{ color: "var(--blue)", background: tint("var(--blue)", 13) }}
+                        onClick={() => void native.addAndConnect(d, { type: "garmin" })}
+                      >
+                        Add · Garmin
+                      </button>
+                    )}
+                    <button className="pill" onClick={() => void native.addAndConnect(d)}>
+                      Add · HR
+                    </button>
+                  </div>
+                }
+              />
+            ))}
+          </div>
+        )}
       </Card>
 
           <Card
