@@ -321,6 +321,48 @@ export function useIntradayLatestDay(kind: string): IntradayVM {
   }, [points]);
 }
 
+/** Weight tracking — latest reading + per-day trend (kg, 1-decimal) over `days`,
+ *  plus the change across the window. Weight is sparse (a handful of readings,
+ *  not a continuous stream), so we keep one point per calendar day — the last
+ *  reading that day — and connect them; gaps stay gaps. Fed by the Garmin/Zepp
+ *  imports (`WellnessKind::Weight`) and any future manual logging. */
+export interface WeightVM {
+  /** Most recent reading (kg, 1-decimal). */
+  latest: number;
+  /** One point per day with data (last reading that day), oldest→newest. */
+  days: { date: string; value: number }[];
+  min: number;
+  avg: number;
+  max: number;
+  /** latest − first reading in the window (signed kg). */
+  delta: number;
+  real: boolean;
+}
+export function useWeightTrend(days: number): WeightVM {
+  const { points } = useWellnessRaw("weight", days);
+  return useMemo(() => {
+    if (!points.length) return { latest: 0, days: [], min: 0, avg: 0, max: 0, delta: 0, real: false };
+    // One value per calendar day: points are sorted ascending, so the last
+    // write into the map wins (the most recent reading that day).
+    const byDay = new Map<string, number>();
+    for (const p of points) byDay.set(dayKeyOf(p.ts), p.value);
+    const dayPts = [...byDay.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([date, value]) => ({ date, value: +value.toFixed(1) }));
+    const all = points.map((p) => p.value);
+    const latest = points[points.length - 1].value;
+    return {
+      latest: +latest.toFixed(1),
+      days: dayPts,
+      min: +Math.min(...all).toFixed(1),
+      avg: +mean(all).toFixed(1),
+      max: +Math.max(...all).toFixed(1),
+      delta: +(latest - points[0].value).toFixed(1),
+      real: true,
+    };
+  }, [points]);
+}
+
 /** Body battery composite — ring value + intraday curve + charged/drained. */
 export interface BodyBatteryVM { now: number; atWake: number; lowToday: number; charged: number; drained: number; curve: number[]; spanSec: number; real: boolean }
 export function useBodyBattery(): BodyBatteryVM {

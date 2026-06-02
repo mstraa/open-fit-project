@@ -23,6 +23,7 @@ import {
   useIntradayLatestDay,
   useStepsWeek,
   useMetricHistory,
+  useWeightTrend,
 } from "../wiring";
 
 /* =================== LIVE HR HERO =================== */
@@ -88,6 +89,7 @@ export function DWellness() {
   const hrvBand = hrvTrend.days.map((d) => ({ date: new Date(d.date), avg: d.avg, min: d.min, max: d.max }));
   const stress = useIntradayLatestDay("stress");
   const stepsWeek = useStepsWeek();
+  const weight = useWeightTrend(90);
 
   // 7-day readiness mini-bars — real data.
   const rdy = useMetricHistory({ src: "readiness" }, "Week");
@@ -253,6 +255,50 @@ export function DWellness() {
           <Bars data={stepsWeek} height={170} colorFn={() => "var(--blue)"} valueFmt={(v) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : v)} />
         ) : (
           <NoData label="No step data this week" height={170} />
+        )}
+      </Card>
+      <Card
+        className="c6 hover-card tappable"
+        title="Weight"
+        sub="last 90 days"
+        onClick={() =>
+          nav.push(
+            <MetricDetail
+              title="Weight"
+              sub="Body-weight trend"
+              accent="var(--weight)"
+              unit="kg"
+              decimals={1}
+              ranges={["Week", "Month", "Year"]}
+              source={{ src: "wellness", kind: "weight", agg: "avg" }}
+            />,
+          )
+        }
+      >
+        {weight.real && weight.days.length ? (
+          <>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 34, fontWeight: 700, color: "var(--weight)" }}>{weight.latest.toFixed(1)}</span>
+              <span style={{ fontSize: 14, color: "var(--text-dim)", fontWeight: 600 }}>kg</span>
+              {weight.days.length > 1 && weight.delta !== 0 && (
+                <span style={{ marginLeft: "auto", fontSize: 13.5, fontWeight: 600, color: "var(--text-dim)" }}>
+                  {weight.delta > 0 ? "+" : ""}
+                  {weight.delta.toFixed(1)} kg · {weight.days.length} d
+                </span>
+              )}
+            </div>
+            <LineChart
+              data={weight.days.map((d) => d.value)}
+              height={170}
+              color="var(--weight)"
+              fill
+              valueFmt={(v) => v.toFixed(1)}
+              xLabels={weight.days.map((d, i) => (i % Math.ceil(weight.days.length / 6) === 0 ? d.date.slice(5) : null))}
+              dateFmt={(i) => weight.days[i]?.date ?? ""}
+            />
+          </>
+        ) : (
+          <NoData label="No weight data yet" hint="Import a Garmin or Zepp export to see your weight trend." height={170} />
         )}
       </Card>
     </div>
