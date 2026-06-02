@@ -22,6 +22,28 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    // Extract native libs at install so each .so is loaded from disk with its own
+    // (now 16 KB-aligned) ELF segments — robust on Android 15+ 16 KB-page devices
+    // without depending on newer-AGP 16 KB zip alignment.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+// Android 15+ requires native .so LOAD segments aligned to 16 KB. The SQLite
+// Capacitor plugin pulls the EOL net.zetetic:android-database-sqlcipher:4.5.3,
+// whose libsqlcipher.so is only 4 KB-aligned and is rejected on 16 KB-page
+// devices ("LOAD segment not aligned"). Substitute its maintained successor
+// net.zetetic:sqlcipher-android (same net.sqlcipher Java API); its 4.6.1 build
+// ships 16 KB-aligned libraries. Verified: 4.5.3 p_align=0x1000, 4.6.1 0x4000.
+configurations.all {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module('net.zetetic:android-database-sqlcipher'))
+            .using(module('net.zetetic:sqlcipher-android:4.6.1'))
+            .because('16 KB page-size alignment for Android 15+')
+    }
 }
 
 repositories {
