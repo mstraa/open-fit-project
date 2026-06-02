@@ -45,7 +45,7 @@ and use env/defaults. Every value is also overridable up-front via env:
 | `CTID` | next free id | Container id |
 | `CT_HOSTNAME` | `openfit` | Hostname |
 | `OSVER` | `13` | Debian version — `13` (trixie) or `12` (bookworm) |
-| `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `1024` / `512` / `6` | Resources (MiB / GiB) |
+| `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `1024` / `512` / `20` | Resources (MiB / GiB) |
 | `STORAGE` | auto-detected | Rootfs storage (the only `rootdir`-capable one, else you pick) |
 | `TEMPLATE_STORAGE` | auto-detected | Storage for the LXC template (`vztmpl`) |
 | `BRIDGE` | `vmbr0` | Network bridge (DHCP) |
@@ -57,15 +57,15 @@ After it finishes:
 pct console <CTID>                                   # auto root login
 pct exec <CTID> -- grep OFIT_TOKEN /etc/openfit/openfit.env
 pct exec <CTID> -- journalctl -u openfit -f          # logs
-pct exec <CTID> -- openfit-update                    # update to the latest release
+pct exec <CTID> -- update                            # update to the latest release
 ```
 
-The UI/API is at `http://<container-ip>:8087`. Inside the container:
+The web UI + API are served on **port 80** at `http://<container-ip>/`. Inside the container:
 
 - service: `systemctl {status,restart,stop} openfit`
 - config: `/etc/openfit/openfit.env` (token, bind, `DATABASE_URL`, `RUST_LOG`)
 - data: `/var/lib/openfit/ofit.db` (SQLite)
-- update: `openfit-update` (latest) or `openfit-update 0.3.0` (pin)
+- update: `update` (latest) or `update 0.3.0` (pin)
 
 See [`scripts/lxc/README.md`](../scripts/lxc/README.md) for the install/update
 internals.

@@ -28,7 +28,7 @@ OFIT_VERSION="${OFIT_VERSION:-latest}"
 : "${CORES:=2}"
 : "${RAM:=1024}"          # MiB
 : "${SWAP:=512}"          # MiB
-: "${DISK:=6}"            # GiB
+: "${DISK:=20}"           # GiB
 : "${BRIDGE:=vmbr0}"
 : "${OSVER:=13}"          # Debian 13 (trixie); 12 (bookworm) also works
 : "${UNPRIVILEGED:=1}"
@@ -157,10 +157,10 @@ msg "done."
 cat <<EOF
 
   Open Fit is running in CT $CTID.
-    URL:      http://${IP:-<container-ip>}:8087
+    Web UI:   http://${IP:-<container-ip>}/          (API under /api)
     Token:    pct exec $CTID -- grep OFIT_TOKEN /etc/openfit/openfit.env
-    Console:  pct console $CTID          (auto root login)
-    Update:   pct exec $CTID -- openfit-update
+    Console:  pct console $CTID                      (auto root login)
+    Update:   pct exec $CTID -- update
     Logs:     pct exec $CTID -- journalctl -u openfit -f
 
 EOF

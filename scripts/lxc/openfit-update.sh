@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Open Fit — update to a published release. RUN INSIDE the LXC as root.
-# Installed as /usr/local/bin/openfit-update by openfit-install.sh.
+# Installed as /usr/local/bin/update by openfit-install.sh.
 #
-#   openfit-update           # pull the latest release
-#   openfit-update 0.3.0     # pin a specific version
+#   update           # pull the latest release
+#   update 0.3.0     # pin a specific version
 #
 set -euo pipefail
 
