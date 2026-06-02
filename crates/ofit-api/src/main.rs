@@ -32,6 +32,7 @@ mod analytics;
 mod auth;
 mod dto;
 mod handlers;
+mod worker;
 
 /// Shared application state handed to every handler.
 #[derive(Clone)]
@@ -42,9 +43,17 @@ pub(crate) struct AppState {
     pub token: Option<Arc<str>>,
     /// Live wellness fan-out: ingest publishes, `/api/wellness/live` subscribes.
     pub wellness_tx: tokio::sync::broadcast::Sender<dto::LiveWellness>,
+    /// Wakes the background analytics worker after a raw write (debounced).
+    pub recompute_notify: std::sync::Arc<tokio::sync::Notify>,
+    /// Worker progress fan-out: `/api/analytics/status` subscribes.
+    pub analytics_status_tx: tokio::sync::broadcast::Sender<worker::AnalyticsStatus>,
     /// Directory scanned for sandboxed WASM algorithm plugins (Phase 3). `None`
     /// or a missing dir ⇒ built-ins only. Set via `OFIT_PLUGINS_DIR`.
     pub plugins_dir: Option<Arc<std::path::Path>>,
+    /// Status of the (single) background one-time Garmin import job, polled by the
+    /// UI via `/api/import/garmin/status`. The import runs minutes, so it can't be
+    /// a synchronous request.
+    pub garmin_import: std::sync::Arc<std::sync::Mutex<handlers::GarminJobState>>,
 }
 
 /// Liveness payload. Reports the DB backend in use so the simple/full tier is
@@ -75,14 +84,16 @@ struct Version {
         auth::logout,
         auth::me,
         handlers::import,
-        handlers::import_gadgetbridge,
         handlers::import_zepp,
         handlers::dedup_zepp_summaries,
         handlers::remap_zepp_sports,
         handlers::list_sources,
         handlers::list_activities,
         handlers::get_activity,
+        handlers::delete_activity,
         handlers::remove_recording,
+        handlers::delete_source,
+        handlers::export_activity_fit,
         handlers::list_preferences,
         handlers::set_preference,
         handlers::wellness,
@@ -97,8 +108,6 @@ struct Version {
         Version,
         dto::ImportResponse,
         dto::ImportFileResult,
-        dto::GadgetbridgeImportResponse,
-        dto::GadgetbridgeDeviceResult,
         dto::ZeppImportResponse,
         dto::DedupResponse,
         dto::RemapResponse,
@@ -109,6 +118,7 @@ struct Version {
         dto::ActivityDetail,
         dto::RecordingDto,
         dto::RemoveRecordingResponse,
+        dto::DeleteSourceResponse,
         dto::ResolvedScalarMetric,
         dto::ScalarPoint,
         dto::TrackPoint,
@@ -178,13 +188,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Live wellness fan-out channel (lagging slow subscribers are dropped).
     let (wellness_tx, _) = tokio::sync::broadcast::channel(512);
+    // Background analytics worker: wake signal + progress fan-out.
+    let recompute_notify = Arc::new(tokio::sync::Notify::new());
+    let (analytics_status_tx, _) = tokio::sync::broadcast::channel(64);
 
     let state = AppState {
         db,
         token: token.map(Arc::from),
         wellness_tx,
+        recompute_notify,
+        analytics_status_tx,
         plugins_dir,
+        garmin_import: std::sync::Arc::new(std::sync::Mutex::new(handlers::GarminJobState::default())),
     };
+
+    // Spawn the incremental-recompute worker (drains the dirty queue on startup).
+    worker::spawn(state.clone());
 
     // Auth routes are always reachable (login/setup/status); the rest sit behind
     // `require_auth`.
@@ -204,21 +223,40 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::import).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
         )
         .route(
-            "/import/gadgetbridge",
-            post(handlers::import_gadgetbridge).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
-        )
-        .route(
             "/import/zepp",
             post(handlers::import_zepp).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
         )
+        // One-time Garmin history backfill (runs in the background — poll status).
+        // Either point at the export already on disk (JSON {path})…
+        .route("/import/garmin", post(handlers::import_garmin))
+        // …or upload the export .zip (raise the body limit for the ~195 MB file)…
+        .route(
+            "/import/garmin/upload",
+            post(handlers::import_garmin_upload).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)),
+        )
+        // …and poll progress + the final summary here.
+        .route("/import/garmin/status", get(handlers::garmin_import_status))
         .route("/maintenance/dedup-zepp-summaries", post(handlers::dedup_zepp_summaries))
         .route("/maintenance/remap-zepp-sports", post(handlers::remap_zepp_sports))
+        .route("/maintenance/clamp-hr", post(handlers::clamp_hr))
         .route("/sources", get(handlers::list_sources))
         .route("/activities", get(handlers::list_activities))
-        .route("/activities/:id", get(handlers::get_activity))
+        .route(
+            "/activities/:id",
+            get(handlers::get_activity).delete(handlers::delete_activity),
+        )
         .route(
             "/activities/:id/recordings/:recording_id",
             axum::routing::delete(handlers::remove_recording),
+        )
+        // Hard per-source delete (Edit tab) + FIT export.
+        .route(
+            "/activities/:id/sources/:recording_id",
+            axum::routing::delete(handlers::delete_source),
+        )
+        .route(
+            "/activities/:id/export.fit",
+            get(handlers::export_activity_fit),
         )
         .route(
             "/preferences",
@@ -229,11 +267,29 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::wellness).post(handlers::ingest_wellness),
         )
         .route("/wellness/live", get(handlers::wellness_live))
+        .route("/analytics/status", get(worker::status_ws))
         .route("/algorithms", get(analytics::list_algorithms))
         .route("/analytics/recompute", post(analytics::recompute))
         .route("/analytics/derived", get(analytics::derived))
         .route("/analytics/training-load", get(analytics::training_load))
+        .route(
+            "/analytics/parameters",
+            get(analytics::list_parameters).put(analytics::set_parameters),
+        )
+        .route("/analytics/variants", get(analytics::list_variants))
+        .route("/analytics/selection", axum::routing::put(analytics::set_selection))
         .route("/settings", get(handlers::get_settings).put(handlers::set_setting))
+        .route("/personal-records", get(handlers::personal_records))
+        .route("/gear", get(handlers::get_gear).post(handlers::create_gear))
+        .route("/gear/defaults", axum::routing::put(handlers::set_gear_default))
+        .route(
+            "/gear/:id",
+            axum::routing::put(handlers::update_gear).delete(handlers::delete_gear),
+        )
+        .route(
+            "/activities/:id/gear",
+            axum::routing::put(handlers::set_activity_gear),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     let api = public_api.merge(protected_api);

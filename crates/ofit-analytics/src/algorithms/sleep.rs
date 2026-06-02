@@ -32,18 +32,26 @@ use ofit_core::{Algorithm, DerivedSubject, SleepStage, WellnessKind};
 
 use crate::algorithms::training_load::day_uuid;
 use crate::input::AnalyticsInput;
+use crate::params::AnalyticsParams;
 use crate::runner::{AlgorithmOutputs, RunnableAlgorithm};
 
 /// Built-in sleep-summary + sleep-score algorithm.
 #[derive(Debug, Clone)]
 pub struct Sleep {
     spec: AlgorithmSpec,
-    /// Minimum minutes of staged data for a night to count.
-    pub min_minutes: usize,
+    /// Effective tunable parameters (min minutes, duration target, weights…).
+    p: AnalyticsParams,
 }
 
 impl Default for Sleep {
     fn default() -> Self {
+        Self::configured(&AnalyticsParams::default())
+    }
+}
+
+impl Sleep {
+    /// Build with explicit effective parameters (from the settings store).
+    pub fn configured(p: &AnalyticsParams) -> Self {
         Self {
             spec: AlgorithmSpec {
                 id: "sleep".into(),
@@ -66,8 +74,19 @@ impl Default for Sleep {
                 applicable_hardware: vec!["any".into(), "sleep-tracker".into()],
                 kind: AlgorithmKind::BuiltIn,
             },
-            min_minutes: 30,
+            p: p.clone(),
         }
+    }
+
+    /// 0–100 sleep score: duration (target = full marks) + quality (deep+REM share).
+    fn score(&self, n: &Night) -> f64 {
+        let total = n.asleep();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        let dur = (total / self.p.sl_duration_target).min(1.0) * 100.0;
+        let qual = (((n.deep + n.rem) / total) / self.p.sl_ideal_deep_rem).min(1.0) * 100.0;
+        (self.p.sl_weight_duration * dur + self.p.sl_weight_quality * qual).clamp(0.0, 100.0)
     }
 }
 
@@ -140,7 +159,7 @@ impl RunnableAlgorithm for Sleep {
         }
 
         for (date, night) in nights {
-            if (night.staged() as usize) < self.min_minutes {
+            if (night.staged() as usize) < (self.p.sl_min_minutes as usize) {
                 continue;
             }
             let subject = DerivedSubject::Day(day_uuid(date));
@@ -156,23 +175,12 @@ impl RunnableAlgorithm for Sleep {
             out.metrics
                 .push(self.spec.tag_metric(subject, "sleep_awake_min", night.awake, computed_at));
             out.metrics
-                .push(self.spec.tag_metric(subject, "sleep_score", score(&night), computed_at));
+                .push(self.spec.tag_metric(subject, "sleep_score", self.score(&night), computed_at));
             out.metrics
                 .push(self.spec.tag_metric(subject, "sleep_available", 1.0, computed_at));
         }
         out
     }
-}
-
-/// 0–100 sleep score: 70 % duration (8 h target) + 30 % quality (deep+REM share).
-fn score(n: &Night) -> f64 {
-    let total = n.asleep();
-    if total <= 0.0 {
-        return 0.0;
-    }
-    let dur = (total / 480.0).min(1.0) * 100.0;
-    let qual = (((n.deep + n.rem) / total) / 0.40).min(1.0) * 100.0;
-    (0.7 * dur + 0.3 * qual).clamp(0.0, 100.0)
 }
 
 /// Map a stored [`SleepStage::code`] back to the stage.

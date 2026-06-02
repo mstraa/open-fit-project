@@ -30,7 +30,13 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ofit_core::{SleepStage, Sport, WellnessKind};
 
-pub use crate::gadgetbridge::WellnessReading;
+/// A single timestamped wellness sample produced by an import adapter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WellnessReading {
+    pub kind: WellnessKind,
+    pub value: f64,
+    pub ts: chrono::DateTime<chrono::Utc>,
+}
 
 /// One workout summary from the Zepp `SPORT` table. These carry no per-second
 /// streams or GPS — just totals — so the API imports them as **summary

@@ -32,6 +32,8 @@ export interface Source {
   manufacturer?: string | null;
   default_priority: number;
   created_at?: string;
+  /** Latest data we have from this source (ISO); the device's "last sync". */
+  last_synced_at?: string | null;
 }
 
 /** List-row shape: GET /api/activities. */
@@ -42,6 +44,10 @@ export interface ActivitySummary {
   ended_at: string;
   recording_count: number;
   duration_secs: number;
+  /** Total distance in metres, if computed by the analytics recompute. */
+  distance_m: number | null;
+  /** Energy in kcal (Zepp summary), if known. */
+  calories: number | null;
 }
 
 /** A scalar time-series sample (HR/power/…): { t_offset_ms, value }. */

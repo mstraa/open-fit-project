@@ -25,8 +25,7 @@ import { useHealth } from "../hooks/useHealth";
 import { useTheme, type Theme } from "../theme/ThemeProvider";
 import { API_BASE } from "../api/client";
 import { listSources, listPreferences, putPreference, getVersion } from "../api/endpoints";
-import { GadgetbridgeImportCard, ZeppImportCard } from "../ui/ImportCards";
-import { GadgetbridgeAutoImportCard } from "../gadgetbridge/GadgetbridgeAutoImportCard";
+import { ZeppImportCard } from "../ui/ImportCards";
 import { CHART_METRICS, metricLabel } from "../ui/format";
 import type {
   MetricSourcePreference,
@@ -405,14 +404,13 @@ export function Settings() {
             ) : null}
           </section>
 
-          {/* DEVICES — link to the BLE scanner + Gadgetbridge import */}
+          {/* DEVICES — link to the BLE scanner */}
           <section className="panel card" id="devices">
             <div className="card__head">
               <div className="card__title">Devices</div>
             </div>
             <p className="muted" style={{ fontSize: 12.5, margin: "0 0 14px" }}>
-              Connect a sensor live over Bluetooth, or import from Gadgetbridge — both stream
-              into your wellness data. Registered import sources appear under Sources &amp; fusion
+              Connect a sensor live over Bluetooth. Registered sources appear under Sources &amp; fusion
               above.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -425,15 +423,13 @@ export function Settings() {
             </div>
           </section>
 
-          {/* IMPORTS & SYNC — Gadgetbridge auto-import + manual GB/Zepp imports */}
+          {/* IMPORTS & SYNC — Zepp/Amazfit export import */}
           <section className="panel card" id="imports">
             <div className="card__head">
               <div className="card__title">
                 Imports &amp; sync<span className="sub">wellness · workouts · cloudless</span>
               </div>
             </div>
-            <GadgetbridgeAutoImportCard />
-            <GadgetbridgeImportCard />
             <ZeppImportCard />
           </section>
 

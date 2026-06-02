@@ -52,6 +52,9 @@ pub struct SourceDto {
     pub default_priority: i32,
     /// First time we saw this source.
     pub created_at: DateTime<Utc>,
+    /// Latest data we have from this source (`max(wellness ts, recording end)`),
+    /// shown as the device's "last sync". `None` if it has produced no data yet.
+    pub last_synced_at: Option<DateTime<Utc>>,
 }
 
 impl From<Source> for SourceDto {
@@ -63,6 +66,7 @@ impl From<Source> for SourceDto {
             manufacturer: s.manufacturer,
             default_priority: s.default_priority,
             created_at: s.created_at,
+            last_synced_at: None,
         }
     }
 }
@@ -82,6 +86,11 @@ pub struct ActivitySummary {
     pub recording_count: usize,
     /// Duration of the activity window in seconds.
     pub duration_secs: i64,
+    /// Total distance in metres, if computed (recompute cache). `None` until the
+    /// analytics recompute has run for this activity.
+    pub distance_m: Option<f64>,
+    /// Energy in kcal, if known (Zepp summary). `None` otherwise.
+    pub calories: Option<f64>,
 }
 
 /// A contributing recording within an activity detail view.
@@ -189,6 +198,22 @@ pub struct RemoveRecordingResponse {
     pub detached_activity_id: Uuid,
 }
 
+/// Response of `DELETE /api/activities/{id}/sources/{recording_id}` — the
+/// **hard** per-source delete used by the activity Edit tab.
+///
+/// When the deleted source was the activity's *last* one, the whole activity is
+/// removed (`activity_deleted = true`, `activity = null`). Otherwise the source
+/// is gone and the re-resolved, re-tightened activity comes back in `activity`
+/// so the detail view refreshes in place.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DeleteSourceResponse {
+    /// True when removing this source emptied — and therefore deleted — the
+    /// whole activity.
+    pub activity_deleted: bool,
+    /// The updated activity (absent when `activity_deleted`).
+    pub activity: Option<ActivityDetail>,
+}
+
 /// Scope a preference applies to (mirrors `ofit_core::PreferenceScope`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -293,28 +318,6 @@ pub struct WellnessKindCount {
     pub count: usize,
 }
 
-/// One device's ingest result within a Gadgetbridge import.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct GadgetbridgeDeviceResult {
-    /// Device name (becomes the source name).
-    pub device: String,
-    /// Manufacturer, if recorded.
-    pub manufacturer: Option<String>,
-    /// Readings ingested for this device.
-    pub ingested: usize,
-    /// Per-kind breakdown.
-    pub by_kind: Vec<WellnessKindCount>,
-}
-
-/// Response of `POST /api/import/gadgetbridge` (the DB can hold many devices).
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct GadgetbridgeImportResponse {
-    /// Per-device results.
-    pub devices: Vec<GadgetbridgeDeviceResult>,
-    /// Total readings ingested across all devices.
-    pub ingested: usize,
-}
-
 /// Response of `POST /api/import/zepp` — a Zepp app-export (.zip) holds one
 /// account's continuous wellness across several CSV categories.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -348,6 +351,103 @@ pub struct DedupResponse {
 pub struct RemapResponse {
     /// Number of summary recordings whose sport was corrected.
     pub updated: usize,
+}
+
+/// Body of `POST /api/import/garmin` — point at a Garmin GDPR export already on
+/// the server's disk (a 195 MB tree; uploading it would be impractical).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct GarminImportRequest {
+    /// Absolute or repo-relative path to the unzipped export root (the `…_1`
+    /// directory that contains `DI_CONNECT/`).
+    pub path: String,
+}
+
+/// Response of `POST /api/import/garmin` — a full one-time backfill summary.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct GarminImportResponse {
+    /// Source the wellness was attributed to (`"Garmin (import)"`).
+    pub source: String,
+    /// Total wellness readings ingested (daily + sleep + body + performance).
+    pub wellness_ingested: usize,
+    /// Per-kind breakdown.
+    pub by_kind: Vec<WellnessKindCount>,
+    /// Distinct calendar days of daily wellness.
+    pub days: usize,
+    /// Sleep nights staged.
+    pub nights: usize,
+    /// Gear items imported (with mileage joined from activity distances).
+    pub gear_imported: usize,
+    /// Current personal records imported.
+    pub personal_records: usize,
+    /// Activity `.fit` files imported from the upload firehose.
+    pub fit_activities_imported: usize,
+    /// `.fit` activities already present (content-hash match), skipped.
+    pub fit_duplicates: usize,
+    /// `.fit` entries skipped because they weren't activities.
+    pub fit_skipped_non_activity: usize,
+    /// `.fit` entries that failed to parse, skipped.
+    pub fit_parse_errors: usize,
+    /// Activities present after the final reclustering.
+    pub activities_total: usize,
+    /// Activities seen by the single full recompute at the end.
+    pub recompute_activities: usize,
+    /// Wellness points seen by that recompute.
+    pub recompute_wellness_points: usize,
+    /// Categories/files present but deliberately not imported, with why.
+    pub skipped: Vec<String>,
+}
+
+/// Composite gear state for the UI store: all gear, the default gear per
+/// activity type, and per-activity assignments.
+#[derive(Debug, Clone, Serialize)]
+pub struct GearStateDto {
+    /// All gear, oldest first.
+    pub gears: Vec<ofit_core::Gear>,
+    /// Default gear per activity type (`sport → gear_id`).
+    pub defaults: std::collections::BTreeMap<String, Uuid>,
+    /// Per-activity gear assignments (`activity_id → [gear_id]`).
+    pub assignments: std::collections::BTreeMap<Uuid, Vec<Uuid>>,
+}
+
+/// Body of `POST /api/gear` — create a piece of gear.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateGearRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Activity type label (e.g. "Running").
+    pub sport: String,
+    #[serde(default)]
+    pub initial_km: f64,
+    #[serde(default)]
+    pub retire_km: f64,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// Body of `PUT /api/gear/{id}` — patch editable fields (all optional).
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateGearRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub sport: Option<String>,
+    pub retire_km: Option<f64>,
+    pub used_km: Option<f64>,
+    pub icon: Option<String>,
+}
+
+/// Body of `PUT /api/gear/defaults` — set/clear the default gear for a type.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetGearDefaultRequest {
+    pub sport: String,
+    /// `None` clears the default for this type.
+    pub gear_id: Option<Uuid>,
+}
+
+/// Body of `PUT /api/activities/{id}/gear` — replace the activity's gear set.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetActivityGearRequest {
+    pub gear_ids: Vec<Uuid>,
 }
 
 /// A live wellness sample pushed over the `/api/wellness/live` WebSocket as a

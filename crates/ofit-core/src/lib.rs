@@ -20,6 +20,8 @@ pub mod analytics;
 pub mod dedup;
 pub mod derived;
 pub mod error;
+pub mod gear;
+pub mod personal_record;
 pub mod preference;
 pub mod recording;
 pub mod source;
@@ -27,6 +29,8 @@ pub mod stream;
 pub mod wellness;
 
 pub use activity::Activity;
+pub use gear::Gear;
+pub use personal_record::PersonalRecord;
 pub use analytics::{
     Algorithm, AlgorithmInput, AlgorithmKind, AlgorithmOutput, AlgorithmSpec,
 };

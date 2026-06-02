@@ -5,7 +5,8 @@
 // field-name drift (the task's API contract is "indicative"): we normalize a
 // few likely aliases here, at the boundary, so the UI sees one stable shape.
 
-import { apiFetch, apiPostForm, apiSend, ApiError } from "./client";
+import { apiFetch, apiPostForm, apiSend, ApiError, API_BASE, getToken } from "./client";
+import { isNativeApp } from "../app/isNativeApp";
 import type {
   AlgorithmDto,
   RecomputeResponseDto,
@@ -37,6 +38,14 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Like `num` but returns null (not a fallback) when absent/non-numeric — for
+ *  genuinely-optional fields where "no value" must stay distinguishable from 0. */
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  const n = typeof v === "string" ? Number(v) : (v as number);
+  return Number.isFinite(n) ? n : null;
+}
+
 function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
 }
@@ -61,6 +70,7 @@ export async function listSources(): Promise<Source[]> {
       manufacturer: (pick(o, "manufacturer") as string | null) ?? null,
       default_priority: num(pick(o, "default_priority", "priority")),
       created_at: str(pick(o, "created_at")) || undefined,
+      last_synced_at: (pick(o, "last_synced_at", "last_sync") as string | null) ?? null,
     };
   });
 }
@@ -87,6 +97,8 @@ export async function listActivities(): Promise<ActivitySummary[]> {
         pick(o, "recording_count", "recordings_count", "num_recordings"),
       ),
       duration_secs: Number.isFinite(dur) ? dur : 0,
+      distance_m: numOrNull(pick(o, "distance_m", "distance")),
+      calories: numOrNull(pick(o, "calories", "calories_kcal")),
     };
   });
 }
@@ -252,6 +264,205 @@ export async function removeRecording(
   };
 }
 
+/**
+ * DELETE /api/activities/{id} — **hard-delete** an entire activity (its
+ * recordings, streams, derived outputs, gear + preference links). Irreversible.
+ * Used by the activity Edit tab's "Delete activity" action.
+ */
+export async function deleteActivity(id: string): Promise<void> {
+  await apiSend<unknown>(`/api/activities/${encodeURIComponent(id)}`, "DELETE");
+}
+
+/** Result of {@link deleteSource}: whether the activity itself was removed
+ *  (last source) and, if not, the re-resolved activity to refresh the view. */
+export interface DeleteSourceResult {
+  activity_deleted: boolean;
+  activity: ActivityDetail | null;
+}
+
+/**
+ * DELETE /api/activities/{id}/sources/{recording_id} — **hard-delete** one
+ * source (recording + streams) from an activity. If it was the activity's last
+ * source the whole activity is deleted (`activity_deleted: true`); otherwise the
+ * re-resolved, re-tightened activity comes back so the detail refreshes in place.
+ */
+export async function deleteSource(
+  activityId: string,
+  recordingId: string,
+): Promise<DeleteSourceResult> {
+  const raw = await apiSend<unknown>(
+    `/api/activities/${encodeURIComponent(activityId)}/sources/${encodeURIComponent(recordingId)}`,
+    "DELETE",
+  );
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const activityRaw = pick(o, "activity");
+  return {
+    activity_deleted: Boolean(pick(o, "activity_deleted")),
+    activity: activityRaw ? normalizeActivityDetail(activityRaw, activityId) : null,
+  };
+}
+
+/** How {@link exportActivityFit} finished. */
+export interface ExportResult {
+  /**
+   * - `saved`: written to a file the user picked (browser Save-As dialog).
+   * - `shared`: handed to the native share/save sheet (mobile).
+   * - `downloaded`: ordinary browser download (no picker available).
+   * - `canceled`: the user dismissed the picker / share sheet.
+   */
+  outcome: "saved" | "shared" | "downloaded" | "canceled";
+  /** Chosen filename / file URI, when known. */
+  path?: string;
+}
+
+/* --- File System Access API ("Save As"); not in TS 5.x lib.dom yet, so typed
+   minimally here and feature-detected at the call site (Chromium-only). --- */
+interface FsWritableLike {
+  write(data: Blob): Promise<void>;
+  close(): Promise<void>;
+}
+interface FsFileHandleLike {
+  name: string;
+  createWritable(): Promise<FsWritableLike>;
+}
+interface SaveFilePickerOptions {
+  suggestedName?: string;
+  types?: { description?: string; accept: Record<string, string[]> }[];
+}
+type ShowSaveFilePicker = (opts?: SaveFilePickerOptions) => Promise<FsFileHandleLike>;
+
+/** True for the "user dismissed the dialog/sheet" rejection (not a real error). */
+function isCancel(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === "AbortError") return true;
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  return msg.includes("abort") || msg.includes("cancel") || msg.includes("dismiss");
+}
+
+/** Blob → bare base64 (no `data:` prefix), for Capacitor `Filesystem.writeFile`. */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => {
+      const s = typeof r.result === "string" ? r.result : "";
+      const comma = s.indexOf(",");
+      resolve(comma >= 0 ? s.slice(comma + 1) : s); // strip "data:…;base64,"
+    };
+    r.onerror = () => reject(r.error ?? new Error("blob read failed"));
+    r.readAsDataURL(blob);
+  });
+}
+
+/** Fetch the export bytes with the client's cookie/Bearer auth. */
+async function fetchExportBlob(url: string, token: string): Promise<Blob> {
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status);
+  return res.blob();
+}
+
+/** Click a hidden `<a download>` to start a download. `href` may be a real URL
+ *  (browser streams it from the server) or a `blob:` URL. */
+function clickDownloadAnchor(href: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** Ordinary browser download (no Save-As picker available). */
+async function browserDownload(url: string, filename: string, token: string): Promise<ExportResult> {
+  // Cookie / disabled-auth, same-origin: a direct anchor is most reliable — no
+  // fetch/blob/await before the click (keeps the user-gesture), no revoke race.
+  if (!token) {
+    clickDownloadAnchor(url, filename);
+    return { outcome: "downloaded" };
+  }
+  // Bearer auth can't ride a navigation → fetch with the header, download a blob.
+  const blob = await fetchExportBlob(url, token);
+  const objUrl = URL.createObjectURL(blob);
+  clickDownloadAnchor(objUrl, filename);
+  setTimeout(() => URL.revokeObjectURL(objUrl), 10_000); // late revoke
+  return { outcome: "downloaded" };
+}
+
+/**
+ * GET /api/activities/{id}/export.fit — save the activity as a `.fit` file,
+ * letting the user choose WHERE on each platform:
+ *  - **Mobile (Capacitor)**: write the bytes to a cache file, then open the
+ *    native share/save sheet (`@capacitor/share`) so the user picks Files /
+ *    Drive / email / etc.
+ *  - **Browser with the File System Access API** (Chromium): a real "Save As"
+ *    dialog via `showSaveFilePicker()` — opened FIRST (within the click) so the
+ *    user gesture isn't lost, then the bytes are streamed into the chosen file.
+ *  - **Other browsers** (Firefox/Safari — no picker API): an ordinary download
+ *    (its location follows the browser's "ask where to save each file" setting).
+ *
+ * Resolves with how it ended (incl. `canceled` when the user dismisses the
+ * picker/sheet). Throws ApiError on a non-2xx.
+ */
+export async function exportActivityFit(id: string): Promise<ExportResult> {
+  const filename = `activity-${id}.fit`;
+  const url = `${API_BASE}/api/activities/${encodeURIComponent(id)}/export.fit`;
+  const token = getToken();
+
+  // --- Mobile: save to a cache file, then the OS sheet picks the destination.
+  if (isNativeApp()) {
+    const blob = await fetchExportBlob(url, token);
+    const [{ Filesystem, Directory }, { Share }] = await Promise.all([
+      import("@capacitor/filesystem"),
+      import("@capacitor/share"),
+    ]);
+    const base64 = await blobToBase64(blob);
+    const written = await Filesystem.writeFile({
+      path: filename,
+      data: base64, // no `encoding` ⇒ written as binary from base64
+      directory: Directory.Cache,
+      recursive: true,
+    });
+    try {
+      await Share.share({
+        title: filename,
+        files: [written.uri], // shared via Android FileProvider → "Save to Files"…
+        dialogTitle: "Save or share activity",
+      });
+      return { outcome: "shared", path: written.uri };
+    } catch (e) {
+      if (isCancel(e)) return { outcome: "canceled" };
+      throw e;
+    }
+  }
+
+  // --- Browser with a real "Save As" picker (Chromium File System Access API).
+  const picker = (window as unknown as { showSaveFilePicker?: ShowSaveFilePicker }).showSaveFilePicker;
+  if (typeof picker === "function") {
+    let handle: FsFileHandleLike;
+    try {
+      // Open the picker FIRST (within the click gesture) so it isn't blocked.
+      handle = await picker({
+        suggestedName: filename,
+        types: [{ description: "FIT activity", accept: { "application/octet-stream": [".fit"] } }],
+      });
+    } catch (e) {
+      if (isCancel(e)) return { outcome: "canceled" };
+      throw e;
+    }
+    const blob = await fetchExportBlob(url, token);
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return { outcome: "saved", path: handle.name };
+  }
+
+  // --- Fallback: ordinary browser download.
+  return browserDownload(url, filename, token);
+}
+
 /* --------------------------------------------------------- preferences */
 
 function normalizePreference(raw: unknown): MetricSourcePreference {
@@ -302,27 +513,6 @@ export async function ingestWellness(
   return apiSend<{ ingested: number }>("/api/wellness", "POST", items);
 }
 
-/** One device's result from POST /api/import/gadgetbridge. */
-export interface GadgetbridgeDeviceResult {
-  device: string;
-  manufacturer?: string | null;
-  ingested: number;
-  by_kind: { kind: string; count: number }[];
-}
-
-/** Response of POST /api/import/gadgetbridge (the DB can hold many devices). */
-export interface GadgetbridgeImportResult {
-  devices: GadgetbridgeDeviceResult[];
-  ingested: number;
-}
-
-/** Upload an exported Gadgetbridge SQLite DB → ingest its wellness. */
-export async function importGadgetbridge(file: File): Promise<GadgetbridgeImportResult> {
-  const form = new FormData();
-  form.append("file", file, file.name);
-  return apiPostForm<GadgetbridgeImportResult>("/api/import/gadgetbridge", form);
-}
-
 /** Response of POST /api/import/zepp (one Zepp account export .zip). */
 export interface ZeppImportResult {
   source: string;
@@ -339,6 +529,71 @@ export async function importZepp(file: File): Promise<ZeppImportResult> {
   const form = new FormData();
   form.append("file", file, file.name);
   return apiPostForm<ZeppImportResult>("/api/import/zepp", form);
+}
+
+/** Response of POST /api/import/garmin (one-time history backfill). */
+export interface GarminImportResult {
+  source: string;
+  wellness_ingested: number;
+  by_kind: { kind: string; count: number }[];
+  days: number;
+  nights: number;
+  gear_imported: number;
+  personal_records: number;
+  fit_activities_imported: number;
+  fit_duplicates: number;
+  fit_skipped_non_activity: number;
+  fit_parse_errors: number;
+  activities_total: number;
+  recompute_activities: number;
+  recompute_wellness_points: number;
+  skipped: string[];
+}
+
+/** Background-job status for the Garmin import (the import runs minutes, so the
+ *  POST returns immediately and the UI polls this). */
+export interface GarminJobState {
+  running: boolean;
+  started: boolean;
+  phase: string;
+  result: GarminImportResult | null;
+  error: string | null;
+}
+
+/** POST /api/import/garmin — START a backfill from an export directory already on
+ *  the server's disk (`{path}`). Returns immediately; poll getGarminImportStatus. */
+export async function importGarmin(path: string): Promise<GarminJobState> {
+  return apiSend<GarminJobState>("/api/import/garmin", "POST", { path });
+}
+
+/** POST /api/import/garmin/upload — START a backfill from an uploaded export .zip
+ *  (the whole Garmin GDPR download). Returns immediately; poll the status. */
+export async function importGarminZip(file: File): Promise<GarminJobState> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return apiPostForm<GarminJobState>("/api/import/garmin/upload", form);
+}
+
+/** GET /api/import/garmin/status — current background-import status. */
+export async function getGarminImportStatus(): Promise<GarminJobState> {
+  return apiFetch<GarminJobState>("/api/import/garmin/status");
+}
+
+/** One personal record (best-ever performance) imported from Garmin. */
+export interface PersonalRecord {
+  id: string;
+  record_type: string;
+  value: number;
+  unit: string; // "seconds" | "meters" | "count"
+  occurred_at: string;
+  source: string;
+  current: boolean;
+}
+
+/** GET /api/personal-records — all imported personal records, newest first. */
+export async function getPersonalRecords(): Promise<PersonalRecord[]> {
+  const raw = await apiFetch<unknown>("/api/personal-records");
+  return Array.isArray(raw) ? (raw as PersonalRecord[]) : [];
 }
 
 /* ------------------------------------------------------------- version */
@@ -366,6 +621,90 @@ export async function getSettings(): Promise<Record<string, string>> {
 /** PUT /api/settings — upsert one setting; returns the full updated map. */
 export async function setSetting(key: string, value: string): Promise<Record<string, string>> {
   return apiSend<Record<string, string>>("/api/settings", "PUT", { key, value });
+}
+
+/** POST /api/maintenance/clamp-hr — drop heart-rate samples above the
+ *  "Max HR Allowed" setting (scrubs device-artifact spikes). Returns the count. */
+export async function clampHr(): Promise<{ deleted: number; max_hr: number }> {
+  return apiSend<{ deleted: number; max_hr: number }>("/api/maintenance/clamp-hr", "POST");
+}
+
+/* ------------------------------------------------------------ gear */
+
+/** Gear as the API returns it (snake_case domain shape from ofit-core::Gear). */
+export interface ApiGear {
+  id: string;
+  name: string;
+  description: string;
+  sport: string;
+  initial_km: number;
+  retire_km: number;
+  used_km: number;
+  icon: string;
+  created_at: string;
+}
+
+/** Composite gear state: gear + default-per-type + per-activity assignments. */
+export interface GearState {
+  gears: ApiGear[];
+  defaults: Record<string, string>;
+  assignments: Record<string, string[]>;
+}
+
+/** GET /api/gear — full gear state for the UI store. */
+export async function getGear(): Promise<GearState> {
+  const raw = await apiFetch<Partial<GearState>>("/api/gear");
+  return {
+    gears: Array.isArray(raw?.gears) ? (raw!.gears as ApiGear[]) : [],
+    defaults: (raw?.defaults as Record<string, string>) ?? {},
+    assignments: (raw?.assignments as Record<string, string[]>) ?? {},
+  };
+}
+
+/** POST /api/gear — create a piece of gear. */
+export async function createGear(body: {
+  name: string;
+  description?: string;
+  sport: string;
+  initial_km?: number;
+  retire_km?: number;
+  icon?: string;
+}): Promise<ApiGear> {
+  return apiSend<ApiGear>("/api/gear", "POST", body);
+}
+
+/** PUT /api/gear/{id} — patch editable fields. */
+export async function updateGearApi(
+  id: string,
+  patch: {
+    name?: string;
+    description?: string;
+    sport?: string;
+    retire_km?: number;
+    used_km?: number;
+    icon?: string;
+  },
+): Promise<ApiGear> {
+  return apiSend<ApiGear>(`/api/gear/${encodeURIComponent(id)}`, "PUT", patch);
+}
+
+/** DELETE /api/gear/{id}. */
+export async function deleteGear(id: string): Promise<void> {
+  await apiSend<unknown>(`/api/gear/${encodeURIComponent(id)}`, "DELETE");
+}
+
+/** PUT /api/gear/defaults — set (or clear with `null`) the default gear for a type. */
+export async function setGearDefaultApi(sport: string, gearId: string | null): Promise<void> {
+  await apiSend<unknown>("/api/gear/defaults", "PUT", { sport, gear_id: gearId });
+}
+
+/** PUT /api/activities/{id}/gear — replace an activity's gear set. */
+export async function setActivityGearApi(activityId: string, gearIds: string[]): Promise<void> {
+  await apiSend<unknown>(
+    `/api/activities/${encodeURIComponent(activityId)}/gear`,
+    "PUT",
+    { gear_ids: gearIds },
+  );
 }
 
 /* ------------------------------------------------------------ wellness */
@@ -426,7 +765,10 @@ export async function listAlgorithms(): Promise<AlgorithmDto[]> {
  * and total output counts.
  */
 export async function recomputeAnalytics(): Promise<RecomputeResponseDto> {
-  return apiSend<RecomputeResponseDto>("/api/analytics/recompute", "POST");
+  // A full recompute is O(all-data) and runs synchronously, so it can exceed the
+  // default 60s on large accounts — disable the client timeout. The POST resolves
+  // only when the recompute has finished and persisted.
+  return apiFetch<RecomputeResponseDto>("/api/analytics/recompute", { method: "POST" }, { timeoutMs: 0 });
 }
 
 const EMPTY_TRAINING_LOAD: TrainingLoadResponseDto = {
@@ -465,8 +807,12 @@ export async function getTrainingLoad(): Promise<TrainingLoadResponseDto> {
  * the chart-ready derived metrics + streams for one subject. 400 on a malformed
  * subject (surfaces as a thrown ApiError).
  */
-export async function getDerived(subject: string): Promise<DerivedResponseDto> {
+export async function getDerived(
+  subject: string,
+  variants?: "active" | "all",
+): Promise<DerivedResponseDto> {
   const qs = new URLSearchParams({ subject });
+  if (variants) qs.set("variants", variants);
   const raw = await apiFetch<DerivedResponseDto>(
     `/api/analytics/derived?${qs.toString()}`,
   );
@@ -475,4 +821,89 @@ export async function getDerived(subject: string): Promise<DerivedResponseDto> {
     metrics: Array.isArray(raw?.metrics) ? raw.metrics : [],
     streams: Array.isArray(raw?.streams) ? raw.streams : [],
   };
+}
+
+/* --------------------------------------------- analytics: parameters & variants
+ * The computed-values overhaul: every algorithm constant is a tunable parameter
+ * (a "derivation" = plugin + code version + parameter set); changing one forks a
+ * new comparable variant you can switch between and diff. */
+
+/** One tunable analytics parameter with its registry metadata + current value. */
+export interface AnalyticsParameter {
+  key: string;
+  label: string;
+  description: string;
+  unit: string;
+  group: string;
+  tier: "curated" | "advanced";
+  integer: boolean;
+  min: number | null;
+  max: number | null;
+  default: number;
+  value: number;
+  plugins: string[];
+}
+
+/** GET /api/analytics/parameters — every tunable parameter + its effective value. */
+export async function getParameters(): Promise<AnalyticsParameter[]> {
+  const raw = await apiFetch<unknown>("/api/analytics/parameters");
+  return Array.isArray(raw) ? (raw as AnalyticsParameter[]) : [];
+}
+
+/** Result of applying parameter changes (which runs a full recompute). */
+export interface SetParametersResult {
+  applied: string[];
+  rejected: string[];
+  recompute: RecomputeResponseDto;
+}
+
+/**
+ * PUT /api/analytics/parameters — set one or more parameters, then run a FULL
+ * recompute so the new parameter set's variant exists (and becomes the active
+ * newest). O(all-data) + synchronous → no client timeout.
+ */
+export async function setParameters(
+  updates: { key: string; value: number }[],
+  resetOthers = false,
+): Promise<SetParametersResult> {
+  return apiFetch<SetParametersResult>(
+    "/api/analytics/parameters",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates, reset_others: resetOthers }),
+    },
+    { timeoutMs: 0 },
+  );
+}
+
+/** One catalogued derivation variant of a plugin. */
+export interface DerivationVariant {
+  plugin_id: string;
+  version: string;
+  params_hash: string;
+  params: Record<string, number>;
+  label: string;
+  first_computed_at: string;
+  last_computed_at: string;
+  active_default: boolean;
+}
+
+/** GET /api/analytics/variants — catalogued variants, optionally for one plugin. */
+export async function getVariants(plugin?: string): Promise<DerivationVariant[]> {
+  const qs = plugin ? `?plugin=${encodeURIComponent(plugin)}` : "";
+  const raw = await apiFetch<unknown>(`/api/analytics/variants${qs}`);
+  return Array.isArray(raw) ? (raw as DerivationVariant[]) : [];
+}
+
+/** Pin (or clear) which variant a plugin resolves to — globally or per activity. */
+export async function setSelection(body: {
+  scope: "default" | "activity";
+  plugin_id: string;
+  subject_id?: string;
+  version?: string;
+  params_hash?: string;
+  clear?: boolean;
+}): Promise<unknown> {
+  return apiSend<unknown>("/api/analytics/selection", "PUT", body);
 }

@@ -27,32 +27,34 @@ pub mod params;
 pub mod resting;
 pub mod runner;
 
-pub use algorithms::{AnomalyFlag, Readiness, Sleep, TrainingLoad, TssMethod};
-pub use energy::body_battery;
+pub use algorithms::{AnomalyFlag, Readiness, Sleep, TrainingEffect, TrainingLoad, TssMethod};
+pub use energy::{body_battery, pivot_of};
 pub use hr_sleep::{calibrate, hr_derived_sleep, night_of, SleepModel};
 pub use input::{ActivityInput, AnalyticsInput, MetricSeries, WellnessPoint};
-pub use params::{AthleteThresholds, LoadTimeConstants, ReadinessParams};
+pub use params::{AnalyticsParams, ParamDef, Tier, REGISTRY};
 pub use resting::daily_resting_hr;
 pub use runner::{AlgorithmOutputs, RunnableAlgorithm};
 
 use chrono::{DateTime, Utc};
 
 /// The registry of built-in algorithms (PLAN.md: "algos built-in … versionnés et
-/// sélectionnables"). Each is a boxed [`RunnableAlgorithm`] carrying its
-/// [`ofit_core::AlgorithmSpec`]. The API/registry list these and expose their
-/// specs; the orchestrator runs them.
-pub fn builtin_algorithms() -> Vec<Box<dyn RunnableAlgorithm>> {
+/// sélectionnables"), constructed with the given effective [`AnalyticsParams`].
+/// Each is a boxed [`RunnableAlgorithm`] carrying its [`ofit_core::AlgorithmSpec`].
+/// The API/registry list these and expose their specs; the orchestrator runs them.
+pub fn builtin_algorithms(p: &AnalyticsParams) -> Vec<Box<dyn RunnableAlgorithm>> {
     vec![
-        Box::new(TrainingLoad::default()),
-        Box::new(Readiness::default()),
-        Box::new(Sleep::default()),
-        Box::new(AnomalyFlag::default()),
+        Box::new(TrainingLoad::configured(p)),
+        Box::new(TrainingEffect::configured(p)),
+        Box::new(Readiness::configured(p)),
+        Box::new(Sleep::configured(p)),
+        Box::new(AnomalyFlag::configured(p)),
     ]
 }
 
 /// The specs of all built-in algorithms (cheap to list without running them).
+/// Specs are parameter-independent, so default params are used.
 pub fn builtin_specs() -> Vec<ofit_core::AlgorithmSpec> {
-    builtin_algorithms().iter().map(|a| a.spec().clone()).collect()
+    builtin_algorithms(&AnalyticsParams::default()).iter().map(|a| a.spec().clone()).collect()
 }
 
 /// Orchestration entry: run **all** built-in algorithms over one subject's
@@ -70,7 +72,7 @@ pub fn run_for_subject(input: &AnalyticsInput) -> AlgorithmOutputs {
 /// deterministic tests / reproducible batch recompute).
 pub fn run_for_subject_at(input: &AnalyticsInput, computed_at: DateTime<Utc>) -> AlgorithmOutputs {
     let mut out = AlgorithmOutputs::default();
-    for algo in builtin_algorithms() {
+    for algo in builtin_algorithms(&AnalyticsParams::default()) {
         out.extend(algo.compute(input, computed_at));
     }
     out
@@ -112,7 +114,7 @@ mod tests {
     #[test]
     fn builtin_registry_specs_are_versioned_and_well_formed() {
         let specs = builtin_specs();
-        assert_eq!(specs.len(), 4);
+        assert_eq!(specs.len(), 5);
         for s in &specs {
             assert!(!s.id.is_empty());
             // version parses as semver-ish (three dot-separated numbers).
@@ -126,7 +128,7 @@ mod tests {
         let mut ids: Vec<_> = specs.iter().map(|s| s.id.clone()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
     }
 
     #[test]
