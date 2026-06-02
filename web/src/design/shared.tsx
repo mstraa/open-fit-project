@@ -36,6 +36,8 @@ export const META_ABOUT: Record<string, string> = {
     "Events per hour where breathing became shallow or briefly paused during sleep. Under ~5/h is generally considered normal. Persistently high values can fragment sleep and lower oxygen — if consistently elevated, it’s worth discussing screening for sleep apnea with a doctor.",
   "breathing rate":
     "Breaths per minute while asleep, from chest-movement and HR patterns. Most adults sit around 12–20 and stay remarkably stable night to night. A sudden rise can reflect fever, stress or illness, so your personal baseline is the thing to watch.",
+  weight:
+    "Body weight (kg), from a connected scale or imported history. Watch the trend, not the daily number — weight swings 1–2 kg day to day from water, food and glycogen, so a multi-week direction is what matters. Weigh under consistent conditions (e.g. mornings) and pair it with body-fat and training to tell muscle gain from fat loss.",
 };
 
 /** Human label for the current history window (relative to now). */
