@@ -68,24 +68,37 @@ impl Db {
             ensure_sqlite_parent_dir(database_url)?;
         }
 
-        let pool = AnyPoolOptions::new()
-            .max_connections(5)
-            .connect(database_url)
-            .await?;
+        let mut opts = AnyPoolOptions::new().max_connections(5);
 
         // SQLite: enable WAL so readers (dashboard/wellness queries) don't block
-        // on the continuous live-wellness writes, and a busy-timeout so they wait
-        // instead of erroring. WAL is persistent for the file; the others are
-        // best-effort per-connection. (Postgres ignores these — guarded by backend.)
+        // on writes, and a busy-timeout so contended ops wait instead of erroring
+        // with SQLITE_BUSY ("database is locked").
+        //
+        // These MUST be set on EVERY pooled connection, not once on the pool:
+        // journal_mode is persistent per database *file*, but busy_timeout and
+        // synchronous are per-*connection*. Running them once via `execute(&pool)`
+        // only configured whichever single connection answered that query, leaving
+        // the other (max_connections-1) at busy_timeout=0 — so under concurrent
+        // load (e.g. a ~770k-row Zepp/Garmin import racing the dashboard's wellness
+        // queries) those connections errored instantly instead of waiting. The
+        // 15 s timeout comfortably outlasts a chunked import's short write txns.
+        // (Postgres pools skip this — the pragmas are SQLite-only.)
         if backend == Backend::Sqlite {
-            for pragma in [
-                "PRAGMA journal_mode=WAL",
-                "PRAGMA busy_timeout=5000",
-                "PRAGMA synchronous=NORMAL",
-            ] {
-                let _ = sqlx::query(pragma).execute(&pool).await;
-            }
+            opts = opts.after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    for pragma in [
+                        "PRAGMA journal_mode=WAL",
+                        "PRAGMA busy_timeout=15000",
+                        "PRAGMA synchronous=NORMAL",
+                    ] {
+                        sqlx::query(pragma).execute(&mut *conn).await?;
+                    }
+                    Ok(())
+                })
+            });
         }
+
+        let pool = opts.connect(database_url).await?;
 
         Ok(Self { pool, backend })
     }
@@ -372,39 +385,51 @@ impl Db {
         } else {
             f64::INFINITY
         };
-        let mut tx = self.pool.begin().await?;
-        let mut days: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for w in samples {
-            if filter_hr && w.kind == WellnessKind::HeartRate && w.value > max_hr {
-                continue; // drop the artifact (and don't dirty its day on its account)
-            }
-            sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
-                 VALUES (?, ?, ?, ?, ?) \
-                 ON CONFLICT (source_id, kind, ts) DO UPDATE SET value = excluded.value"))
-                .bind(w.id.to_string())
-                .bind(w.source_id.to_string())
-                .bind(serde_plain(&w.kind))
-                .bind(w.value)
-                .bind(w.ts.to_rfc3339())
-                .execute(&mut *tx)
-                .await?;
-            if mark_dirty {
-                days.insert(w.ts.date_naive().to_string());
-            }
-        }
-        if mark_dirty {
-            let now = Utc::now().to_rfc3339();
-            for day in &days {
-                sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
-                     VALUES ('day', ?, ?) \
-                     ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
-                    .bind(day)
-                    .bind(&now)
+        // Write in bounded chunks, each its own transaction, so no single write
+        // holds the SQLite write lock for long. Callers like the import handler
+        // already chunk, but the recompute worker passes whole-history series in
+        // one call (e.g. body-battery / gap-filled RHR over years) — a single
+        // transaction over tens of thousands of rows would hold the lock past the
+        // busy-timeout and make a concurrent writer (an import running while the
+        // worker recomputes) fail with SQLITE_BUSY ("database is locked").
+        // Per-chunk commits are safe: the sample upsert and the dirty-day mark are
+        // both idempotent, so a crash mid-write just re-applies on the next run.
+        const CHUNK: usize = 5_000;
+        let now = Utc::now().to_rfc3339();
+        for batch in samples.chunks(CHUNK) {
+            let mut tx = self.pool.begin().await?;
+            let mut days: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for w in batch {
+                if filter_hr && w.kind == WellnessKind::HeartRate && w.value > max_hr {
+                    continue; // drop the artifact (and don't dirty its day on its account)
+                }
+                sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
+                     VALUES (?, ?, ?, ?, ?) \
+                     ON CONFLICT (source_id, kind, ts) DO UPDATE SET value = excluded.value"))
+                    .bind(w.id.to_string())
+                    .bind(w.source_id.to_string())
+                    .bind(serde_plain(&w.kind))
+                    .bind(w.value)
+                    .bind(w.ts.to_rfc3339())
                     .execute(&mut *tx)
                     .await?;
+                if mark_dirty {
+                    days.insert(w.ts.date_naive().to_string());
+                }
             }
+            if mark_dirty {
+                for day in &days {
+                    sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
+                         VALUES ('day', ?, ?) \
+                         ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
+                        .bind(day)
+                        .bind(&now)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
+            tx.commit().await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 

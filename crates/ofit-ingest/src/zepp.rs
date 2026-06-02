@@ -440,7 +440,16 @@ mod tests {
             eprintln!("skip: no local Zepp export");
             return;
         }
-        let imp = read_zepp_export(&root).expect("read zepp");
+        // The folder may exist but hold only a (not-yet-extracted) .zip — treat
+        // an absent extracted export as a skip, not a failure (local-only data).
+        let imp = match read_zepp_export(&root) {
+            Ok(imp) => imp,
+            Err(ZeppError::NotAZeppExport(_)) => {
+                eprintln!("skip: no extracted Zepp export under {}", root.display());
+                return;
+            }
+            Err(e) => panic!("read zepp: {e}"),
+        };
         eprintln!("source={} skipped={:?}", imp.source_name, imp.skipped);
         for (k, n) in &imp.counts {
             eprintln!("  {:?}: {}", k, n);
