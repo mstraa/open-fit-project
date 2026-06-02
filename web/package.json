@@ -1,6 +1,6 @@
 {
   "name": "open-fit-web",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "Open Fit web dashboard — React + Vite + TS, API-first, themable.",
   "license": "AGPL-3.0-or-later",
