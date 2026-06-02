@@ -9,7 +9,9 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import { AppShell } from "../app/AppShell";
 import { EmptyState } from "../ui/EmptyState";
 import { OpenFitRecording, type RecordingTick } from "../ble/native/OpenFitRecording";
-import { isNativeApp } from "../gadgetbridge/autoImportConfig";
+import { OpenFitBle } from "../ble/native/OpenFitBle";
+import { API_BASE, getToken } from "../api/client";
+import { isNativeApp } from "../app/isNativeApp";
 
 const SPORTS = [
   { key: "running", label: "Running" },
@@ -102,6 +104,7 @@ export function Workout() {
   const [sport, setSport] = useState<string>("running");
   const [tick, setTick] = useState<RecordingTick | null>(null);
   const [uploaded, setUploaded] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [layout, setLayout] = useState<Layout>(() => loadLayout("running"));
   const [chooser, setChooser] = useState<number | null>(null); // slot index being changed
   const [holdPct, setHoldPct] = useState(0);
@@ -110,10 +113,20 @@ export function Workout() {
   const holdRaf = useRef<number | null>(null);
   const wake = useRef<{ release: () => void } | null>(null);
 
+  // The native recorder uploads its own .fit, so it needs the server URL + token.
+  // Push them whenever we touch the Record screen / start a workout (not only on a
+  // BLE connect, as before) so a finished workout always has fresh credentials to
+  // upload with — otherwise the .fit silently waits forever in the queue.
+  const pushCreds = useCallback(() => {
+    if (!isNativeApp()) return;
+    void OpenFitBle.configure({ apiBase: API_BASE, token: getToken() }).catch(() => undefined);
+  }, []);
+
   // listeners
   useEffect(() => {
     if (!isNativeApp()) return;
     let alive = true;
+    pushCreds(); // make sure the recorder can upload as soon as the screen opens
     (async () => {
       const handles = await Promise.all([
         OpenFitRecording.addListener("tick", (t) => {
@@ -123,8 +136,16 @@ export function Workout() {
         OpenFitRecording.addListener("recordingStopped", () => {
           setState("saved");
           setUploaded(false);
+          setUploadError(null);
         }),
-        OpenFitRecording.addListener("recordingUploaded", () => setUploaded(true)),
+        OpenFitRecording.addListener("recordingUploaded", () => {
+          setUploaded(true);
+          setUploadError(null);
+        }),
+        OpenFitRecording.addListener("recordingUploadFailed", (e) => {
+          setUploaded(false);
+          setUploadError(e.reason || "Upload failed.");
+        }),
       ]);
       if (!alive) {
         handles.forEach((h) => void h.remove());
@@ -139,7 +160,7 @@ export function Workout() {
       subs.current.forEach((h) => void h.remove());
       subs.current = [];
     };
-  }, []);
+  }, [pushCreds]);
 
   // keep the screen on while a workout is live (display only; capture is native)
   useEffect(() => {
@@ -166,13 +187,27 @@ export function Workout() {
 
   const start = useCallback(async () => {
     setTick(null);
+    setUploadError(null);
+    pushCreds(); // fresh server URL + token for this workout's upload
     try {
       await OpenFitRecording.start({ sport });
       setState("recording");
     } catch (e) {
       alert(`Couldn't start: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [sport]);
+  }, [sport, pushCreds]);
+
+  // Re-push fresh creds, then ask the recorder to retry the queued .fit. Used by
+  // the "Retry upload" button after an upload failure (e.g. expired login).
+  const retryUpload = useCallback(async () => {
+    setUploadError(null);
+    pushCreds();
+    try {
+      await OpenFitRecording.retryUploads();
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : String(e));
+    }
+  }, [pushCreds]);
 
   const pause = useCallback(() => void OpenFitRecording.pause(), []);
   const resume = useCallback(() => void OpenFitRecording.resume(), []);
@@ -225,11 +260,25 @@ export function Workout() {
           </div>
           {state === "saved" && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-              <span className="pill pill--good">{uploaded ? "Synced to your activities" : "Saved · uploading…"}</span>
-              {uploaded && (
-                <Link to="/activities" className="pill">
-                  View activity →
-                </Link>
+              {uploadError ? (
+                <>
+                  <span className="pill" style={{ background: "var(--bad, #e5484d)", color: "#fff" }}>
+                    Couldn't upload
+                  </span>
+                  <span className="sub" style={{ flexBasis: "100%", opacity: 0.85 }}>{uploadError}</span>
+                  <button type="button" className="btn btn--ghost" onClick={() => void retryUpload()}>
+                    Retry upload
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="pill pill--good">{uploaded ? "Synced to your activities" : "Saved · uploading…"}</span>
+                  {uploaded && (
+                    <Link to="/activities" className="pill">
+                      View activity →
+                    </Link>
+                  )}
+                </>
               )}
             </div>
           )}

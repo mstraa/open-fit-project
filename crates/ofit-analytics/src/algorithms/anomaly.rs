@@ -14,23 +14,26 @@ use ofit_core::{Algorithm, DerivedSubject, WellnessKind};
 
 use crate::algorithms::training_load::day_uuid;
 use crate::input::AnalyticsInput;
+use crate::params::AnalyticsParams;
 use crate::runner::{AlgorithmOutputs, RunnableAlgorithm};
 
 /// Built-in resting-HR anomaly detector.
 #[derive(Debug, Clone)]
 pub struct AnomalyFlag {
     spec: AlgorithmSpec,
-    /// z-score threshold above which the latest reading is flagged. Default 2.5.
-    pub z_threshold: f64,
-    /// Minimum readings before a spread can be estimated. Default 5.
-    pub min_samples: usize,
-    /// Absolute bpm departure that counts as anomalous when the baseline has no
-    /// spread (degenerate/flat history). Default 5 bpm.
-    pub flat_tolerance_bpm: f64,
+    /// Effective tunable parameters (z-threshold, min samples, flat tolerance).
+    p: AnalyticsParams,
 }
 
 impl Default for AnomalyFlag {
     fn default() -> Self {
+        Self::configured(&AnalyticsParams::default())
+    }
+}
+
+impl AnomalyFlag {
+    /// Build with explicit effective parameters (from the settings store).
+    pub fn configured(p: &AnalyticsParams) -> Self {
         Self {
             spec: AlgorithmSpec {
                 id: "anomaly".into(),
@@ -44,9 +47,7 @@ impl Default for AnomalyFlag {
                 applicable_hardware: vec!["any".into()],
                 kind: AlgorithmKind::BuiltIn,
             },
-            z_threshold: 2.5,
-            min_samples: 5,
-            flat_tolerance_bpm: 5.0,
+            p: p.clone(),
         }
     }
 }
@@ -60,12 +61,13 @@ impl Algorithm for AnomalyFlag {
 impl RunnableAlgorithm for AnomalyFlag {
     fn compute(&self, input: &AnalyticsInput, computed_at: DateTime<Utc>) -> AlgorithmOutputs {
         let mut out = AlgorithmOutputs::default();
+        let min_samples = (self.p.an_min_samples as usize).max(1);
         let rhr = input.wellness_of(WellnessKind::RestingHeartRate);
-        if rhr.len() < self.min_samples {
+        if rhr.len() < min_samples {
             return out;
         }
         let vals: Vec<f64> = rhr.iter().map(|p| p.value).filter(|v| v.is_finite()).collect();
-        if vals.len() < self.min_samples {
+        if vals.len() < min_samples {
             return out;
         }
         // Estimate the baseline mean/sd over the *prior* readings (exclude the
@@ -79,9 +81,9 @@ impl RunnableAlgorithm for AnomalyFlag {
         // Degenerate (flat) baseline: any departure beyond a small absolute
         // tolerance is anomalous (no spread to form a z-score against).
         let flagged = if sd > 1e-6 {
-            ((latest - mean) / sd).abs() > self.z_threshold
+            ((latest - mean) / sd).abs() > self.p.an_z
         } else {
-            (latest - mean).abs() > self.flat_tolerance_bpm
+            (latest - mean).abs() > self.p.an_flat_tol
         };
         let flagged = if flagged { 1.0 } else { 0.0 };
 

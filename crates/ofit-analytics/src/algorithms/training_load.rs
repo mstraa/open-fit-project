@@ -32,24 +32,29 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use ofit_core::analytics::{
     AlgorithmInput, AlgorithmKind, AlgorithmOutput, AlgorithmSpec,
 };
-use ofit_core::{Algorithm, DerivedSubject, Sample, StreamKind};
+use ofit_core::{Algorithm, DerivedStream, DerivedSubject, Sample, StreamKind};
 
 use crate::input::AnalyticsInput;
-use crate::params::{AthleteThresholds, LoadTimeConstants};
+use crate::params::AnalyticsParams;
 use crate::runner::{AlgorithmOutputs, RunnableAlgorithm};
 
 /// Built-in training-load algorithm (TSS + CTL/ATL/TSB).
 #[derive(Debug, Clone)]
 pub struct TrainingLoad {
     spec: AlgorithmSpec,
-    /// Athlete thresholds (LTHR/FTP…).
-    pub thresholds: AthleteThresholds,
-    /// CTL/ATL time constants.
-    pub tc: LoadTimeConstants,
+    /// Effective tunable parameters (athlete thresholds, time constants…).
+    p: AnalyticsParams,
 }
 
 impl Default for TrainingLoad {
     fn default() -> Self {
+        Self::configured(&AnalyticsParams::default())
+    }
+}
+
+impl TrainingLoad {
+    /// Build with explicit effective parameters (from the settings store).
+    pub fn configured(p: &AnalyticsParams) -> Self {
         Self {
             spec: AlgorithmSpec {
                 id: "training_load".into(),
@@ -71,8 +76,7 @@ impl Default for TrainingLoad {
                 applicable_hardware: vec!["any".into()],
                 kind: AlgorithmKind::BuiltIn,
             },
-            thresholds: AthleteThresholds::default(),
-            tc: LoadTimeConstants::default(),
+            p: p.clone(),
         }
     }
 }
@@ -98,17 +102,18 @@ impl TrainingLoad {
         if dur_s <= 0.0 {
             return (0.0, TssMethod::DurationOnly);
         }
-        let th = self.thresholds;
+        let p = &self.p;
+        let tss_max = p.tl_tss_clamp_max;
 
         // Power-based (preferred).
         if let Some(power) = act.metric(StreamKind::Power) {
             let vals: Vec<f64> = power.samples.iter().map(|(_, v)| *v).filter(|v| v.is_finite() && *v >= 0.0).collect();
-            if vals.iter().filter(|v| **v > 0.0).count() as f64 >= 0.5 * vals.len().max(1) as f64 && !vals.is_empty() {
-                let np = normalized_power(&vals);
-                if np > 0.0 && th.ftp > 0.0 {
-                    let intensity = np / th.ftp;
-                    let tss = (dur_s * np * intensity) / (th.ftp * 3600.0) * 100.0;
-                    return (tss.clamp(0.0, 1000.0), TssMethod::Power);
+            if vals.iter().filter(|v| **v > 0.0).count() as f64 >= p.tl_power_cov_min * vals.len().max(1) as f64 && !vals.is_empty() {
+                let np = normalized_power(&vals, p.tl_np_window as usize);
+                if np > 0.0 && p.ftp > 0.0 {
+                    let intensity = np / p.ftp;
+                    let tss = (dur_s * np * intensity) / (p.ftp * 3600.0) * 100.0;
+                    return (tss.clamp(0.0, tss_max), TssMethod::Power);
                 }
             }
         }
@@ -116,19 +121,19 @@ impl TrainingLoad {
         // HR-based (hrTSS).
         if let Some(hr) = act.metric(StreamKind::HeartRate) {
             if let Some(avg) = hr.mean() {
-                let denom = th.lthr - th.hr_rest;
+                let denom = p.lthr - p.hr_rest;
                 if denom > 0.0 {
-                    let intensity = ((avg - th.hr_rest) / denom).clamp(0.0, 1.3);
+                    let intensity = ((avg - p.hr_rest) / denom).clamp(0.0, p.tl_hr_intensity_max);
                     let tss = (dur_s / 3600.0) * intensity * intensity * 100.0;
-                    return (tss.clamp(0.0, 1000.0), TssMethod::HeartRate);
+                    return (tss.clamp(0.0, tss_max), TssMethod::HeartRate);
                 }
             }
         }
 
         // Duration-only fallback at an assumed easy IF.
-        let if_easy = 0.65;
+        let if_easy = p.tl_fallback_if;
         let tss = (dur_s / 3600.0) * if_easy * if_easy * 100.0;
-        (tss.clamp(0.0, 1000.0), TssMethod::DurationOnly)
+        (tss.clamp(0.0, tss_max), TssMethod::DurationOnly)
     }
 }
 
@@ -137,11 +142,11 @@ impl TrainingLoad {
 /// We don't know the exact sample rate, so we use a fixed 30-sample rolling
 /// window as a stand-in for the canonical 30 s window (samples are ~1 Hz in our
 /// FITs). For short series this gracefully reduces toward the simple average.
-fn normalized_power(vals: &[f64]) -> f64 {
+fn normalized_power(vals: &[f64], window_samples: usize) -> f64 {
     if vals.is_empty() {
         return 0.0;
     }
-    let window = 30usize.min(vals.len());
+    let window = window_samples.max(1).min(vals.len());
     let mut rolled: Vec<f64> = Vec::with_capacity(vals.len());
     let mut sum = 0.0;
     for i in 0..vals.len() {
@@ -193,47 +198,61 @@ impl RunnableAlgorithm for TrainingLoad {
             }
         }
 
-        // Build a dense daily TSS timeline from first to last activity day so the
-        // EWMA decays correctly across rest days.
-        let first = per_day.first().map(|d| d.date).unwrap();
-        let last = per_day.last().map(|d| d.date).unwrap();
+        // Fold the daily TSS into CTL/ATL/TSB via the shared helper, so the
+        // incremental worker (which re-folds from PERSISTED per-activity TSS,
+        // cheaply, without re-resolving streams) produces byte-identical streams.
+        let daily: Vec<(NaiveDate, f64)> = per_day.iter().map(|d| (d.date, d.tss)).collect();
+        out.streams.extend(self.streams_from_daily_tss(&daily, computed_at));
+        out
+    }
+}
+
+impl TrainingLoad {
+    /// Fold a per-day TSS timeline into the dense CTL/ATL/TSB [`DerivedStream`]s
+    /// (offsets in ms from the first day; attached to the first day's subject).
+    /// Shared by [`Self::compute`] and the incremental analytics worker so the
+    /// two paths can never diverge. Same-day TSS is summed; rest days are 0.
+    pub fn streams_from_daily_tss(
+        &self,
+        daily: &[(NaiveDate, f64)],
+        computed_at: DateTime<Utc>,
+    ) -> Vec<DerivedStream> {
+        let mut by_day: std::collections::BTreeMap<NaiveDate, f64> = std::collections::BTreeMap::new();
+        for (d, t) in daily {
+            *by_day.entry(*d).or_insert(0.0) += *t;
+        }
+        let Some((&first, _)) = by_day.iter().next() else {
+            return Vec::new();
+        };
+        let last = *by_day.keys().next_back().unwrap();
         let total_days = (last - first).num_days().max(0) as usize + 1;
-        let mut daily = vec![0.0f64; total_days];
-        for d in &per_day {
-            let idx = (d.date - first).num_days() as usize;
-            daily[idx] += d.tss;
+        let mut dense = vec![0.0f64; total_days];
+        for (d, t) in &by_day {
+            dense[(*d - first).num_days() as usize] += *t;
         }
 
-        let ctl_alpha = 1.0 - (-1.0 / self.tc.ctl_days).exp();
-        let atl_alpha = 1.0 - (-1.0 / self.tc.atl_days).exp();
+        let ctl_alpha = 1.0 - (-1.0 / self.p.ctl_days).exp();
+        let atl_alpha = 1.0 - (-1.0 / self.p.atl_days).exp();
         let mut ctl = 0.0;
         let mut atl = 0.0;
         let mut ctl_pts: Vec<Sample> = Vec::with_capacity(total_days);
         let mut atl_pts: Vec<Sample> = Vec::with_capacity(total_days);
         let mut tsb_pts: Vec<Sample> = Vec::with_capacity(total_days);
-
-        for (i, tss) in daily.iter().enumerate() {
-            // TSB (form) uses *yesterday's* CTL/ATL (PMC lag).
-            let tsb = ctl - atl;
+        for (i, tss) in dense.iter().enumerate() {
+            let tsb = ctl - atl; // PMC lag: today's form uses yesterday's CTL/ATL
             ctl += ctl_alpha * (tss - ctl);
             atl += atl_alpha * (tss - atl);
-            // Offset is days-since-first-day expressed in ms (the stream's epoch
-            // is the first activity day at 00:00 UTC).
             let off = (i as i64) * 86_400_000;
             ctl_pts.push(Sample::Scalar { t_offset_ms: off, value: ctl });
             atl_pts.push(Sample::Scalar { t_offset_ms: off, value: atl });
             tsb_pts.push(Sample::Scalar { t_offset_ms: off, value: tsb });
         }
-
-        // The CTL/ATL/TSB streams describe the whole timeline → attach to the day
-        // subject of the first activity day. (Day subject id is derived from the
-        // date so it is stable/recomputable.)
-        let day_subject = DerivedSubject::Day(day_uuid(first));
-        out.streams.push(self.spec.tag_stream(day_subject, "ctl", ctl_pts, computed_at));
-        out.streams.push(self.spec.tag_stream(day_subject, "atl", atl_pts, computed_at));
-        out.streams.push(self.spec.tag_stream(day_subject, "tsb", tsb_pts, computed_at));
-
-        out
+        let subj = DerivedSubject::Day(day_uuid(first));
+        vec![
+            self.spec.tag_stream(subj, "ctl", ctl_pts, computed_at),
+            self.spec.tag_stream(subj, "atl", atl_pts, computed_at),
+            self.spec.tag_stream(subj, "tsb", tsb_pts, computed_at),
+        ]
     }
 }
 

@@ -11,23 +11,40 @@ use uuid::Uuid;
 
 use crate::stream::Sample;
 
-/// Identifies the algorithm that produced a derivation, with its version, so
-/// outputs are reproducible and re-runnable.
+/// Identifies the derivation that produced an output: the algorithm, its code
+/// version, AND a fingerprint of the parameter set it ran with. The triple
+/// `(plugin_id, version, params_hash)` is a derivation's full identity — bumping
+/// the version OR changing any tunable parameter yields a new, side-by-side
+/// derivation rather than overwriting the old one, so they can be compared and
+/// switched between.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PluginRef {
     /// Plugin identifier (built-in name or registry id).
     pub plugin_id: String,
     /// Semantic version of the plugin that produced the output.
     pub version: String,
+    /// Fingerprint of the effective parameter set (empty = unknown/pre-overhaul,
+    /// or a parameter-free plugin). Stamped by the orchestrator from the
+    /// algorithm's effective `AnalyticsParams`.
+    #[serde(default)]
+    pub params_hash: String,
 }
 
 impl PluginRef {
-    /// Construct a plugin reference.
+    /// Construct a plugin reference with no parameter fingerprint (set later by
+    /// the orchestrator via [`PluginRef::with_params_hash`]).
     pub fn new(plugin_id: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
             plugin_id: plugin_id.into(),
             version: version.into(),
+            params_hash: String::new(),
         }
+    }
+
+    /// Set the parameter-set fingerprint, completing the derivation identity.
+    pub fn with_params_hash(mut self, params_hash: impl Into<String>) -> Self {
+        self.params_hash = params_hash.into();
+        self
     }
 }
 

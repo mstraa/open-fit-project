@@ -29,7 +29,26 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
     for rec in &records {
         match format!("{:?}", rec.kind()).as_str() {
             "Record" => extract_record(&mut b, rec),
-            "Sport" | "Session" if !sport_set => {
+            "Session" => {
+                if !sport_set {
+                    if let Some(s) = field_str(rec, "sport") {
+                        b.set_sport(sport_from_str(&s));
+                        sport_set = true;
+                    }
+                }
+                // A `session` summary lets a recording that carries no per-sample
+                // `record` rows (e.g. an indoor workout with no HR strap and no
+                // accepted GPS fix) still resolve a time window, instead of being
+                // discarded as `Error::Empty`. This is a fallback only — real
+                // sample timestamps, when present, always take precedence.
+                if let Some(start) =
+                    field_timestamp(rec, "start_time").or_else(|| field_timestamp(rec, "timestamp"))
+                {
+                    let end = field_timestamp(rec, "timestamp").unwrap_or(start);
+                    b.set_summary_window(start, end);
+                }
+            }
+            "Sport" if !sport_set => {
                 if let Some(s) = field_str(rec, "sport") {
                     b.set_sport(sport_from_str(&s));
                     sport_set = true;
@@ -49,6 +68,13 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
     if let Some(m) = manufacturer {
         b.meta("manufacturer", m);
     }
+    // The FIT `file_id.type` distinguishes real workouts (`activity`) from the
+    // daily-wellness / sleep / metrics / stub blobs that share the export's
+    // `.fit` firehose. Surfaced in metadata so a batch importer can keep only
+    // activities (see [`crate::fit::file_id_type`]).
+    if let Some(ft) = &ident.file_type {
+        b.meta("file_type", ft.clone());
+    }
 
     Ok(b)
 }
@@ -62,6 +88,8 @@ struct DeviceIdentity {
     product_name: Option<String>,
     /// Free-form `source` on the creator device_info (e.g. Zepp/Huami host).
     source: Option<String>,
+    /// `file_id.type` (`"activity"`, `"monitoring_b"`, `"sleep"`, …).
+    file_type: Option<String>,
 }
 
 impl DeviceIdentity {
@@ -73,6 +101,9 @@ impl DeviceIdentity {
         }
         if let Some(p) = nonempty(field_str(rec, "product_name")) {
             self.product_name.get_or_insert(p);
+        }
+        if let Some(t) = nonempty(field_str(rec, "type")) {
+            self.file_type.get_or_insert(t);
         }
     }
 
@@ -383,5 +414,33 @@ fn value_f64(v: &Value) -> Option<f64> {
         Value::Float32(x) => Some(*x as f64),
         Value::Float64(x) => Some(*x),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fit_export::encode_activity_fit;
+    use crate::Format;
+    use chrono::TimeZone;
+    use ofit_core::Sport;
+
+    /// A workout with no `record` rows (no HR strap, no GPS fix) must still
+    /// persist: the parser falls back to the `session` summary window instead of
+    /// failing with `Error::Empty`. Regression for the silent "recorded workouts
+    /// don't save" data-loss bug. See [`crate::builder::RecordingBuilder`].
+    #[test]
+    fn zero_record_activity_resolves_window_from_session() {
+        let started = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let bytes = encode_activity_fit(Sport::Running, started, &[]);
+
+        let parsed = parse("empty.fit", &bytes)
+            .expect("a session-only FIT must parse")
+            .into_parsed(Format::Fit)
+            .expect("a session-only activity must persist, not be dropped as empty");
+
+        assert!(parsed.streams.is_empty(), "no record rows → no streams");
+        assert_eq!(parsed.recording.started_at, started, "window from session.start_time");
+        assert_eq!(parsed.recording.sport, Sport::Running, "sport from session message");
     }
 }

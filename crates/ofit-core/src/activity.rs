@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::recording::{RawRecording, Sport};
 
 /// A logical workout grouping one or more raw recordings of the same effort.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Activity {
     /// Stable identifier.
     pub id: Uuid,
@@ -27,6 +27,13 @@ pub struct Activity {
     pub user_confirmed: bool,
     /// When this activity row was created.
     pub created_at: DateTime<Utc>,
+    /// Total distance in metres — a cache populated by the analytics recompute
+    /// (from the resolved distance stream or a Zepp summary), so the list/totals
+    /// match the detail view. `None` until computed.
+    pub distance_m: Option<f64>,
+    /// Energy in kcal — from a Zepp summary when present; `None` otherwise (we
+    /// have no honest calorie model for stream-only activities).
+    pub calories: Option<f64>,
 }
 
 impl Activity {
@@ -40,6 +47,8 @@ impl Activity {
             recording_ids: vec![rec.id],
             user_confirmed: false,
             created_at: Utc::now(),
+            distance_m: None,
+            calories: None,
         }
     }
 

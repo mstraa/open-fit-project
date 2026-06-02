@@ -16,8 +16,13 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -120,6 +125,32 @@ public class RecordingPlugin extends Plugin {
         call.resolve(r);
     }
 
+    /** Re-attempt any queued/failed uploads now (e.g. after the UI refreshed the
+     *  server URL + token following an auth/credential failure). Unlike the
+     *  on-launch auto-flush, an explicit Retry also re-tries server-rejected files. */
+    @PluginMethod
+    public void retryUploads(PluginCall call) {
+        io.execute(() -> {
+            requeueRejected();
+            flushPendingUploads();
+        });
+        call.resolve();
+    }
+
+    /** Move any quarantined (server-rejected) files back into the upload queue so an
+     *  explicit user Retry attempts them again. The on-launch auto-flush still skips
+     *  the rejected/ folder, so a genuinely-bad file won't re-POST on every start. */
+    private void requeueRejected() {
+        File rejected = new File(new File(getContext().getFilesDir(), "pending_uploads"), "rejected");
+        File[] files = rejected.listFiles((d, n) -> n.endsWith(".fit"));
+        if (files == null) return;
+        for (File f : files) {
+            File dest = new File(f.getParentFile().getParentFile(), f.getName()); // → pending_uploads/
+            //noinspection ResultOfMethodCallIgnored
+            f.renameTo(dest);
+        }
+    }
+
     private void send(String action) {
         Intent svc = new Intent(getContext(), RecordingService.class).setAction(action);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getContext().startForegroundService(svc);
@@ -172,41 +203,95 @@ public class RecordingPlugin extends Plugin {
             Log.i(TAG, "encoded " + fit.length + " bytes → " + out.getName());
         } catch (Exception e) {
             Log.w(TAG, "encode failed: " + e.getMessage());
+            notifyUploadFailed("Could not save the recording file: " + e.getMessage());
         }
         flushPendingUploads();
     }
 
-    /** Upload every queued .fit; delete each on success, keep the rest if offline. */
+    /** Outcome of one upload attempt — drives whether the local file is deleted,
+     *  quarantined, or kept for retry. */
+    private enum UploadResult { SAVED, REJECTED, UNREACHABLE }
+
+    /** Upload outcome plus a human reason, so failures can be surfaced in the UI
+     *  instead of dying silently in logcat. {@code detail} is null on success. */
+    private static final class Upload {
+        final UploadResult result;
+        final String detail;
+        Upload(UploadResult result, String detail) { this.result = result; this.detail = detail; }
+    }
+
+    /** Upload every queued .fit. Delete only on a CONFIRMED server-side ingest;
+     *  quarantine (never delete) a file the server explicitly refused; keep the
+     *  rest if the server is unreachable. A recording must never be silently lost
+     *  just because the POST returned 2xx. */
     private void flushPendingUploads() {
         SharedPreferences p = getContext().getSharedPreferences("ofit_ble", Context.MODE_PRIVATE);
         String base = p.getString("apiBase", "");
         String token = p.getString("token", "");
         File pending = new File(getContext().getFilesDir(), "pending_uploads");
         File[] files = pending.listFiles((d, n) -> n.endsWith(".fit"));
-        if (files == null || files.length == 0 || base == null || base.isEmpty()) return;
+        if (files == null || files.length == 0) return; // nothing queued → nothing to do
+        if (base == null || base.isEmpty()) {
+            // The recorder gets the server URL + token from the JS side (configure()).
+            // Until that happens the .fit just waits here — tell the user instead of
+            // failing silently, so a finished workout doesn't seem to vanish.
+            notifyUploadFailed("No server configured yet — open the app once with the server set up, then tap Retry.");
+            return;
+        }
         int ok = 0;
+        String lastFail = null;
         for (File f : files) {
-            if (postFit(base, token, f)) {
+            Upload res = postFit(base, token, f);
+            if (res.result == UploadResult.SAVED) {
                 //noinspection ResultOfMethodCallIgnored
                 f.delete();
                 ok++;
+            } else if (res.result == UploadResult.REJECTED) {
+                // Server got the file but couldn't ingest it. Move it out of the
+                // retry queue so we don't re-POST a bad file every launch, but KEEP
+                // it — losing a real recording is worse than a stuck upload.
+                quarantine(f);
+                lastFail = res.detail;
             } else {
-                break; // server unreachable → keep the rest for next time
+                lastFail = res.detail;
+                break; // server unreachable → keep the queue intact, retry later
             }
         }
-        if (ok > 0) {
-            Log.i(TAG, "uploaded " + ok + " workout file(s)");
-            final int n = ok;
-            getActivity().runOnUiThread(() -> {
-                JSObject ev = new JSObject();
-                ev.put("count", n);
-                notifyListeners("recordingUploaded", ev);
-            });
-        }
+        if (ok > 0) notifyUploaded(ok);
+        if (ok == 0 && lastFail != null) notifyUploadFailed(lastFail);
     }
 
-    /** Multipart POST one .fit to {base}/api/import (field name "file", filename .fit). */
-    private boolean postFit(String base, String token, File file) {
+    private void notifyUploaded(int n) {
+        Log.i(TAG, "uploaded " + n + " workout file(s)");
+        // flushPendingUploads also runs from load() at app start (offline retry),
+        // where no Activity is bound yet → getActivity() can be null.
+        final android.app.Activity act = getActivity();
+        if (act == null) return;
+        act.runOnUiThread(() -> {
+            JSObject ev = new JSObject();
+            ev.put("count", n);
+            notifyListeners("recordingUploaded", ev);
+        });
+    }
+
+    private void notifyUploadFailed(String reason) {
+        Log.w(TAG, "upload failed: " + reason);
+        final android.app.Activity act = getActivity();
+        if (act == null) return; // load() retry before UI is bound; logcat still has it
+        act.runOnUiThread(() -> {
+            JSObject ev = new JSObject();
+            ev.put("reason", reason);
+            notifyListeners("recordingUploadFailed", ev);
+        });
+    }
+
+    /** Multipart POST one .fit to {base}/api/import (field name "file", filename
+     *  .fit). Returns SAVED only when the server confirms the file was ingested
+     *  (its per-file {@code ok == true}); REJECTED when the server parsed it but
+     *  refused it; UNREACHABLE on a network error or non-2xx status. The batch
+     *  endpoint returns 200 even for a file it failed to ingest, so the status
+     *  code alone is not proof of success. */
+    private Upload postFit(String base, String token, File file) {
         String boundary = "----ofit" + System.currentTimeMillis();
         HttpURLConnection c = null;
         try {
@@ -228,13 +313,63 @@ public class RecordingPlugin extends Plugin {
                 os.write(epilogue.getBytes(StandardCharsets.UTF_8));
             }
             int code = c.getResponseCode();
-            return code >= 200 && code < 300;
+            if (code < 200 || code >= 300) {
+                Log.w(TAG, "upload HTTP " + code + " for " + file.getName());
+                String why = code == 401 || code == 403
+                    ? "Login expired (HTTP " + code + ") — reconnect a device or sign in again, then tap Retry."
+                    : "Server returned HTTP " + code + ".";
+                return new Upload(UploadResult.UNREACHABLE, why); // keep, retry later
+            }
+            String body;
+            try (InputStream in = c.getInputStream()) {
+                body = readStream(in);
+            }
+            try {
+                JSONArray fs = new JSONObject(body).optJSONArray("files");
+                if (fs != null && fs.length() > 0) {
+                    JSONObject f0 = fs.getJSONObject(0);
+                    if (f0.optBoolean("ok", false)) return new Upload(UploadResult.SAVED, null);
+                    String err = f0.optString("error", "unknown");
+                    Log.w(TAG, "server rejected " + file.getName() + ": " + err);
+                    return new Upload(UploadResult.REJECTED, "Server couldn't read the recording: " + err);
+                }
+            } catch (Exception parse) {
+                Log.w(TAG, "unparseable import response, assuming saved: " + parse.getMessage());
+            }
+            return new Upload(UploadResult.SAVED, null); // 2xx with no per-file verdict → assume accepted
         } catch (Exception e) {
             Log.w(TAG, "upload failed: " + e.getMessage());
-            return false;
+            return new Upload(UploadResult.UNREACHABLE, "Couldn't reach the server: " + e.getMessage());
         } finally {
             if (c != null) c.disconnect();
         }
+    }
+
+    /** Move a server-rejected file into pending_uploads/rejected/ so it is kept
+     *  for inspection/recovery but no longer re-uploaded on every launch. */
+    private void quarantine(File f) {
+        try {
+            File dir = new File(f.getParentFile(), "rejected");
+            //noinspection ResultOfMethodCallIgnored
+            dir.mkdirs();
+            File dest = new File(dir, f.getName());
+            //noinspection ResultOfMethodCallIgnored
+            if (f.renameTo(dest)) {
+                Log.w(TAG, "quarantined rejected upload " + f.getName());
+            } else {
+                Log.w(TAG, "could not quarantine " + f.getName() + " (left in queue)");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "quarantine failed: " + e.getMessage());
+        }
+    }
+
+    private static String readStream(InputStream in) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        return new String(bos.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static byte[] readAll(File f) throws Exception {

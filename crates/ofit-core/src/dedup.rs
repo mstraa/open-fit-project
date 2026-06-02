@@ -135,6 +135,8 @@ pub fn detach_recording(activity: &Activity, recording_id: Uuid) -> Option<Detac
         recording_ids: vec![recording_id],
         user_confirmed: true,
         created_at: chrono::Utc::now(),
+        distance_m: None,
+        calories: None,
     };
 
     Some(DetachResult { remaining, detached })
@@ -143,7 +145,7 @@ pub fn detach_recording(activity: &Activity, recording_id: Uuid) -> Option<Detac
 /// Outcome of [`detach_recording`]: the trimmed original activity and the new
 /// single-recording activity that now owns the removed recording. Both are
 /// `user_confirmed` so the split is durable across re-imports.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DetachResult {
     /// The original activity with the recording removed (now user-confirmed).
     pub remaining: Activity,

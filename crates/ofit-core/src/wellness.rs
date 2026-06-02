@@ -66,6 +66,33 @@ pub enum WellnessKind {
     Weight,
     /// Energy burned in the sample interval (kcal).
     Calories,
+    // --- Body composition (smart-scale; from the Garmin/Index export) ---
+    /// Body fat (% of body mass).
+    BodyFat,
+    /// Body water (% of body mass).
+    BodyWater,
+    /// Bone mass (kg).
+    BoneMass,
+    /// Skeletal muscle mass (kg).
+    MuscleMass,
+    /// Body-mass index (kg/m²).
+    Bmi,
+    // --- Performance / derived trends (Garmin/Firstbeat proprietary; imported
+    // verbatim because Open Fit cannot faithfully recompute them) ---
+    /// VO2max estimate (ml/kg/min).
+    Vo2Max,
+    /// Acute training load (Garmin/Firstbeat unitless load over the trailing week).
+    TrainingLoad,
+    /// Fitness age (years).
+    FitnessAge,
+    /// Predicted 5 km race time (seconds).
+    RacePredict5k,
+    /// Predicted 10 km race time (seconds).
+    RacePredict10k,
+    /// Predicted half-marathon race time (seconds).
+    RacePredictHalf,
+    /// Predicted marathon race time (seconds).
+    RacePredictMarathon,
 }
 
 /// One continuous wellness reading.

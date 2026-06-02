@@ -29,7 +29,11 @@ export function useActivities(): UseActivities {
   const [state, setState] = useState<ActivitiesState>({ kind: "loading" });
 
   const reload = useCallback(() => {
-    setState({ kind: "loading" });
+    // Soft refresh: keep the current list visible while refetching (only show the
+    // hard loading state on the very first load). A post-delete refresh then
+    // simply drops the removed row instead of blanking the whole list during the
+    // detail screen's pop-back animation.
+    setState((s) => (s.kind === "ok" ? s : { kind: "loading" }));
     listActivities()
       .then((activities) => setState({ kind: "ok", activities }))
       .catch((e: unknown) =>

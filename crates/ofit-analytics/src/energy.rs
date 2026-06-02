@@ -8,33 +8,65 @@
 
 use chrono::{DateTime, Utc};
 
-const REST_STRESS: f64 = 30.0; // below this → recharge, above → drain
-const GAIN: f64 = 0.007; // per-minute rate scale (≈ full charge over a calm night)
-const MAX_DT_MIN: f64 = 5.0; // cap gaps so a sync hole can't swing it
-const MIN_EMIT_MIN: f64 = 10.0; // thin stored output to ~1 per 10 min
+use crate::params::AnalyticsParams;
 
-/// Body battery (0–100, rounded) at ~10-minute resolution, ascending by time.
+// Calibrated against the Zepp BioCharge reference (oscillates ~52→89→60, never
+// pegs at 100). Two terms: a stress drive `(pivot−stress)·gain` that charges at
+// rest / drains under load, and a mean-reversion `revert·(center−bb)` that pulls
+// toward a neutral level so it can't saturate at the 0/100 clamp (the old free
+// integrator pegged at 100 overnight). At a held stress the level asymptotes to
+// `center + (pivot−stress)·gain/revert`. All coefficients are [`AnalyticsParams`].
+
+/// Median of the finite values (or `fallback` when none) — the self-calibrating
+/// rest/drain pivot base.
+fn median(vals: &[f64], fallback: f64) -> f64 {
+    let mut v: Vec<f64> = vals.iter().copied().filter(|x| x.is_finite()).collect();
+    if v.is_empty() {
+        return fallback;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// The self-calibrating rest/drain pivot: the user's own median stress, clamped
+/// to a sane band. Exposed so the caller can compute it once and **pin** it
+/// (persist it) — a stable pivot makes body battery forward-carryable instead of
+/// re-pivoting (and shifting all of history) every time new stress arrives.
+pub fn pivot_of(stress: &[(DateTime<Utc>, f64)], p: &AnalyticsParams) -> f64 {
+    median(&stress.iter().map(|(_, v)| *v).collect::<Vec<_>>(), p.bb_median_fallback)
+        .clamp(p.bb_pivot_min, p.bb_pivot_max)
+}
+
+/// Body battery (0–100, rounded) at the thinning resolution, ascending by time.
 /// Integrated at full resolution from the start of history so the arbitrary
-/// starting value washes out well before recent days.
-pub fn body_battery(stress: &[(DateTime<Utc>, f64)]) -> Vec<(DateTime<Utc>, f64)> {
+/// starting value washes out well before recent days. `pivot` is the rest/drain
+/// threshold (see [`pivot_of`]); pass a pinned value to keep it stable.
+pub fn body_battery(stress: &[(DateTime<Utc>, f64)], pivot: f64, p: &AnalyticsParams) -> Vec<(DateTime<Utc>, f64)> {
     if stress.is_empty() {
         return Vec::new();
     }
     let mut s = stress.to_vec();
     s.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut bb = 50.0_f64;
+    let pivot = pivot.clamp(p.bb_pivot_min, p.bb_pivot_max);
+
+    let mut bb = p.bb_initial;
     let mut prev: Option<DateTime<Utc>> = None;
     let mut last_emit: Option<DateTime<Utc>> = None;
     let mut out = Vec::new();
     for (ts, stress_v) in s {
-        if let Some(p) = prev {
-            let dt = ((ts - p).num_seconds() as f64 / 60.0).clamp(0.0, MAX_DT_MIN);
-            bb = (bb + (REST_STRESS - stress_v) * GAIN * dt).clamp(0.0, 100.0);
+        if let Some(pt) = prev {
+            let dt = ((ts - pt).num_seconds() as f64 / 60.0).clamp(0.0, p.bb_max_dt_min);
+            bb = (bb + ((pivot - stress_v) * p.bb_gain + p.bb_revert * (p.bb_center - bb)) * dt).clamp(0.0, 100.0);
         }
         prev = Some(ts);
         let emit = match last_emit {
-            Some(le) => (ts - le).num_seconds() as f64 / 60.0 >= MIN_EMIT_MIN,
+            Some(le) => (ts - le).num_seconds() as f64 / 60.0 >= p.bb_min_emit_min,
             None => true,
         };
         if emit {
@@ -64,10 +96,14 @@ mod tests {
         for m in (480..600).step_by(5) {
             pts.push((ts(m), 90.0));
         }
-        let out = body_battery(&pts);
-        // peaks near full by end of the calm stretch …
+        let p = AnalyticsParams::default();
+        let out = body_battery(&pts, pivot_of(&pts, &p), &p);
+        // recharges strongly over the calm stretch. (The mean-reverting model
+        // asymptotes toward CENTER + gap·GAIN/REVERT and no longer pegs at 100;
+        // with this synthetic clamped pivot 8h reaches the high 70s — real
+        // restful nights, with a wider stress↔pivot gap, reach the mid-80s.) …
         let peak = out.iter().take_while(|(t, _)| *t <= ts(480)).map(|(_, v)| *v).fold(0.0, f64::max);
-        assert!(peak >= 95.0, "peak={peak}");
+        assert!(peak >= 74.0, "peak={peak}");
         // … and drops under the stressful stretch.
         let end = out.last().unwrap().1;
         assert!(end < peak - 20.0, "end={end} peak={peak}");
