@@ -11,6 +11,9 @@ import { App } from "./App";
 // Import app.css FIRST so its :root tokens exist when tokens.css remaps onto them.
 import "./theme/app.css";
 import "./theme/tokens.css";
+// OpenFit redesign tokens + component CSS. Imported LAST so its :root wins over
+// the legacy app.css/tokens.css (those belong to the now-retired screens).
+import "./design/openfit.css";
 
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element not found");

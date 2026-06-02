@@ -9,9 +9,51 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::{TimeZone, Utc};
 use ofit_core::{resolve_activity_view, Sport};
 use ofit_db::Db;
-use ofit_ingest::{import_path, ImportOutcome};
+use ofit_ingest::{encode_activity_fit, import_bytes_path, import_path, ImportOutcome};
+
+/// Fresh on-disk SQLite db in a temp file, migrated. Caller removes the file.
+async fn fresh_db(tag: &str) -> (Db, PathBuf) {
+    let tmp = std::env::temp_dir().join(format!("ofit-test-{tag}-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let url = format!("sqlite://{}?mode=rwc", tmp.display());
+    let db = Db::connect(&url).await.expect("connect");
+    db.run_migrations().await.expect("migrate");
+    (db, tmp)
+}
+
+/// A workout with no HR strap and no GPS fix encodes to a FIT with a `session`
+/// summary but zero `record` rows. It must still import as a real activity (this
+/// is the fix for the silent "recorded workouts don't save" data-loss bug), not
+/// be discarded as empty. See `fit::tests::zero_record_activity_resolves_window`.
+#[tokio::test]
+async fn zero_record_activity_imports_end_to_end() {
+    let (db, tmp) = fresh_db("zerorec").await;
+
+    let started = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+    let bytes = encode_activity_fit(Sport::Running, started, &[]);
+
+    let outcome = import_bytes_path(&db, "workout-empty.fit", &bytes)
+        .await
+        .expect("a record-less activity must import, not error as empty");
+    assert!(
+        matches!(outcome, ImportOutcome::Imported { stream_count: 0, .. }),
+        "expected Imported with 0 streams, got {outcome:?}"
+    );
+
+    let activities = db.list_activities().await.unwrap();
+    assert_eq!(activities.len(), 1, "the record-less workout became one activity");
+    assert_eq!(activities[0].sport, Sport::Running, "sport from the session message");
+
+    // Same bytes again → exact-hash dedup (no phantom duplicate).
+    let again = import_bytes_path(&db, "workout-empty.fit", &bytes).await.unwrap();
+    assert!(matches!(again, ImportOutcome::Duplicate { .. }), "re-import should dedup");
+    assert_eq!(db.count_activities().await.unwrap(), 1, "no duplicate activity");
+
+    let _ = std::fs::remove_file(&tmp);
+}
 
 fn test_data_dir() -> PathBuf {
     // crate dir is .../crates/ofit-ingest; test-data is at the repo root.
@@ -113,6 +155,43 @@ async fn imports_files_into_two_activities_with_exact_dedup() {
     let n = kinds.len();
     kinds.dedup();
     assert_eq!(kinds.len(), n, "one resolved stream per metric kind");
+
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// Importing one activity must mark ONLY that activity dirty — not re-stamp the
+/// whole history. Regression for "a single recording triggers a full recompute of
+/// all activities": the recluster used to re-upsert (and dirty-mark) every
+/// activity on every import, so the analytics worker recomputed all ~1800.
+#[tokio::test]
+async fn import_dirties_only_the_new_activity() {
+    let (db, tmp) = fresh_db("dirty").await;
+
+    // First activity, then drain the dirty queue as the worker would.
+    let a = encode_activity_fit(Sport::Running, Utc.timestamp_opt(1_700_000_000, 0).unwrap(), &[]);
+    import_bytes_path(&db, "a.fit", &a).await.expect("import a");
+    for (k, id) in db.list_dirty().await.unwrap() {
+        db.clear_dirty(&k, &id).await.unwrap();
+    }
+    assert_eq!(db.count_dirty().await.unwrap(), 0, "queue drained");
+
+    // A second, well-separated activity (a week later → its own cluster).
+    let b = encode_activity_fit(Sport::Cycling, Utc.timestamp_opt(1_700_604_800, 0).unwrap(), &[]);
+    import_bytes_path(&db, "b.fit", &b).await.expect("import b");
+
+    // Only the NEW activity is dirty; the untouched first one is left alone.
+    let dirty_activities: Vec<_> = db
+        .list_dirty()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|(k, _)| k == "activity")
+        .collect();
+    assert_eq!(
+        dirty_activities.len(),
+        1,
+        "a fresh import must dirty only the new activity, got {dirty_activities:?}"
+    );
 
     let _ = std::fs::remove_file(&tmp);
 }

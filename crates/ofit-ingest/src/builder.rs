@@ -40,6 +40,12 @@ pub struct RecordingBuilder {
     // Preserve first-seen order of kinds for deterministic stream ordering.
     order: Vec<StreamKind>,
     points: BTreeMap<u8, Vec<Point>>,
+    /// Fallback time window taken from a summary message (the FIT `session`),
+    /// used only when a recording carries no per-sample `record` rows — e.g. an
+    /// indoor workout with no HR strap and no accepted GPS fix. Without it such a
+    /// recording would have no timestamps at all and be discarded as
+    /// [`Error::Empty`], silently losing a real workout.
+    summary_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
 /// Stable ordinal for a [`StreamKind`] so it can key the `BTreeMap` while we
@@ -76,6 +82,7 @@ impl RecordingBuilder {
             metadata: serde_json::Map::new(),
             order: Vec::new(),
             points: BTreeMap::new(),
+            summary_window: None,
         }
     }
 
@@ -92,6 +99,13 @@ impl RecordingBuilder {
     /// Attach an arbitrary metadata key.
     pub fn meta(&mut self, key: &str, value: impl Into<serde_json::Value>) {
         self.metadata.insert(key.to_string(), value.into());
+    }
+
+    /// Record a summary time window (e.g. from a FIT `session` message) to fall
+    /// back on when the recording has no per-sample timestamps. Sample timestamps
+    /// always take precedence; this only rescues otherwise-empty recordings.
+    pub fn set_summary_window(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) {
+        self.summary_window = Some((start, end.max(start)));
     }
 
     fn track(&mut self, kind: StreamKind) {
@@ -137,11 +151,20 @@ impl RecordingBuilder {
     /// Finalize into a [`ParsedRecording`], deriving the time window from the
     /// first/last sample timestamp.
     pub(crate) fn into_parsed(mut self, format: Format) -> crate::Result<ParsedRecording> {
-        let started_at = self.min_ts().ok_or_else(|| Error::Empty {
-            format: format.label(),
-            name: self.name.clone(),
-        })?;
-        let ended_at = self.max_ts().unwrap_or(started_at);
+        // Per-sample timestamps win; fall back to the summary (`session`) window
+        // so a workout with no `record` rows (no HR/GPS) still resolves a window
+        // instead of being dropped. Only a recording with neither is truly empty.
+        let started_at = self
+            .min_ts()
+            .or_else(|| self.summary_window.map(|(s, _)| s))
+            .ok_or_else(|| Error::Empty {
+                format: format.label(),
+                name: self.name.clone(),
+            })?;
+        let ended_at = self
+            .max_ts()
+            .or_else(|| self.summary_window.map(|(_, e)| e))
+            .unwrap_or(started_at);
 
         self.metadata
             .insert("filename".into(), self.name.clone().into());

@@ -10,18 +10,22 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::BTreeMap;
 
-/// Plausible human HR; readings outside are sensor artifacts and are dropped.
-const HR_MIN: f64 = 30.0;
-const HR_MAX: f64 = 220.0;
-/// A day needs at least this many valid readings to estimate resting HR.
-const MIN_READINGS: usize = 20;
+use crate::params::AnalyticsParams;
 
 /// Daily resting HR (bpm, rounded) from `(ts, hr)` points, ascending by date.
-/// Days with too little coverage are omitted rather than guessed.
-pub fn daily_resting_hr(points: &[(DateTime<Utc>, f64)]) -> Vec<(NaiveDate, f64)> {
+/// Days with too little coverage are omitted rather than guessed. Tunables
+/// (valid HR band, minimum readings, low-plateau denominator/floor) come from
+/// [`AnalyticsParams`].
+pub fn daily_resting_hr(points: &[(DateTime<Utc>, f64)], p: &AnalyticsParams) -> Vec<(NaiveDate, f64)> {
+    let hr_min = p.rhr_hr_min;
+    let hr_max = p.rhr_hr_max;
+    let min_readings = (p.rhr_min_readings as usize).max(1);
+    let denom = (p.rhr_low_decile_denom as usize).max(1);
+    let floor = (p.rhr_low_decile_floor as usize).max(1);
+
     let mut by_day: BTreeMap<NaiveDate, Vec<f64>> = BTreeMap::new();
     for (ts, hr) in points {
-        if *hr >= HR_MIN && *hr <= HR_MAX {
+        if *hr >= hr_min && *hr <= hr_max {
             by_day.entry(ts.date_naive()).or_default().push(*hr);
         }
     }
@@ -29,12 +33,12 @@ pub fn daily_resting_hr(points: &[(DateTime<Utc>, f64)]) -> Vec<(NaiveDate, f64)
     by_day
         .into_iter()
         .filter_map(|(date, mut vals)| {
-            if vals.len() < MIN_READINGS {
+            if vals.len() < min_readings {
                 return None;
             }
             vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            // Lowest 10% of the day (at least 5 readings) → average = resting HR.
-            let n = (vals.len() / 10).max(5).min(vals.len());
+            // Lowest 1/denom of the day (at least `floor` readings) → average = resting HR.
+            let n = (vals.len() / denom).max(floor).min(vals.len());
             let rhr = vals[..n].iter().sum::<f64>() / n as f64;
             Some((date, rhr.round()))
         })
@@ -61,7 +65,7 @@ mod tests {
             pts.push((ts(1, m), 50.0)); // resting plateau
         }
         pts.push((ts(1, 260), 10.0)); // artifact, dropped (< HR_MIN)
-        let out = daily_resting_hr(&pts);
+        let out = daily_resting_hr(&pts, &AnalyticsParams::default());
         assert_eq!(out.len(), 1);
         let (_, rhr) = out[0];
         // ~50 (the plateau), not 120 (mean) and not 10 (artifact).
@@ -71,6 +75,6 @@ mod tests {
     #[test]
     fn sparse_days_are_skipped() {
         let pts: Vec<_> = (0..5).map(|m| (ts(2, m), 60.0)).collect();
-        assert!(daily_resting_hr(&pts).is_empty());
+        assert!(daily_resting_hr(&pts, &AnalyticsParams::default()).is_empty());
     }
 }

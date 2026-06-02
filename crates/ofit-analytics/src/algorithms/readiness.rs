@@ -28,19 +28,26 @@ use ofit_core::{Algorithm, DerivedSubject, WellnessKind};
 
 use crate::algorithms::training_load::day_uuid;
 use crate::input::{AnalyticsInput, WellnessPoint};
-use crate::params::ReadinessParams;
+use crate::params::AnalyticsParams;
 use crate::runner::{AlgorithmOutputs, RunnableAlgorithm};
 
 /// Built-in HRV-summary + readiness algorithm.
 #[derive(Debug, Clone)]
 pub struct Readiness {
     spec: AlgorithmSpec,
-    /// Baseline window + minimum-sample parameters.
-    pub params: ReadinessParams,
+    /// Effective tunable parameters (baseline window, blend weights…).
+    p: AnalyticsParams,
 }
 
 impl Default for Readiness {
     fn default() -> Self {
+        Self::configured(&AnalyticsParams::default())
+    }
+}
+
+impl Readiness {
+    /// Build with explicit effective parameters (from the settings store).
+    pub fn configured(p: &AnalyticsParams) -> Self {
         Self {
             spec: AlgorithmSpec {
                 id: "readiness".into(),
@@ -63,7 +70,7 @@ impl Default for Readiness {
                 applicable_hardware: vec!["any".into(), "hrv-strap".into()],
                 kind: AlgorithmKind::BuiltIn,
             },
-            params: ReadinessParams::default(),
+            p: p.clone(),
         }
     }
 }
@@ -94,7 +101,7 @@ impl RunnableAlgorithm for Readiness {
 
         // Insufficient HRV history → emit summary if we have the latest, but flag
         // readiness as unavailable.
-        if hrv.len() < self.params.min_hrv_samples {
+        if hrv.len() < (self.p.rd_min_hrv_samples as usize) {
             if let Some(latest) = hrv.last() {
                 out.metrics.push(self.spec.tag_metric(subject, "hrv_rmssd", latest.value, computed_at));
             }
@@ -102,16 +109,17 @@ impl RunnableAlgorithm for Readiness {
             return out;
         }
 
-        let baseline_start = today_ts - Duration::days(self.params.baseline_days);
+        let baseline_start = today_ts - Duration::days(self.p.rd_baseline_days as i64);
         let hrv_today = hrv.last().map(|p| p.value).unwrap_or(0.0);
         let hrv_baseline = window_mean(&hrv, baseline_start, today_ts).unwrap_or(hrv_today);
 
         out.metrics.push(self.spec.tag_metric(subject, "hrv_rmssd", hrv_today, computed_at));
         out.metrics.push(self.spec.tag_metric(subject, "hrv_baseline", hrv_baseline, computed_at));
 
+        let dev_clamp = self.p.rd_deviation_clamp;
         // HRV deviation: positive when today's HRV exceeds baseline.
         let hrv_dev = if hrv_baseline > 0.0 {
-            ((hrv_today - hrv_baseline) / hrv_baseline).clamp(-1.0, 1.0)
+            ((hrv_today - hrv_baseline) / hrv_baseline).clamp(-dev_clamp, dev_clamp)
         } else {
             0.0
         };
@@ -121,7 +129,7 @@ impl RunnableAlgorithm for Readiness {
             let rhr_today = rhr.last().map(|p| p.value).unwrap_or(0.0);
             let rhr_baseline = window_mean(&rhr, baseline_start, today_ts).unwrap_or(rhr_today);
             if rhr_baseline > 0.0 {
-                ((rhr_baseline - rhr_today) / rhr_baseline).clamp(-1.0, 1.0)
+                ((rhr_baseline - rhr_today) / rhr_baseline).clamp(-dev_clamp, dev_clamp)
             } else {
                 0.0
             }
@@ -129,9 +137,16 @@ impl RunnableAlgorithm for Readiness {
             0.0
         };
 
-        // Weight HRV more heavily; RHR contributes only if present.
-        let (w_hrv, w_rhr) = if rhr.is_empty() { (1.0, 0.0) } else { (0.6, 0.4) };
-        let readiness = (50.0 + 50.0 * (w_hrv * hrv_dev + w_rhr * rhr_dev)).clamp(0.0, 100.0);
+        // Weight HRV more heavily; RHR contributes only if present (no RHR → HRV
+        // carries the full weight).
+        let (w_hrv, w_rhr) = if rhr.is_empty() {
+            (1.0, 0.0)
+        } else {
+            (self.p.rd_weight_hrv, self.p.rd_weight_rhr)
+        };
+        let readiness = (self.p.rd_score_center
+            + self.p.rd_score_span * (w_hrv * hrv_dev + w_rhr * rhr_dev))
+            .clamp(0.0, 100.0);
 
         out.metrics.push(self.spec.tag_metric(subject, "readiness", readiness, computed_at));
         out.metrics.push(self.spec.tag_metric(subject, "readiness_available", 1.0, computed_at));

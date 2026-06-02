@@ -17,7 +17,7 @@ import {
 import type { PluginListenerHandle } from "@capacitor/core";
 import { OpenFitBle, type NativeScanResult, type NativeStatus } from "./OpenFitBle";
 import { API_BASE, getToken } from "../../api/client";
-import { isNativeApp } from "../../gadgetbridge/autoImportConfig";
+import { isNativeApp } from "../../app/isNativeApp";
 
 export type NativeConnStatus = "idle" | "scanning" | "connecting" | "connected" | "reconnecting" | "error";
 

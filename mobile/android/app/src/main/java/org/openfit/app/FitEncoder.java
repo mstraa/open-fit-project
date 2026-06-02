@@ -89,7 +89,10 @@ public final class FitEncoder {
         }
 
         int firstSec = bySec.isEmpty() ? 0 : bySec.firstKey();
-        int lastSec = bySec.isEmpty() ? 0 : bySec.lastKey();
+        // With no 1 Hz records (no HR strap + no GPS fix) fall back to the timer
+        // so the session still advertises the workout's real duration instead of
+        // a zero-length window. The server now persists such record-less sessions.
+        int lastSec = bySec.isEmpty() ? (int) (Math.max(0, timerMs) / 1000L) : bySec.lastKey();
         long startTs = fitTs(startUnixSec + firstSec);
         long endTs = fitTs(startUnixSec + lastSec);
         long elapsedSec = Math.max(0, lastSec - firstSec);

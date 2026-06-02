@@ -24,7 +24,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use ofit_core::{
     Activity, MetricSourcePreference, PreferenceScope, RawRecording, Sample, Source, SourceKind,
-    Sport, Stream, StreamKind, WellnessSample,
+    Sport, Stream, StreamKind, WellnessKind, WellnessSample,
 };
 use sqlx::any::{AnyPoolOptions, AnyRow};
 use sqlx::{AnyPool, Row};
@@ -326,12 +326,58 @@ impl Db {
 
     /// Batch-insert wellness samples (the streaming/relay write path). One
     /// transaction so a burst of HR samples commits together.
+    /// Insert RAW wellness samples (device/import ingest) and mark each touched
+    /// UTC day dirty IN THE SAME TRANSACTION — so the background analytics worker
+    /// recomputes only those days, and a crash can't leave data un-recomputed
+    /// (data + dirty-mark commit together).
     pub async fn insert_wellness_samples(&self, samples: &[WellnessSample]) -> Result<()> {
+        self.write_wellness(samples, true, true).await
+    }
+
+    /// Insert COMPUTED wellness (the recompute's own gap-fill: body battery,
+    /// derived resting HR, HR-estimated sleep). Same write as
+    /// [`Self::insert_wellness_samples`] but does **NOT** mark days dirty — these
+    /// are algorithm OUTPUTS, not raw ingest, so they must never re-trigger the
+    /// worker (which would loop) — and skips the max-HR filter (outputs are valid).
+    pub async fn insert_computed_wellness(&self, samples: &[WellnessSample]) -> Result<()> {
+        self.write_wellness(samples, false, false).await
+    }
+
+    /// Insert RAW wellness for a **one-time backfill** (e.g. a 6-year Garmin
+    /// export). Applies the max-HR filter like [`Self::insert_wellness_samples`]
+    /// but does **NOT** mark days dirty: a backfill would otherwise mark thousands
+    /// of days and thrash the incremental worker — the caller runs a single full
+    /// recompute at the end instead.
+    pub async fn insert_wellness_backfill(&self, samples: &[WellnessSample]) -> Result<()> {
+        self.write_wellness(samples, false, true).await
+    }
+
+    /// Shared wellness writer. `mark_dirty` queues each touched UTC day for the
+    /// incremental worker (in the SAME tx — crash-safe); `filter_hr` drops
+    /// heart-rate artifacts above the "Max HR Allowed" setting (default 200).
+    async fn write_wellness(
+        &self,
+        samples: &[WellnessSample],
+        mark_dirty: bool,
+        filter_hr: bool,
+    ) -> Result<()> {
         if samples.is_empty() {
             return Ok(());
         }
+        let max_hr: f64 = if filter_hr {
+            self.get_setting("max_hr_allowed")
+                .await?
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(200.0)
+        } else {
+            f64::INFINITY
+        };
         let mut tx = self.pool.begin().await?;
+        let mut days: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for w in samples {
+            if filter_hr && w.kind == WellnessKind::HeartRate && w.value > max_hr {
+                continue; // drop the artifact (and don't dirty its day on its account)
+            }
             sqlx::query(&self.p("INSERT INTO wellness_samples (id, source_id, kind, value, ts) \
                  VALUES (?, ?, ?, ?, ?) \
                  ON CONFLICT (source_id, kind, ts) DO UPDATE SET value = excluded.value"))
@@ -342,9 +388,92 @@ impl Db {
                 .bind(w.ts.to_rfc3339())
                 .execute(&mut *tx)
                 .await?;
+            if mark_dirty {
+                days.insert(w.ts.date_naive().to_string());
+            }
+        }
+        if mark_dirty {
+            let now = Utc::now().to_rfc3339();
+            for day in &days {
+                sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
+                     VALUES ('day', ?, ?) \
+                     ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
+                    .bind(day)
+                    .bind(&now)
+                    .execute(&mut *tx)
+                    .await?;
+            }
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    // ---- incremental-recompute dirty queue ----
+
+    /// Mark an activity (and optionally its day) dirty for the worker.
+    pub async fn mark_activity_dirty(
+        &self,
+        activity_id: Uuid,
+        day: Option<chrono::NaiveDate>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let n = now.to_rfc3339();
+        sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
+             VALUES ('activity', ?, ?) \
+             ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
+            .bind(activity_id.to_string())
+            .bind(&n)
+            .execute(&self.pool)
+            .await?;
+        if let Some(d) = day {
+            sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
+                 VALUES ('day', ?, ?) \
+                 ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
+                .bind(d.to_string())
+                .bind(&n)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// All dirty units, oldest mark first: `(kind, unit_id)`.
+    pub async fn list_dirty(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT kind, unit_id FROM dirty_units ORDER BY marked_at")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get::<String, _>("kind"), r.get::<String, _>("unit_id")))
+            .collect())
+    }
+
+    /// Clear one dirty unit (call in the SAME tx/step that persisted its outputs).
+    pub async fn clear_dirty(&self, kind: &str, unit_id: &str) -> Result<()> {
+        sqlx::query(&self.p("DELETE FROM dirty_units WHERE kind = ? AND unit_id = ?"))
+            .bind(kind)
+            .bind(unit_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// How many units are queued (for the status indicator).
+    pub async fn count_dirty(&self) -> Result<i64> {
+        let row: AnyRow = sqlx::query(&self.p("SELECT COUNT(*) AS n FROM dirty_units"))
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("n"))
+    }
+
+    /// Clear the ENTIRE dirty queue. Used after a one-time backfill that runs a
+    /// single full recompute at the end (any days/activities marked along the way
+    /// are already covered, so the worker has nothing left to do).
+    pub async fn clear_all_dirty(&self) -> Result<u64> {
+        let r = sqlx::query("DELETE FROM dirty_units")
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
     }
 
     /// Delete one kind of wellness sample from a source — used to fully replace a
@@ -357,6 +486,26 @@ impl Db {
         let r = sqlx::query(&self.p("DELETE FROM wellness_samples WHERE source_id = ? AND kind = ?"))
             .bind(source_id.to_string())
             .bind(serde_plain(&kind))
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Delete wellness samples of one `kind` in a `[from, to)` window, across ALL
+    /// sources — used to drop degenerate imported sleep stages (all-light, no
+    /// deep/REM) for a night before replacing them with an HR-derived estimate.
+    /// `from`/`to` are RFC3339 (timestamps are ISO-8601 TEXT that sorts
+    /// chronologically), matching [`Self::wellness_samples`].
+    pub async fn delete_wellness_kind_in_range(
+        &self,
+        kind: WellnessKind,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<u64> {
+        let r = sqlx::query(&self.p("DELETE FROM wellness_samples WHERE kind = ? AND ts >= ? AND ts < ?"))
+            .bind(serde_plain(&kind))
+            .bind(from.to_rfc3339())
+            .bind(to.to_rfc3339())
             .execute(&self.pool)
             .await?;
         Ok(r.rows_affected())
@@ -401,6 +550,27 @@ impl Db {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Read one setting's raw value, if set.
+    pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT value FROM settings WHERE key = ?"))
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get::<String, _>("value")))
+    }
+
+    /// Delete wellness samples of `kind` whose value exceeds `threshold` (used to
+    /// scrub device-artifact spikes, e.g. HR > the "Max HR Allowed" setting).
+    /// Returns the number of rows removed.
+    pub async fn delete_wellness_above(&self, kind: WellnessKind, threshold: f64) -> Result<u64> {
+        let r = sqlx::query(&self.p("DELETE FROM wellness_samples WHERE kind = ? AND value > ?"))
+            .bind(serde_plain(&kind))
+            .bind(threshold)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
     }
 
     /// Get-or-create a [`Source`] by `(kind, name)`, returning its id. Used by the
@@ -523,6 +693,35 @@ impl Db {
         rows.into_iter().map(row_to_source).collect()
     }
 
+    /// Latest data timestamp per source — `max(wellness ts, recording ended_at)`,
+    /// the "last synced" date shown per device. RFC3339 TEXT sorts chronologically,
+    /// so `MAX(...)` is correct on both SQLite and Postgres.
+    pub async fn last_sync_per_source(&self) -> Result<std::collections::HashMap<Uuid, DateTime<Utc>>> {
+        let mut map: std::collections::HashMap<Uuid, DateTime<Utc>> = std::collections::HashMap::new();
+        let mut fold = |rows: Vec<AnyRow>| {
+            for r in rows {
+                let (Ok(id), Ok(ts)) = (
+                    parse_uuid(&r.get::<String, _>("source_id")),
+                    parse_ts(&r.get::<String, _>("m")),
+                ) else {
+                    continue;
+                };
+                map.entry(id).and_modify(|cur| { if ts > *cur { *cur = ts; } }).or_insert(ts);
+            }
+        };
+        fold(
+            sqlx::query("SELECT source_id, MAX(ts) AS m FROM wellness_samples GROUP BY source_id")
+                .fetch_all(&self.pool)
+                .await?,
+        );
+        fold(
+            sqlx::query("SELECT source_id, MAX(ended_at) AS m FROM raw_recordings GROUP BY source_id")
+                .fetch_all(&self.pool)
+                .await?,
+        );
+        Ok(map)
+    }
+
     /// Store a [`Stream`] as a JSON sample blob (per the `streams` table shape).
     pub async fn insert_stream(&self, s: &Stream) -> Result<()> {
         let samples_json = serde_json::to_string(&s.samples)
@@ -561,6 +760,19 @@ impl Db {
     /// [`Self::set_activity_recordings`]). Re-running clustering on import may
     /// widen an activity's window, so this updates in place when the id exists.
     pub async fn upsert_activity(&self, a: &Activity) -> Result<()> {
+        self.write_activity(a, true).await
+    }
+
+    /// Upsert an activity WITHOUT marking it (or its day) dirty — for a one-time
+    /// backfill that runs a single full recompute at the end. See
+    /// [`Self::insert_wellness_backfill`] for the rationale.
+    pub async fn upsert_activity_silent(&self, a: &Activity) -> Result<()> {
+        self.write_activity(a, false).await
+    }
+
+    /// Shared activity upsert. `mark_dirty` queues the activity + its day for the
+    /// incremental worker (per-activity training-effect/load + that day's volume).
+    async fn write_activity(&self, a: &Activity, mark_dirty: bool) -> Result<()> {
         // Portable upsert without ON CONFLICT dialect differences: try UPDATE,
         // INSERT if nothing was updated.
         let updated = sqlx::query(&self.p("UPDATE activities SET sport = ?, started_at = ?, ended_at = ?, \
@@ -583,6 +795,23 @@ impl Db {
             .bind(a.created_at.to_rfc3339())
             .execute(&self.pool)
             .await?;
+        }
+        if mark_dirty {
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
+                 VALUES ('activity', ?, ?) \
+                 ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
+                .bind(a.id.to_string())
+                .bind(&now)
+                .execute(&self.pool)
+                .await?;
+            sqlx::query(&self.p("INSERT INTO dirty_units (kind, unit_id, marked_at) \
+                 VALUES ('day', ?, ?) \
+                 ON CONFLICT (kind, unit_id) DO UPDATE SET marked_at = excluded.marked_at"))
+                .bind(a.started_at.date_naive().to_string())
+                .bind(&now)
+                .execute(&self.pool)
+                .await?;
         }
         Ok(())
     }
@@ -610,7 +839,9 @@ impl Db {
 
     /// Delete an activity header row and its membership join rows. The member
     /// [`RawRecording`]s and their [`Stream`]s are **not** touched (raw data is
-    /// never lost); only the grouping is removed.
+    /// never lost); only the grouping is removed. Used by the summary-dedup
+    /// maintenance task. For a user-requested *hard* delete (raw data and all),
+    /// see [`Self::delete_activity_cascade`].
     pub async fn delete_activity(&self, activity_id: Uuid) -> Result<()> {
         sqlx::query(&self.p("DELETE FROM activity_recordings WHERE activity_id = ?"))
             .bind(activity_id.to_string())
@@ -621,6 +852,145 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Delete every derived metric AND stream for one subject
+    /// (`subject_kind` = `"activity"` | `"day"`, `subject_id` = its TEXT key).
+    /// Used when a subject is removed (e.g. an activity is hard-deleted) so its
+    /// stale derived outputs don't linger.
+    pub async fn delete_derived_for_subject(
+        &self,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> Result<()> {
+        sqlx::query(&self.p("DELETE FROM derived_metrics WHERE subject_kind = ? AND subject_id = ?"))
+            .bind(subject_kind)
+            .bind(subject_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(&self.p("DELETE FROM derived_streams WHERE subject_kind = ? AND subject_id = ?"))
+            .bind(subject_kind)
+            .bind(subject_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// **Hard-delete** one raw recording: its streams, every activity-membership
+    /// join row that references it, and the `raw_recordings` row itself. This is
+    /// irreversible (the raw bytes/streams are gone) — used by the explicit,
+    /// user-confirmed "delete source" action, NOT by automatic dedup/clustering
+    /// (which always preserve raw data).
+    ///
+    /// Does **not** touch the activity header(s) it belonged to; the caller is
+    /// responsible for re-tightening / removing any now-empty activity. All three
+    /// deletes run in **one transaction** so an irreversible hard-delete can never
+    /// half-apply (e.g. drop the streams but leave an orphan `raw_recordings` row).
+    pub async fn delete_recording(&self, recording_id: Uuid) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let rid = recording_id.to_string();
+        sqlx::query(&self.p("DELETE FROM activity_recordings WHERE recording_id = ?"))
+            .bind(&rid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(&self.p("DELETE FROM streams WHERE recording_id = ?"))
+            .bind(&rid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(&self.p("DELETE FROM raw_recordings WHERE id = ?"))
+            .bind(&rid)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// **Hard-delete** an entire activity and everything attached to it: the
+    /// activity header, its membership rows, each member recording's streams +
+    /// row (only when no *other* activity still references that recording), its
+    /// derived metrics/streams, gear assignments, per-activity source
+    /// preferences, and any dirty-queue entry for it.
+    ///
+    /// The whole cascade runs in a **single transaction**, so this irreversible
+    /// delete is all-or-nothing — a mid-cascade failure can't leave a ghost
+    /// activity or orphaned recording behind, and the in-loop "referenced
+    /// elsewhere?" guard reads a consistent in-transaction view.
+    ///
+    /// Returns the ids of the recordings actually deleted (for logging /
+    /// verification). The caller should refold any cross-activity aggregates
+    /// (e.g. training load) afterwards, since this activity's contribution is now
+    /// gone.
+    pub async fn delete_activity_cascade(&self, activity_id: Uuid) -> Result<Vec<Uuid>> {
+        let aid = activity_id.to_string();
+        let mut tx = self.pool.begin().await?;
+
+        // Member recordings (read inside the tx for a consistent view).
+        let rec_ids: Vec<Uuid> = {
+            let rows =
+                sqlx::query(&self.p("SELECT recording_id FROM activity_recordings WHERE activity_id = ?"))
+                    .bind(&aid)
+                    .fetch_all(&mut *tx)
+                    .await?;
+            rows.into_iter()
+                .map(|r| parse_uuid(&r.get::<String, _>("recording_id")))
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        // Derived outputs for this activity subject (metrics + streams).
+        for table in ["derived_metrics", "derived_streams"] {
+            sqlx::query(&self.p(&format!(
+                "DELETE FROM {table} WHERE subject_kind = 'activity' AND subject_id = ?"
+            )))
+            .bind(&aid)
+            .execute(&mut *tx)
+            .await?;
+        }
+        // Gear assignments + per-activity source preferences scoped to it, then
+        // membership (dropped first so the per-recording guard below is accurate).
+        for sql in [
+            "DELETE FROM activity_gear WHERE activity_id = ?",
+            "DELETE FROM metric_source_preferences WHERE activity_id = ?",
+            "DELETE FROM activity_recordings WHERE activity_id = ?",
+        ] {
+            sqlx::query(&self.p(sql)).bind(&aid).execute(&mut *tx).await?;
+        }
+
+        // Delete each member recording's data — but only if no other activity
+        // still references it (recordings normally belong to exactly one).
+        let mut deleted = Vec::new();
+        for rid in &rec_ids {
+            let rid_s = rid.to_string();
+            let still: Option<AnyRow> = sqlx::query(
+                &self.p("SELECT 1 AS one FROM activity_recordings WHERE recording_id = ? LIMIT 1"),
+            )
+            .bind(&rid_s)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if still.is_none() {
+                sqlx::query(&self.p("DELETE FROM streams WHERE recording_id = ?"))
+                    .bind(&rid_s)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query(&self.p("DELETE FROM raw_recordings WHERE id = ?"))
+                    .bind(&rid_s)
+                    .execute(&mut *tx)
+                    .await?;
+                deleted.push(*rid);
+            }
+        }
+
+        // The activity header + its dirty-queue entry.
+        sqlx::query(&self.p("DELETE FROM activities WHERE id = ?"))
+            .bind(&aid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(&self.p("DELETE FROM dirty_units WHERE kind = 'activity' AND unit_id = ?"))
+            .bind(&aid)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(deleted)
     }
 
     /// Detach one recording from an activity into its **own** new
@@ -708,7 +1078,7 @@ impl Db {
 
     /// List activities (header rows), most recent first.
     pub async fn list_activities(&self) -> Result<Vec<Activity>> {
-        let rows = sqlx::query(&self.p("SELECT id, sport, started_at, ended_at, user_confirmed, created_at \
+        let rows = sqlx::query(&self.p("SELECT id, sport, started_at, ended_at, user_confirmed, created_at, distance_m, calories \
              FROM activities ORDER BY started_at DESC"))
         .fetch_all(&self.pool)
         .await?;
@@ -722,7 +1092,7 @@ impl Db {
 
     /// Fetch one activity with its recording membership populated, if present.
     pub async fn get_activity(&self, id: Uuid) -> Result<Option<Activity>> {
-        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT id, sport, started_at, ended_at, user_confirmed, created_at \
+        let row: Option<AnyRow> = sqlx::query(&self.p("SELECT id, sport, started_at, ended_at, user_confirmed, created_at, distance_m, calories \
              FROM activities WHERE id = ?"))
         .bind(id.to_string())
         .fetch_optional(&self.pool)
@@ -775,6 +1145,26 @@ impl Db {
             }
         }
         Ok(map)
+    }
+
+    /// Batch-fetch many recordings in one query (kills the per-activity N+1 in
+    /// the recompute hot path). Empty input → empty result.
+    pub async fn get_recordings(&self, ids: &[Uuid]) -> Result<Vec<RawRecording>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT id, source_id, content_hash, sport, started_at, ended_at, metadata, ingested_at \
+             FROM raw_recordings WHERE id IN ({placeholders})"
+        );
+        let rewritten = self.p(&sql);
+        let mut q = sqlx::query(&rewritten);
+        for id in ids {
+            q = q.bind(id.to_string());
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        rows.into_iter().map(row_to_recording).collect()
     }
 
     /// Insert a [`MetricSourcePreference`].
@@ -841,11 +1231,12 @@ impl Db {
             let (sk, sid) = subject_parts(&m.subject);
             sqlx::query(&self.p(
                 "DELETE FROM derived_metrics \
-                 WHERE plugin_id = ? AND plugin_version = ? \
+                 WHERE plugin_id = ? AND plugin_version = ? AND params_hash = ? \
                    AND subject_kind = ? AND subject_id = ? AND name = ?",
             ))
             .bind(&m.plugin.plugin_id)
             .bind(&m.plugin.version)
+            .bind(&m.plugin.params_hash)
             .bind(&sk)
             .bind(&sid)
             .bind(&m.name)
@@ -853,12 +1244,13 @@ impl Db {
             .await?;
             sqlx::query(&self.p(
                 "INSERT INTO derived_metrics \
-                 (id, plugin_id, plugin_version, subject_kind, subject_id, name, value, computed_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, value, computed_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ))
             .bind(m.id.to_string())
             .bind(&m.plugin.plugin_id)
             .bind(&m.plugin.version)
+            .bind(&m.plugin.params_hash)
             .bind(&sk)
             .bind(&sid)
             .bind(&m.name)
@@ -873,11 +1265,12 @@ impl Db {
                 .map_err(|e| DbError::Config(format!("encode derived stream samples: {e}")))?;
             sqlx::query(&self.p(
                 "DELETE FROM derived_streams \
-                 WHERE plugin_id = ? AND plugin_version = ? \
+                 WHERE plugin_id = ? AND plugin_version = ? AND params_hash = ? \
                    AND subject_kind = ? AND subject_id = ? AND name = ?",
             ))
             .bind(&s.plugin.plugin_id)
             .bind(&s.plugin.version)
+            .bind(&s.plugin.params_hash)
             .bind(&sk)
             .bind(&sid)
             .bind(&s.name)
@@ -885,12 +1278,13 @@ impl Db {
             .await?;
             sqlx::query(&self.p(
                 "INSERT INTO derived_streams \
-                 (id, plugin_id, plugin_version, subject_kind, subject_id, name, sample_count, samples, computed_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, sample_count, samples, computed_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ))
             .bind(s.id.to_string())
             .bind(&s.plugin.plugin_id)
             .bind(&s.plugin.version)
+            .bind(&s.plugin.params_hash)
             .bind(&sk)
             .bind(&sid)
             .bind(&s.name)
@@ -923,6 +1317,200 @@ impl Db {
         Ok(m.rows_affected() + s.rows_affected())
     }
 
+    /// Purge **orphan** derived rows of the *given variants only* — rows whose
+    /// `computed_at` predates `cutoff` for exactly the `(plugin_id, version,
+    /// params_hash)` triples a full recompute just re-stamped. This cleans up a
+    /// subject that no longer produces output (e.g. a deleted day) WITHOUT
+    /// touching any OTHER derivation variant — so old parameter/version variants
+    /// kept for comparison survive (unlike the blunt [`Self::purge_derived_before`]).
+    pub async fn purge_derived_orphans(
+        &self,
+        cutoff: DateTime<Utc>,
+        variants: &[(String, String, String)],
+    ) -> Result<u64> {
+        let c = cutoff.to_rfc3339();
+        let mut n = 0u64;
+        for (plugin_id, version, params_hash) in variants {
+            for table in ["derived_metrics", "derived_streams"] {
+                let r = sqlx::query(&self.p(&format!(
+                    "DELETE FROM {table} \
+                     WHERE plugin_id = ? AND plugin_version = ? AND params_hash = ? \
+                       AND computed_at < ?"
+                )))
+                .bind(plugin_id)
+                .bind(version)
+                .bind(params_hash)
+                .bind(&c)
+                .execute(&self.pool)
+                .await?;
+                n += r.rows_affected();
+            }
+        }
+        Ok(n)
+    }
+
+    /// Record (upsert) a derivation variant in the catalog: a distinct
+    /// `(plugin_id, version, params_hash)` with the parameter set that produced it.
+    /// Refreshes `last_computed_at` (+ params_json/label) on repeat; stamps
+    /// `first_computed_at` on first sight. Drives the variant switcher + diff UI.
+    pub async fn register_derivation(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        params_hash: &str,
+        params_json: &str,
+        label: &str,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let ts = now.to_rfc3339();
+        let updated = sqlx::query(&self.p(
+            "UPDATE derivations SET params_json = ?, label = ?, last_computed_at = ? \
+             WHERE plugin_id = ? AND plugin_version = ? AND params_hash = ?",
+        ))
+        .bind(params_json)
+        .bind(label)
+        .bind(&ts)
+        .bind(plugin_id)
+        .bind(version)
+        .bind(params_hash)
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            sqlx::query(&self.p(
+                "INSERT INTO derivations \
+                 (plugin_id, plugin_version, params_hash, params_json, label, first_computed_at, last_computed_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ))
+            .bind(plugin_id)
+            .bind(version)
+            .bind(params_hash)
+            .bind(params_json)
+            .bind(label)
+            .bind(&ts)
+            .bind(&ts)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// List catalogued derivation variants, optionally filtered to one plugin,
+    /// newest-computed first.
+    pub async fn list_derivations(&self, plugin_id: Option<&str>) -> Result<Vec<Derivation>> {
+        let rows = sqlx::query(&self.p(
+            "SELECT plugin_id, plugin_version, params_hash, params_json, label, first_computed_at, last_computed_at \
+             FROM derivations WHERE (? IS NULL OR plugin_id = ?) \
+             ORDER BY plugin_id, last_computed_at DESC",
+        ))
+        .bind(plugin_id)
+        .bind(plugin_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Derivation {
+                plugin_id: r.get::<String, _>("plugin_id"),
+                version: r.get::<String, _>("plugin_version"),
+                params_hash: r.get::<String, _>("params_hash"),
+                params_json: r.get::<String, _>("params_json"),
+                label: r.get::<String, _>("label"),
+                first_computed_at: r.get::<String, _>("first_computed_at"),
+                last_computed_at: r.get::<String, _>("last_computed_at"),
+            })
+            .collect())
+    }
+
+    /// Pin (upsert) which derivation variant a plugin resolves to, for a scope.
+    /// `subject_id` is `""` for the global default or an activity uuid for an
+    /// activity override. Portable upsert keyed on `(scope, subject_id, plugin_id)`.
+    pub async fn set_derivation_selection(
+        &self,
+        scope: &str,
+        subject_id: &str,
+        plugin_id: &str,
+        version: &str,
+        params_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let ts = now.to_rfc3339();
+        let updated = sqlx::query(&self.p(
+            "UPDATE derivation_selection SET plugin_version = ?, params_hash = ?, updated_at = ? \
+             WHERE scope = ? AND subject_id = ? AND plugin_id = ?",
+        ))
+        .bind(version)
+        .bind(params_hash)
+        .bind(&ts)
+        .bind(scope)
+        .bind(subject_id)
+        .bind(plugin_id)
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            sqlx::query(&self.p(
+                "INSERT INTO derivation_selection \
+                 (scope, subject_id, plugin_id, plugin_version, params_hash, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            ))
+            .bind(scope)
+            .bind(subject_id)
+            .bind(plugin_id)
+            .bind(version)
+            .bind(params_hash)
+            .bind(&ts)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Remove a pinned selection (revert to the resolution fallback). Returns rows
+    /// removed.
+    pub async fn clear_derivation_selection(
+        &self,
+        scope: &str,
+        subject_id: &str,
+        plugin_id: &str,
+    ) -> Result<u64> {
+        let r = sqlx::query(&self.p(
+            "DELETE FROM derivation_selection \
+             WHERE scope = ? AND subject_id = ? AND plugin_id = ?",
+        ))
+        .bind(scope)
+        .bind(subject_id)
+        .bind(plugin_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// The selections relevant to resolving a subject: all global defaults, plus
+    /// (when `activity_id` is given) that activity's overrides. Exactly the slice
+    /// the analytics resolver needs.
+    pub async fn list_derivation_selections(
+        &self,
+        activity_id: Option<&str>,
+    ) -> Result<Vec<DerivationSelection>> {
+        let rows = sqlx::query(&self.p(
+            "SELECT scope, subject_id, plugin_id, plugin_version, params_hash \
+             FROM derivation_selection \
+             WHERE scope = 'default' OR (? IS NOT NULL AND subject_id = ?)",
+        ))
+        .bind(activity_id)
+        .bind(activity_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| DerivationSelection {
+                scope: r.get::<String, _>("scope"),
+                subject_id: r.get::<String, _>("subject_id"),
+                plugin_id: r.get::<String, _>("plugin_id"),
+                version: r.get::<String, _>("plugin_version"),
+                params_hash: r.get::<String, _>("params_hash"),
+            })
+            .collect())
+    }
+
     /// All derived **metrics** for one subject (an activity id or a day id),
     /// ordered by plugin then name.
     pub async fn derived_metrics_for_subject(
@@ -931,9 +1519,9 @@ impl Db {
     ) -> Result<Vec<ofit_core::DerivedMetric>> {
         let (sk, sid) = subject_parts(&subject);
         let rows = sqlx::query(&self.p(
-            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, value, computed_at \
+            "SELECT id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, value, computed_at \
              FROM derived_metrics WHERE subject_kind = ? AND subject_id = ? \
-             ORDER BY plugin_id, plugin_version, name",
+             ORDER BY plugin_id, plugin_version, params_hash, name",
         ))
         .bind(&sk)
         .bind(&sid)
@@ -949,9 +1537,9 @@ impl Db {
     ) -> Result<Vec<ofit_core::DerivedStream>> {
         let (sk, sid) = subject_parts(&subject);
         let rows = sqlx::query(&self.p(
-            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, samples, computed_at \
+            "SELECT id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, samples, computed_at \
              FROM derived_streams WHERE subject_kind = ? AND subject_id = ? \
-             ORDER BY plugin_id, plugin_version, name",
+             ORDER BY plugin_id, plugin_version, params_hash, name",
         ))
         .bind(&sk)
         .bind(&sid)
@@ -967,16 +1555,20 @@ impl Db {
         &self,
         plugin_id: &str,
         version: &str,
+        params_hash: Option<&str>,
         name: Option<&str>,
     ) -> Result<Vec<ofit_core::DerivedMetric>> {
         let rows = sqlx::query(&self.p(
-            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, value, computed_at \
+            "SELECT id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, value, computed_at \
              FROM derived_metrics \
-             WHERE plugin_id = ? AND plugin_version = ? AND (? IS NULL OR name = ?) \
+             WHERE plugin_id = ? AND plugin_version = ? \
+               AND (? IS NULL OR params_hash = ?) AND (? IS NULL OR name = ?) \
              ORDER BY computed_at",
         ))
         .bind(plugin_id)
         .bind(version)
+        .bind(params_hash)
+        .bind(params_hash)
         .bind(name)
         .bind(name)
         .fetch_all(&self.pool)
@@ -990,21 +1582,68 @@ impl Db {
         &self,
         plugin_id: &str,
         version: &str,
+        params_hash: Option<&str>,
         name: Option<&str>,
     ) -> Result<Vec<ofit_core::DerivedStream>> {
         let rows = sqlx::query(&self.p(
-            "SELECT id, plugin_id, plugin_version, subject_kind, subject_id, name, samples, computed_at \
+            "SELECT id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, samples, computed_at \
              FROM derived_streams \
-             WHERE plugin_id = ? AND plugin_version = ? AND (? IS NULL OR name = ?) \
+             WHERE plugin_id = ? AND plugin_version = ? \
+               AND (? IS NULL OR params_hash = ?) AND (? IS NULL OR name = ?) \
              ORDER BY computed_at",
         ))
         .bind(plugin_id)
         .bind(version)
+        .bind(params_hash)
+        .bind(params_hash)
         .bind(name)
         .bind(name)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(row_to_derived_stream).collect()
+    }
+
+    /// The single most-recently-computed derived metric value for
+    /// `(plugin, version, name)` — `ORDER BY computed_at DESC LIMIT 1` instead of
+    /// fetching every row and popping.
+    pub async fn latest_derived_metric(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        name: &str,
+    ) -> Result<Option<f64>> {
+        let row: Option<AnyRow> = sqlx::query(&self.p(
+            "SELECT value FROM derived_metrics \
+             WHERE plugin_id = ? AND plugin_version = ? AND name = ? \
+             ORDER BY computed_at DESC LIMIT 1",
+        ))
+        .bind(plugin_id)
+        .bind(version)
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<f64, _>("value")))
+    }
+
+    /// The single most-recently-computed derived stream for `(plugin, version, name)`.
+    pub async fn latest_derived_stream(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        name: &str,
+    ) -> Result<Option<ofit_core::DerivedStream>> {
+        let row: Option<AnyRow> = sqlx::query(&self.p(
+            "SELECT id, plugin_id, plugin_version, params_hash, subject_kind, subject_id, name, samples, computed_at \
+             FROM derived_streams \
+             WHERE plugin_id = ? AND plugin_version = ? AND name = ? \
+             ORDER BY computed_at DESC LIMIT 1",
+        ))
+        .bind(plugin_id)
+        .bind(version)
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_derived_stream).transpose()
     }
 
     /// Count derived metrics + streams (verification helper).
@@ -1029,8 +1668,255 @@ impl Db {
             recording_ids,
             user_confirmed: r.get::<i64, _>("user_confirmed") != 0,
             created_at: parse_ts(&r.get::<String, _>("created_at"))?,
+            distance_m: r.get::<Option<f64>, _>("distance_m"),
+            calories: r.get::<Option<f64>, _>("calories"),
         })
     }
+
+    /// Cache an activity's computed distance (m) + calories (kcal) on its row.
+    /// Written by the analytics recompute so the list/totals match the detail.
+    pub async fn set_activity_metrics(
+        &self,
+        id: Uuid,
+        distance_m: Option<f64>,
+        calories: Option<f64>,
+    ) -> Result<()> {
+        sqlx::query(&self.p("UPDATE activities SET distance_m = ?, calories = ? WHERE id = ?"))
+            .bind(distance_m)
+            .bind(calories)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ---- gear (equipment mileage tracking) ----
+
+    /// All gear, oldest first.
+    pub async fn list_gear(&self) -> Result<Vec<ofit_core::Gear>> {
+        let rows = sqlx::query(&self.p(
+            "SELECT id, name, description, sport, initial_km, retire_km, used_km, icon, created_at \
+             FROM gear ORDER BY created_at ASC",
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_gear).collect()
+    }
+
+    /// Fetch one gear by id.
+    pub async fn get_gear(&self, id: Uuid) -> Result<Option<ofit_core::Gear>> {
+        let row: Option<AnyRow> = sqlx::query(&self.p(
+            "SELECT id, name, description, sport, initial_km, retire_km, used_km, icon, created_at \
+             FROM gear WHERE id = ?",
+        ))
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_gear).transpose()
+    }
+
+    /// Insert a new gear row.
+    pub async fn insert_gear(&self, g: &ofit_core::Gear) -> Result<()> {
+        sqlx::query(&self.p(
+            "INSERT INTO gear (id, name, description, sport, initial_km, retire_km, used_km, icon, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ))
+        .bind(g.id.to_string())
+        .bind(&g.name)
+        .bind(&g.description)
+        .bind(&g.sport)
+        .bind(g.initial_km)
+        .bind(g.retire_km)
+        .bind(g.used_km)
+        .bind(&g.icon)
+        .bind(g.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update an existing gear's editable fields.
+    pub async fn update_gear(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: &str,
+        sport: &str,
+        retire_km: f64,
+        used_km: f64,
+        icon: &str,
+    ) -> Result<()> {
+        sqlx::query(&self.p(
+            "UPDATE gear SET name = ?, description = ?, sport = ?, retire_km = ?, used_km = ?, icon = ? \
+             WHERE id = ?",
+        ))
+        .bind(name)
+        .bind(description)
+        .bind(sport)
+        .bind(retire_km)
+        .bind(used_km)
+        .bind(icon)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Delete a gear and any defaults/assignments that reference it.
+    pub async fn remove_gear(&self, id: Uuid) -> Result<()> {
+        let s = id.to_string();
+        sqlx::query(&self.p("DELETE FROM activity_gear WHERE gear_id = ?"))
+            .bind(&s)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(&self.p("DELETE FROM gear_defaults WHERE gear_id = ?"))
+            .bind(&s)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(&self.p("DELETE FROM gear WHERE id = ?"))
+            .bind(&s)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Default gear per activity type: `(sport, gear_id)` pairs.
+    pub async fn list_gear_defaults(&self) -> Result<Vec<(String, Uuid)>> {
+        let rows = sqlx::query("SELECT sport, gear_id FROM gear_defaults")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| Ok((r.get::<String, _>("sport"), parse_uuid(&r.get::<String, _>("gear_id"))?)))
+            .collect()
+    }
+
+    /// Set (or clear, when `gear_id` is `None`) the default gear for a type.
+    pub async fn set_gear_default(&self, sport: &str, gear_id: Option<Uuid>) -> Result<()> {
+        sqlx::query(&self.p("DELETE FROM gear_defaults WHERE sport = ?"))
+            .bind(sport)
+            .execute(&self.pool)
+            .await?;
+        if let Some(g) = gear_id {
+            sqlx::query(&self.p("INSERT INTO gear_defaults (sport, gear_id) VALUES (?, ?)"))
+                .bind(sport)
+                .bind(g.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// All per-activity gear assignments: `(activity_id, gear_id)` pairs.
+    pub async fn list_activity_gear(&self) -> Result<Vec<(Uuid, Uuid)>> {
+        let rows = sqlx::query("SELECT activity_id, gear_id FROM activity_gear")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    parse_uuid(&r.get::<String, _>("activity_id"))?,
+                    parse_uuid(&r.get::<String, _>("gear_id"))?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Replace the full gear set assigned to one activity (idempotent).
+    pub async fn set_activity_gear(&self, activity_id: Uuid, gear_ids: &[Uuid]) -> Result<()> {
+        let a = activity_id.to_string();
+        sqlx::query(&self.p("DELETE FROM activity_gear WHERE activity_id = ?"))
+            .bind(&a)
+            .execute(&self.pool)
+            .await?;
+        for g in gear_ids {
+            sqlx::query(&self.p("INSERT INTO activity_gear (activity_id, gear_id) VALUES (?, ?)"))
+                .bind(&a)
+                .bind(g.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Find a gear by its (unique-by-convention) display name — used so a Garmin
+    /// re-import updates the matching gear instead of duplicating it.
+    pub async fn find_gear_by_name(&self, name: &str) -> Result<Option<ofit_core::Gear>> {
+        let row: Option<AnyRow> = sqlx::query(&self.p(
+            "SELECT id, name, description, sport, initial_km, retire_km, used_km, icon, created_at \
+             FROM gear WHERE name = ?",
+        ))
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_gear).transpose()
+    }
+
+    // ---- personal records ----
+
+    /// All personal records, most recent first.
+    pub async fn list_personal_records(&self) -> Result<Vec<ofit_core::PersonalRecord>> {
+        let rows = sqlx::query(&self.p(
+            "SELECT id, record_type, value, unit, occurred_at, source, current \
+             FROM personal_records ORDER BY occurred_at DESC",
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_personal_record).collect()
+    }
+
+    /// Insert a personal record.
+    pub async fn insert_personal_record(&self, pr: &ofit_core::PersonalRecord) -> Result<()> {
+        sqlx::query(&self.p(
+            "INSERT INTO personal_records (id, record_type, value, unit, occurred_at, source, current) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ))
+        .bind(pr.id.to_string())
+        .bind(&pr.record_type)
+        .bind(pr.value)
+        .bind(&pr.unit)
+        .bind(pr.occurred_at.to_rfc3339())
+        .bind(&pr.source)
+        .bind(pr.current as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Delete every personal record from a source — idempotent re-import (replace,
+    /// don't duplicate). Returns rows removed.
+    pub async fn delete_personal_records_for_source(&self, source: &str) -> Result<u64> {
+        let r = sqlx::query(&self.p("DELETE FROM personal_records WHERE source = ?"))
+            .bind(source)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+}
+
+fn row_to_personal_record(r: AnyRow) -> Result<ofit_core::PersonalRecord> {
+    Ok(ofit_core::PersonalRecord {
+        id: parse_uuid(&r.get::<String, _>("id"))?,
+        record_type: r.get::<String, _>("record_type"),
+        value: r.get::<f64, _>("value"),
+        unit: r.get::<String, _>("unit"),
+        occurred_at: parse_ts(&r.get::<String, _>("occurred_at"))?,
+        source: r.get::<String, _>("source"),
+        current: r.get::<i64, _>("current") != 0,
+    })
+}
+
+fn row_to_gear(r: AnyRow) -> Result<ofit_core::Gear> {
+    Ok(ofit_core::Gear {
+        id: parse_uuid(&r.get::<String, _>("id"))?,
+        name: r.get::<String, _>("name"),
+        description: r.get::<String, _>("description"),
+        sport: r.get::<String, _>("sport"),
+        initial_km: r.get::<f64, _>("initial_km"),
+        retire_km: r.get::<f64, _>("retire_km"),
+        used_km: r.get::<f64, _>("used_km"),
+        icon: r.get::<String, _>("icon"),
+        created_at: parse_ts(&r.get::<String, _>("created_at"))?,
+    })
 }
 
 fn row_to_source(r: AnyRow) -> Result<Source> {
@@ -1096,6 +1982,45 @@ fn row_to_wellness(r: AnyRow) -> Result<WellnessSample> {
     })
 }
 
+/// A catalogued derivation variant: one distinct `(plugin_id, version,
+/// params_hash)` with the parameter set (`params_json`) that produced it and when
+/// it was first/last computed. Returned by [`Db::list_derivations`].
+#[derive(Debug, Clone)]
+pub struct Derivation {
+    /// Producing algorithm id.
+    pub plugin_id: String,
+    /// Producing algorithm code version.
+    pub version: String,
+    /// Fingerprint of the parameter set.
+    pub params_hash: String,
+    /// The effective parameters as a JSON object `{key: value}`.
+    pub params_json: String,
+    /// Optional human label.
+    pub label: String,
+    /// First time this variant was computed (RFC3339).
+    pub first_computed_at: String,
+    /// Most recent time this variant was computed (RFC3339).
+    pub last_computed_at: String,
+}
+
+/// A pinned active-variant selection: which `(plugin_version, params_hash)` a
+/// plugin's outputs resolve to, globally (`scope = "default"`) or for one activity
+/// (`scope = "activity"`, `subject_id` = activity uuid). Returned by
+/// [`Db::list_derivation_selections`].
+#[derive(Debug, Clone)]
+pub struct DerivationSelection {
+    /// `"default"` or `"activity"`.
+    pub scope: String,
+    /// Empty for default scope; the activity uuid for an activity override.
+    pub subject_id: String,
+    /// The plugin this selection pins.
+    pub plugin_id: String,
+    /// The pinned code version.
+    pub version: String,
+    /// The pinned parameter fingerprint.
+    pub params_hash: String,
+}
+
 /// Split a [`DerivedSubject`] into its stored `(subject_kind, subject_id)` TEXT
 /// columns: `("activity"|"day", uuid)`.
 fn subject_parts(subject: &ofit_core::DerivedSubject) -> (String, String) {
@@ -1121,7 +2046,8 @@ fn row_to_derived_metric(r: AnyRow) -> Result<ofit_core::DerivedMetric> {
         plugin: ofit_core::PluginRef::new(
             r.get::<String, _>("plugin_id"),
             r.get::<String, _>("plugin_version"),
-        ),
+        )
+        .with_params_hash(r.get::<String, _>("params_hash")),
         subject: subject_from_parts(
             &r.get::<String, _>("subject_kind"),
             &r.get::<String, _>("subject_id"),
@@ -1140,7 +2066,8 @@ fn row_to_derived_stream(r: AnyRow) -> Result<ofit_core::DerivedStream> {
         plugin: ofit_core::PluginRef::new(
             r.get::<String, _>("plugin_id"),
             r.get::<String, _>("plugin_version"),
-        ),
+        )
+        .with_params_hash(r.get::<String, _>("params_hash")),
         subject: subject_from_parts(
             &r.get::<String, _>("subject_kind"),
             &r.get::<String, _>("subject_id"),

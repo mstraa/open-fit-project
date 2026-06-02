@@ -20,7 +20,7 @@ import { EmptyState } from "../ui/EmptyState";
 import { useBle, serviceLabel, type Found, type Live } from "../ble/BleProvider";
 import { useNativeBle, type NativeConnStatus } from "../ble/native/NativeBleProvider";
 import { OpenFitBle } from "../ble/native/OpenFitBle";
-import { isNativeApp } from "../gadgetbridge/autoImportConfig";
+import { isNativeApp } from "../app/isNativeApp";
 
 export function BleDevices() {
   const { status, found, live, device, message, steps, scan, connect, disconnect } = useBle();

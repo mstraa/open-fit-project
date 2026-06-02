@@ -1,9 +1,8 @@
 //! # ofit-ingest
 //!
 //! File-import adapter: parses initial-backfill activity files (`.fit`, `.gpx`,
-//! `.tcx`) into the canonical [`ofit_core`] types. This is the **only**
-//! hardware-ingest path besides the future Gadgetbridge bridge — there are no
-//! vendor cloud connectors here (see PLAN.md / AGENTS.md: zero cloud).
+//! `.tcx`) into the canonical [`ofit_core`] types. There are no vendor cloud
+//! connectors here (see PLAN.md / AGENTS.md: zero cloud).
 //!
 //! ## Entry points
 //! - [`import_file`] — read a path, detect the format, parse.
@@ -32,17 +31,22 @@ use uuid::Uuid;
 
 mod builder;
 mod fit;
-pub mod gadgetbridge;
+pub mod fit_export;
+pub mod garmin;
 mod gpx;
 mod pipeline;
 mod tcx;
 pub mod zepp;
 
 pub use builder::RecordingBuilder;
-pub use gadgetbridge::{
-    read_db as read_gadgetbridge_db, GadgetbridgeDevice, GadgetbridgeImport, GbError, WellnessReading,
+pub use fit_export::{encode_activity_fit, FitRecordPoint};
+pub use garmin::{
+    read_garmin_export, unzip_garmin_export, GarminError, GarminGear, GarminImport, GarminPr,
 };
-pub use pipeline::{import_bytes_path, import_path, ImportOutcome, PipelineError};
+pub use pipeline::{
+    import_bytes_path, import_garmin_fit_dir, import_path, GarminFitStats, ImportOutcome,
+    PipelineError,
+};
 pub use zepp::{read_zepp_export, read_zepp_zip, ZeppError, ZeppImport, ZeppUser};
 
 /// Errors raised while importing a file.
@@ -79,6 +83,15 @@ pub enum Error {
     Empty {
         /// Detected format label.
         format: &'static str,
+        /// File name.
+        name: String,
+    },
+
+    /// A record-less FIT that is not an activity (e.g. a monitoring/sleep blob):
+    /// it parsed via the `session`-window fallback but its `file_id.type` is not
+    /// an activity, so it must not be persisted as one on the activity-import path.
+    #[error("{name:?} is not an activity recording")]
+    NotActivity {
         /// File name.
         name: String,
     },

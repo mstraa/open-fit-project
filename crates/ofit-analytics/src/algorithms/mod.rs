@@ -3,9 +3,11 @@
 pub mod anomaly;
 pub mod readiness;
 pub mod sleep;
+pub mod training_effect;
 pub mod training_load;
 
 pub use anomaly::AnomalyFlag;
 pub use readiness::Readiness;
 pub use sleep::Sleep;
+pub use training_effect::{EffortTe, TrainingEffect};
 pub use training_load::{day_from_uuid, day_uuid, TrainingLoad, TssMethod};
