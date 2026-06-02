@@ -133,7 +133,14 @@ pub fn read_zepp_export(root: &Path) -> Result<ZeppImport, ZeppError> {
 
     for (category, files) in &by_category {
         for file in files {
-            let text = std::fs::read_to_string(file)?;
+            // Be forgiving with consumer exports: a single unreadable or
+            // non-UTF-8 file must not abort the whole import. Skip it and move
+            // on (the macOS AppleDouble cruft that triggers this is already
+            // filtered in `collect_csvs`; this is defence in depth).
+            let Ok(text) = std::fs::read_to_string(file) else {
+                note(&mut skipped, &format!("{category}: skipped an unreadable/non-UTF-8 file"));
+                continue;
+            };
             match category.as_str() {
                 "HEARTRATE_AUTO" => parse_heartrate_auto(&text, &mut readings),
                 "SLEEP_MINUTE" => parse_sleep_minute(&text, &mut readings),
@@ -224,9 +231,19 @@ fn collect_csvs(dir: &Path, out: &mut BTreeMap<String, Vec<PathBuf>>) -> Result<
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Skip macOS archive cruft. Zips made/recompressed on macOS carry a
+        // `__MACOSX/` sidecar tree plus a `._*` AppleDouble resource fork
+        // mirroring every file. The forks end in `.csv` and live under the
+        // category folders, so without this they'd be collected as category
+        // CSVs — and they're binary, so reading them as text aborts the import.
+        if name == "__MACOSX" || name.starts_with("._") {
+            continue;
+        }
         if path.is_dir() {
             collect_csvs(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("csv") {
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("csv")) {
             if let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
                 out.entry(parent.to_string()).or_default().push(path.clone());
             }
@@ -352,6 +369,68 @@ fn parse_user_nickname(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    /// Build a minimal in-memory Zepp export zip laid out exactly like the app's
+    /// "Export data" (account-id dir → category folders → `CATEGORY_*.csv`),
+    /// then add the macOS archive cruft a Finder-recompressed zip carries: the
+    /// `__MACOSX/` sidecar tree and `._*` AppleDouble resource forks. The forks
+    /// are binary and `.csv`-suffixed under the category dirs — exactly what
+    /// used to make `read_to_string` abort the import with a 422.
+    fn make_zepp_zip_with_macos_cruft() -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+            let mut put = |name: &str, bytes: &[u8]| {
+                zw.start_file(name, opts).unwrap();
+                zw.write_all(bytes).unwrap();
+            };
+            // Real category CSVs.
+            put(
+                "acct_777/USER/USER_1.csv",
+                b"userId,gender,height,weight,nickName,avatar,birthday\n777,1,180,75,tester,,1990-01-01\n",
+            );
+            put(
+                "acct_777/HEARTRATE_AUTO/HEARTRATE_AUTO_1.csv",
+                b"date,time,heartRate\n2026-01-01,08:00,60\n2026-01-01,08:01,62\n",
+            );
+            put(
+                "acct_777/SLEEP_MINUTE/SLEEP_MINUTE_1.csv",
+                b"date,time,stage,hr,respiratory_rate\n2026-01-01,23:00,DEEP,55,14\n",
+            );
+            put(
+                "acct_777/ACTIVITY/ACTIVITY_1.csv",
+                b"date,steps,distance,runDistance,calories\n2026-01-01,5000,4000,0,250\n",
+            );
+            // macOS AppleDouble forks (binary; magic 00 05 16 07 + a non-UTF-8
+            // byte) mirroring the files above, plus the `__MACOSX/` sidecar dir.
+            let fork: &[u8] = &[0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x9f, 0xd1, 0x00];
+            put("__MACOSX/acct_777/HEARTRATE_AUTO/._HEARTRATE_AUTO_1.csv", fork);
+            put("__MACOSX/acct_777/SLEEP_MINUTE/._SLEEP_MINUTE_1.csv", fork);
+            put("__MACOSX/acct_777/._USER", fork);
+            put("acct_777/.DS_Store", fork);
+            // A non-AppleDouble binary `.csv` under a real category: collected by
+            // name, but unreadable — must be skipped, not fatal (defence in depth).
+            put("acct_777/ACTIVITY/ACTIVITY_corrupt.csv", fork);
+            zw.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn zip_with_macos_cruft_parses_instead_of_failing() {
+        let zip = make_zepp_zip_with_macos_cruft();
+        let imp = read_zepp_zip(&zip).expect("macOS-recompressed Zepp zip must parse, not 422");
+
+        // Real data survived; the binary AppleDouble forks were ignored.
+        assert_eq!(imp.source_name, "Zepp (tester)");
+        assert!(imp.counts.contains_key(&WellnessKind::HeartRate));
+        assert!(imp.counts.contains_key(&WellnessKind::SleepStage));
+        assert!(imp.counts.contains_key(&WellnessKind::Steps));
+        // Two auto-HR rows + the in-sleep HR (55) = 3; the forks contributed none.
+        assert_eq!(imp.counts[&WellnessKind::HeartRate], 3);
+    }
 
     #[test]
     fn parses_real_zepp_export_if_present() {
