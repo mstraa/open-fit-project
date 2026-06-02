@@ -10,7 +10,9 @@
     "open": "cap open android",
     "run:android": "npm run sync && cap run android",
     "deploy": "../scripts/deploy-android.sh",
-    "deploy:fast": "../scripts/deploy-android.sh --fast"
+    "deploy:fast": "../scripts/deploy-android.sh --fast",
+    "app:clean": "../scripts/adb-clean.sh",
+    "app:reinstall": "../scripts/adb-clean.sh --latest"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^6.1.0",
