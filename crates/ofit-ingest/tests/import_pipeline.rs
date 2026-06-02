@@ -55,12 +55,13 @@ async fn zero_record_activity_imports_end_to_end() {
     let _ = std::fs::remove_file(&tmp);
 }
 
-fn test_data_dir() -> PathBuf {
+/// Locate `<repo>/test-data`, or `None` when it's absent. The fixtures are real
+/// recorded activities and are gitignored (present locally, not in CI), so the
+/// test that needs them skips instead of failing when they're missing.
+fn test_data_dir() -> Option<PathBuf> {
     // crate dir is .../crates/ofit-ingest; test-data is at the repo root.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-data")
-        .canonicalize()
-        .expect("test-data dir")
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data");
+    dir.is_dir().then_some(dir)
 }
 
 const FILES: &[&str] = &[
@@ -75,7 +76,10 @@ const FILES: &[&str] = &[
 
 #[tokio::test]
 async fn imports_files_into_two_activities_with_exact_dedup() {
-    let dir = test_data_dir();
+    let Some(dir) = test_data_dir() else {
+        eprintln!("skip imports_files_into_two_activities_with_exact_dedup: no local test-data/ (gitignored fixtures)");
+        return;
+    };
 
     // Fresh on-disk SQLite in a temp dir (the pool opens several connections, so
     // a pure `:memory:` db would be invisible across them; a file is shared).
