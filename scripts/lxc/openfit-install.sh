@@ -3,8 +3,8 @@
 # Open Fit — in-container installer. RUN INSIDE the LXC (Debian/Ubuntu) as root.
 #
 # Installs the self-contained `ofit-api` binary (UI embedded) as a systemd
-# service, generates an auth token, enables console auto-login for root, and
-# drops in the `openfit-update` command. Idempotent — safe to re-run to repair.
+# service on port 80, generates an auth token, enables console auto-login for
+# root, and drops in the `update` command. Idempotent — safe to re-run to repair.
 #
 # Normally invoked by openfit-lxc.sh, but you can run it directly in a container:
 #   curl -fsSL https://raw.githubusercontent.com/mstraa/open-fit-project/main/scripts/lxc/openfit-install.sh | bash
@@ -65,7 +65,7 @@ if [ ! -f "$ETC_DIR/openfit.env" ]; then
   TOKEN="$(openssl rand -hex 32)"
   cat > "$ETC_DIR/openfit.env" <<EOF
 # Open Fit runtime config. Restart after editing: systemctl restart openfit
-OFIT_BIND=0.0.0.0:8087
+OFIT_BIND=0.0.0.0:80
 DATABASE_URL=sqlite://${DATA_DIR}/ofit.db?mode=rwc
 OFIT_TOKEN=${TOKEN}
 RUST_LOG=info
@@ -89,6 +89,9 @@ WorkingDirectory=${DATA_DIR}
 ExecStart=${BIN}
 Restart=on-failure
 RestartSec=3
+# let the unprivileged service bind the privileged port 80
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # hardening
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -100,35 +103,50 @@ ReadWritePaths=${DATA_DIR}
 WantedBy=multi-user.target
 EOF
 
-# ---- openfit-update helper --------------------------------------------------
-msg "installing the openfit-update command…"
+# ---- `update` command -------------------------------------------------------
+msg "installing the 'update' command…"
 if curl -fsSL "https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/lxc/openfit-update.sh" \
-     -o /usr/local/bin/openfit-update 2>/dev/null; then
-  chmod +x /usr/local/bin/openfit-update
-  # Bake in this repo so `openfit-update` needs no arguments later (rewrite the
-  # REPO= line deterministically so forks with a different owner work too).
-  sed -i "s#^REPO=.*#REPO=\"\${OFIT_REPO:-${REPO}}\"#" /usr/local/bin/openfit-update
+     -o /usr/local/bin/update 2>/dev/null; then
+  chmod +x /usr/local/bin/update
+  # Bake in this repo so `update` needs no arguments later (rewrite the REPO=
+  # line deterministically so forks with a different owner work too).
+  sed -i "s#^REPO=.*#REPO=\"\${OFIT_REPO:-${REPO}}\"#" /usr/local/bin/update
 else
-  msg "warning: could not fetch openfit-update (re-run the installer to retry)"
+  msg "warning: could not fetch the update script (re-run the installer to retry)"
 fi
 
 # ---- console auto-login as root ---------------------------------------------
-mkdir -p /etc/systemd/system/console-getty.service.d
-cat > /etc/systemd/system/console-getty.service.d/autologin.conf <<'EOF'
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud console 115200,38400,9600 $TERM
-EOF
-mkdir -p /etc/systemd/system/container-getty@1.service.d
-cat > /etc/systemd/system/container-getty@1.service.d/autologin.conf <<'EOF'
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud %I 115200,38400,9600 $TERM
-EOF
+# Inject `--autologin root` into whichever getty Proxmox attaches to (the main
+# console and tty1), reusing each unit's *original* ExecStart so the tty token
+# stays correct. A blank ExecStart= first resets the unit's command.
+enable_autologin() { # $1 = unit (console-getty.service | container-getty@1.service)
+  local unit="$1" tmpl src execline dir d
+  case "$unit" in
+    *@*) tmpl="${unit%@*}@.service" ;;
+    *)   tmpl="$unit" ;;
+  esac
+  src=""
+  for d in /lib/systemd/system /usr/lib/systemd/system; do
+    if [ -f "$d/$tmpl" ]; then src="$d/$tmpl"; break; fi
+  done
+  [ -n "$src" ] || return 0
+  execline="$(grep -m1 '^ExecStart=.*agetty' "$src" || true)"
+  [ -n "$execline" ] || return 0
+  execline="$(printf '%s' "$execline" | sed -E 's#(ExecStart=-?[^ ]*agetty)#\1 --autologin root#')"
+  dir="/etc/systemd/system/${unit}.d"
+  mkdir -p "$dir"
+  printf '[Service]\nExecStart=\n%s\n' "$execline" > "$dir/autologin.conf"
+}
+enable_autologin console-getty.service
+enable_autologin container-getty@1.service
 
 # ---- enable + start ---------------------------------------------------------
 systemctl daemon-reload
+# Apply console auto-login on the running container (not just at next boot).
+systemctl restart console-getty.service 2>/dev/null || true
+systemctl restart container-getty@1.service 2>/dev/null || true
 systemctl enable --now openfit.service
 sleep 1
 systemctl --no-pager --lines=0 status openfit.service || true
-msg "Open Fit is up on :8087"
+IP_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+msg "Open Fit is up at http://${IP_ADDR:-<container-ip>}/ (port 80)"

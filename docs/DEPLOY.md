@@ -36,12 +36,18 @@ CTID=151 RAM=2048 DISK=8 STORAGE=local-zfs BRIDGE=vmbr0 OFIT_VERSION=0.3.0 \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/mstraa/open-fit-project/main/scripts/lxc/openfit-lxc.sh)"
 ```
 
+Interactive by default — a whiptail menu (Default/Advanced) picks the Debian
+version, storage and resources. Set `OFIT_NONINTERACTIVE=1` to skip the menus
+and use env/defaults. Every value is also overridable up-front via env:
+
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `CTID` | next free id | Container id |
 | `CT_HOSTNAME` | `openfit` | Hostname |
-| `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `1024` / `512` / `6` | Resources (MiB / GiB) |
-| `STORAGE` | `local-lvm` | Rootfs storage pool |
+| `OSVER` | `13` | Debian version — `13` (trixie) or `12` (bookworm) |
+| `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `1024` / `512` / `20` | Resources (MiB / GiB) |
+| `STORAGE` | auto-detected | Rootfs storage (the only `rootdir`-capable one, else you pick) |
+| `TEMPLATE_STORAGE` | auto-detected | Storage for the LXC template (`vztmpl`) |
 | `BRIDGE` | `vmbr0` | Network bridge (DHCP) |
 | `OFIT_VERSION` | `latest` | Release to install (`latest` or `X.Y.Z`) |
 
@@ -51,15 +57,15 @@ After it finishes:
 pct console <CTID>                                   # auto root login
 pct exec <CTID> -- grep OFIT_TOKEN /etc/openfit/openfit.env
 pct exec <CTID> -- journalctl -u openfit -f          # logs
-pct exec <CTID> -- openfit-update                    # update to the latest release
+pct exec <CTID> -- update                            # update to the latest release
 ```
 
-The UI/API is at `http://<container-ip>:8087`. Inside the container:
+The web UI + API are served on **port 80** at `http://<container-ip>/`. Inside the container:
 
 - service: `systemctl {status,restart,stop} openfit`
 - config: `/etc/openfit/openfit.env` (token, bind, `DATABASE_URL`, `RUST_LOG`)
 - data: `/var/lib/openfit/ofit.db` (SQLite)
-- update: `openfit-update` (latest) or `openfit-update 0.3.0` (pin)
+- update: `update` (latest) or `update 0.3.0` (pin)
 
 See [`scripts/lxc/README.md`](../scripts/lxc/README.md) for the install/update
 internals.
