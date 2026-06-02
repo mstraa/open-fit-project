@@ -26,7 +26,7 @@ OFIT_VERSION="${OFIT_VERSION:-latest}"
 # Defaults for any value not provided by env or chosen in the Advanced menu.
 : "${CT_HOSTNAME:=openfit}"
 : "${CORES:=2}"
-: "${RAM:=1024}"          # MiB
+: "${RAM:=4096}"          # MiB — imports + analytics recompute are memory-hungry
 : "${SWAP:=512}"          # MiB
 : "${DISK:=20}"           # GiB
 : "${BRIDGE:=vmbr0}"

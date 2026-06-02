@@ -116,35 +116,29 @@ else
 fi
 
 # ---- console auto-login as root ---------------------------------------------
-# Inject `--autologin root` into whichever getty Proxmox attaches to (the main
-# console and tty1), reusing each unit's *original* ExecStart so the tty token
-# stays correct. A blank ExecStart= first resets the unit's command.
-enable_autologin() { # $1 = unit (console-getty.service | container-getty@1.service)
-  local unit="$1" tmpl src execline dir d
-  case "$unit" in
-    *@*) tmpl="${unit%@*}@.service" ;;
-    *)   tmpl="$unit" ;;
-  esac
-  src=""
-  for d in /lib/systemd/system /usr/lib/systemd/system; do
-    if [ -f "$d/$tmpl" ]; then src="$d/$tmpl"; break; fi
-  done
-  [ -n "$src" ] || return 0
-  execline="$(grep -m1 '^ExecStart=.*agetty' "$src" || true)"
-  [ -n "$execline" ] || return 0
-  execline="$(printf '%s' "$execline" | sed -E 's#(ExecStart=-?[^ ]*agetty)#\1 --autologin root#')"
-  dir="/etc/systemd/system/${unit}.d"
-  mkdir -p "$dir"
-  printf '[Service]\nExecStart=\n%s\n' "$execline" > "$dir/autologin.conf"
+# `pct console` and the Proxmox web console attach to tty1, so the getty must run
+# on tty%I — NOT pts/%I, which systemd's default container-getty uses; that
+# mismatch is what leaves a plain login prompt. Configure every getty Proxmox
+# might use; the blank ExecStart= first resets the unit's original command.
+autologin_dropin() { # $1 = unit, $2 = agetty port/baud args
+  mkdir -p "/etc/systemd/system/$1.d"
+  cat > "/etc/systemd/system/$1.d/autologin.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud $2 \$TERM
+EOF
 }
-enable_autologin console-getty.service
-enable_autologin container-getty@1.service
+autologin_dropin console-getty.service      "console 115200,38400,9600"
+autologin_dropin container-getty@1.service  "tty%I 115200,38400,9600"
+autologin_dropin getty@tty1.service         "%I"
 
 # ---- enable + start ---------------------------------------------------------
 systemctl daemon-reload
-# Apply console auto-login on the running container (not just at next boot).
-systemctl restart console-getty.service 2>/dev/null || true
-systemctl restart container-getty@1.service 2>/dev/null || true
+# Apply auto-login now (not just at next boot) by restarting the active getty.
+for u in console-getty.service container-getty@1.service getty@tty1.service; do
+  systemctl is-active --quiet "$u" && systemctl restart "$u" || true
+done
+msg "console gettys running: $(systemctl list-units --type=service --state=running --no-legend 2>/dev/null | awk '/getty/{print $1}' | tr '\n' ' ')"
 systemctl enable --now openfit.service
 sleep 1
 systemctl --no-pager --lines=0 status openfit.service || true

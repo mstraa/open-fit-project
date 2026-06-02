@@ -45,7 +45,7 @@ and use env/defaults. Every value is also overridable up-front via env:
 | `CTID` | next free id | Container id |
 | `CT_HOSTNAME` | `openfit` | Hostname |
 | `OSVER` | `13` | Debian version — `13` (trixie) or `12` (bookworm) |
-| `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `1024` / `512` / `20` | Resources (MiB / GiB) |
+| `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `4096` / `512` / `20` | Resources (MiB / GiB) — RAM 4 GB because a Garmin import + analytics recompute is memory-hungry; 1 GB OOM-thrashes |
 | `STORAGE` | auto-detected | Rootfs storage (the only `rootdir`-capable one, else you pick) |
 | `TEMPLATE_STORAGE` | auto-detected | Storage for the LXC template (`vztmpl`) |
 | `BRIDGE` | `vmbr0` | Network bridge (DHCP) |
