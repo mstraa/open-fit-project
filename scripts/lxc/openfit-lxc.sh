@@ -143,13 +143,21 @@ for _ in $(seq 1 30); do
   if pct exec "$CTID" -- getent hosts github.com >/dev/null 2>&1; then net_ok=1; break; fi
   sleep 2
 done
-[ "$net_ok" = 1 ] || err "CT $CTID has no network/DNS (bridge $BRIDGE, DHCP) — fix networking, then re-run: pct exec $CTID -- bash -c \"curl -fsSL https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/lxc/openfit-install.sh | bash\""
+[ "$net_ok" = 1 ] || err "CT $CTID has no network/DNS (bridge $BRIDGE, DHCP). Fix the bridge/DHCP, then 'pct destroy $CTID --force' and re-run this script."
 
 # ---- run the in-container installer -----------------------------------------
+# The base Debian template has no curl (the installer apt-installs it), and a
+# `curl | bash` would also hide a failed download. So fetch the installer on the
+# host (which has curl), push it in, and run it directly — its exit status then
+# propagates, so a real failure aborts here instead of printing a false "done".
 msg "installing Open Fit inside CT $CTID…"
-pct exec "$CTID" -- bash -c \
-  "export OFIT_REPO='$REPO' OFIT_BRANCH='$BRANCH' OFIT_VERSION='$OFIT_VERSION'; \
-   curl -fsSL 'https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/lxc/openfit-install.sh' | bash"
+INSTALL_TMP="$(mktemp)"
+curl -fsSL "https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/lxc/openfit-install.sh" -o "$INSTALL_TMP" \
+  || err "failed to download openfit-install.sh from ${REPO}@${BRANCH}"
+pct push "$CTID" "$INSTALL_TMP" /root/openfit-install.sh
+rm -f "$INSTALL_TMP"
+pct exec "$CTID" -- env OFIT_REPO="$REPO" OFIT_BRANCH="$BRANCH" OFIT_VERSION="$OFIT_VERSION" \
+  bash /root/openfit-install.sh
 
 # ---- summary ----------------------------------------------------------------
 IP="$(pct exec "$CTID" -- bash -c "hostname -I | awk '{print \$1}'" 2>/dev/null | tr -d '[:space:]')"
