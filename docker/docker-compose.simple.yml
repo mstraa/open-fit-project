@@ -12,10 +12,14 @@ name: openfit-simple
 
 services:
   api:
+    # Pull a published image from GHCR. Set OFIT_VERSION in .env to pin a
+    # release (e.g. 0.3.0); defaults to :latest. `docker compose pull` fetches
+    # it. The build: block is kept so `docker compose build` still works from
+    # source for local development.
+    image: ghcr.io/mstraa/ofit-api:${OFIT_VERSION:-latest}
     build:
       context: ..
       dockerfile: Dockerfile
-    image: openfit/ofit-api:latest
     restart: unless-stopped
     ports:
       - "8087:8087"

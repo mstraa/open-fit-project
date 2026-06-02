@@ -10,6 +10,17 @@
 #   - simple: DATABASE_URL defaults to a SQLite file under the /data volume.
 #   - full:   DATABASE_URL is overridden to point at Postgres/Timescale.
 
+# ---------- web (build the SPA so it can be embedded into the binary) ----------
+# The release binary serves the UI itself (crates/ofit-api/src/static_assets.rs),
+# so we build web/dist here and hand it to the Rust stage. .dockerignore excludes
+# web/dist + web/node_modules from the context, so this stage rebuilds them clean.
+FROM node:20-bookworm AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 # ---------- builder ----------
 FROM rust:1.83-bookworm AS builder
 WORKDIR /build
@@ -17,6 +28,10 @@ WORKDIR /build
 # Copy the whole workspace so path-dependencies resolve. The release profile
 # (lto = "thin") lives in the root Cargo.toml.
 COPY . .
+
+# Bring in the freshly built SPA so rust-embed bakes it into the binary
+# (build.rs otherwise drops in a "UI not bundled" placeholder).
+COPY --from=web /web/dist ./web/dist
 
 # Build only the API binary; the rest of the workspace is brought in as needed.
 RUN --mount=type=cache,target=/build/target \

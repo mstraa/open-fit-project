@@ -14,6 +14,24 @@ tiers (PLAN.md verification step 7).
 
 Everything is **100% cloudless** (AGPL-3.0-or-later) — nothing here phones home.
 
+The web UI is embedded in the `ofit-api` binary, so the single container serves
+both the API and the dashboard on `8087`.
+
+## Images (GHCR — opt-in)
+
+Container-image publishing is **off by default**. The release workflow only
+pushes to **GitHub Container Registry** when the repo variable `ENABLE_GHCR` is
+set to `true` (see [`docs/DEPLOY.md`](../docs/DEPLOY.md)). Once enabled:
+
+```
+ghcr.io/mstraa/ofit-api:<version>     # e.g. 0.3.0
+ghcr.io/mstraa/ofit-api:latest
+```
+
+Pin a version by setting `OFIT_VERSION` in `docker/.env` (defaults to `latest`),
+then `docker compose pull`. Until you enable GHCR, build the image locally — the
+`build:` block in each compose file does exactly that (`docker compose build`).
+
 ## Configuration
 
 Both compose files auto-load a `.env` sitting next to them.
