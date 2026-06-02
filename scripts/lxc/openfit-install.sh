@@ -11,6 +11,11 @@
 #
 set -euo pipefail
 
+# Minimal Debian templates don't generate en_US.UTF-8, so the LANG inherited
+# from the `pct exec` session spams locale warnings from apt/perl. C.UTF-8 is
+# built into glibc and always available — use it for a clean run.
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
 REPO="${OFIT_REPO:-mstraa/open-fit-project}"
 BRANCH="${OFIT_BRANCH:-main}"
 VERSION="${OFIT_VERSION:-latest}"   # 'latest' or X.Y.Z
