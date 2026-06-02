@@ -3,6 +3,19 @@ apply plugin: 'com.android.application'
 android {
     namespace "org.openfit.app"
     compileSdk rootProject.ext.compileSdkVersion
+    // Stable debug signing so every release's APK shares ONE signature and can
+    // update an earlier install. Without this, CI's auto-generated debug keystore
+    // differs per build, so installing a new APK over a prior one fails with a
+    // signature mismatch ("install error"). Well-known debug passwords — safe to
+    // commit; this is a sideloaded debug build, not a Play release.
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     defaultConfig {
         applicationId "org.openfit.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -17,6 +30,9 @@ android {
         }
     }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

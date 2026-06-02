@@ -1383,7 +1383,7 @@ function DevicesManager() {
   // dropped in the redesign — the scan ran but nothing showed.)
   const isZeppOs = (name: string) => /helio|amazfit|zepp|band|mi/i.test(name);
   const isGarmin = (name: string) => /garmin|forerunner|fenix|epix|venu|instinct|fr\d|945/i.test(name);
-  const keyOk = /^[0-9a-f]{32}$/i.test(authKey.trim());
+  const keyOk = /^(0x)?[0-9a-f]{32}$/i.test(authKey.trim()); // accept an optional 0x prefix
   const addable = native.found.filter((d) => !native.devices.some((x) => x.deviceId === d.deviceId));
   const scanning = native.status === "scanning";
 
