@@ -36,12 +36,18 @@ CTID=151 RAM=2048 DISK=8 STORAGE=local-zfs BRIDGE=vmbr0 OFIT_VERSION=0.3.0 \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/mstraa/open-fit-project/main/scripts/lxc/openfit-lxc.sh)"
 ```
 
+Interactive by default — a whiptail menu (Default/Advanced) picks the Debian
+version, storage and resources. Set `OFIT_NONINTERACTIVE=1` to skip the menus
+and use env/defaults. Every value is also overridable up-front via env:
+
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `CTID` | next free id | Container id |
 | `CT_HOSTNAME` | `openfit` | Hostname |
+| `OSVER` | `13` | Debian version — `13` (trixie) or `12` (bookworm) |
 | `CORES` / `RAM` / `SWAP` / `DISK` | `2` / `1024` / `512` / `6` | Resources (MiB / GiB) |
-| `STORAGE` | `local-lvm` | Rootfs storage pool |
+| `STORAGE` | auto-detected | Rootfs storage (the only `rootdir`-capable one, else you pick) |
+| `TEMPLATE_STORAGE` | auto-detected | Storage for the LXC template (`vztmpl`) |
 | `BRIDGE` | `vmbr0` | Network bridge (DHCP) |
 | `OFIT_VERSION` | `latest` | Release to install (`latest` or `X.Y.Z`) |
 

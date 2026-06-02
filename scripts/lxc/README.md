@@ -1,8 +1,8 @@
 # Open Fit — Proxmox LXC
 
 Native install (no Docker): the self-contained `ofit-api` binary running under
-systemd in an unprivileged Debian 12 container. The web UI is embedded in the
-binary, so the container serves everything on `:8087`.
+systemd in an unprivileged Debian container (12 or 13). The web UI is embedded
+in the binary, so the container serves everything on `:8087`.
 
 ## Install
 
@@ -12,9 +12,14 @@ On the **Proxmox host** (root):
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/mstraa/open-fit-project/main/scripts/lxc/openfit-lxc.sh)"
 ```
 
-This creates the container, then runs [`openfit-install.sh`](openfit-install.sh)
-inside it. Env overrides (e.g. `CTID`, `RAM`, `DISK`, `STORAGE`, `BRIDGE`,
-`OFIT_VERSION`) are documented in [`../../docs/DEPLOY.md`](../../docs/DEPLOY.md).
+A whiptail menu asks **Default** or **Advanced**; either way the rootfs
+**storage is auto-detected** (you pick it when more than one is available — no
+more hardcoded `local-lvm`). **Advanced** also lets you choose the **Debian
+version (13 or 12)**, CTID, hostname, CPU/RAM/disk and bridge. It then runs
+[`openfit-install.sh`](openfit-install.sh) inside the container.
+
+For unattended installs, set `OFIT_NONINTERACTIVE=1` and any overrides (e.g.
+`STORAGE`, `OSVER`, `RAM`, `DISK`) — see [`../../docs/DEPLOY.md`](../../docs/DEPLOY.md).
 
 ## The three scripts
 
