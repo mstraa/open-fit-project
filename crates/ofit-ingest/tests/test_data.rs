@@ -12,13 +12,16 @@ use std::path::PathBuf;
 
 use ofit_ingest::import_file;
 
-/// Locate `<workspace>/test-data` relative to this crate.
-fn test_data_dir() -> PathBuf {
+/// Locate `<workspace>/test-data`, or `None` when it's absent. The fixtures are
+/// real recorded activities and are gitignored (present locally, not in CI), so
+/// the test skips instead of failing when they're missing.
+fn test_data_dir() -> Option<PathBuf> {
     // CARGO_MANIFEST_DIR = <workspace>/crates/ofit-ingest
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("test-data")
+        .join("test-data");
+    dir.is_dir().then_some(dir)
 }
 
 const FILES: &[&str] = &[
@@ -33,7 +36,10 @@ const FILES: &[&str] = &[
 
 #[test]
 fn parses_all_test_data_files() {
-    let dir = test_data_dir();
+    let Some(dir) = test_data_dir() else {
+        eprintln!("skip parses_all_test_data_files: no local test-data/ (gitignored fixtures)");
+        return;
+    };
 
     println!("\n=== ofit-ingest /test-data parse report ===");
     for f in FILES {
