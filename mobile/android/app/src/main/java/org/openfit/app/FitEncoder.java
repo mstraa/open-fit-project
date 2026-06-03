@@ -23,8 +23,6 @@ import java.util.TreeMap;
 public final class FitEncoder {
     private FitEncoder() {}
 
-    private static final long FIT_EPOCH = 631065600L; // Unix secs at 1989-12-31T00:00:00Z
-
     // local message types
     private static final int LT_FILE_ID = 0, LT_EVENT = 1, LT_RECORD = 2,
         LT_LAP = 3, LT_SESSION = 4, LT_ACTIVITY = 5;
@@ -242,8 +240,8 @@ public final class FitEncoder {
         }
     }
 
-    private static long fitTs(long unixSec) { return unixSec - FIT_EPOCH; }
-    private static int toSemicircles(double deg) { return (int) Math.round(deg * (2147483648.0 / 180.0)); }
+    private static long fitTs(long unixSec) { return unixSec - FitSpec.FIT_EPOCH_OFFSET; }
+    private static int toSemicircles(double deg) { return (int) Math.round(deg * FitSpec.DEGREES_TO_SEMICIRCLES); }
 
     private static final int[] CRC_TABLE = {
         0x0000, 0xCC01, 0xD801, 0x1400, 0xF001, 0x3C00, 0x2800, 0xE401,
