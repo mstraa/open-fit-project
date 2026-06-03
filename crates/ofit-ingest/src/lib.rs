@@ -32,6 +32,7 @@ use uuid::Uuid;
 mod builder;
 mod fit;
 pub mod fit_export;
+mod fit_spec;
 pub mod garmin;
 mod gpx;
 mod pipeline;
@@ -269,6 +270,49 @@ pub(crate) fn sport_from_filename(name: &str) -> Sport {
 /// Helper shared by parsers: milliseconds from `start` to `ts`, clamped to >= 0.
 pub(crate) fn offset_ms(start: DateTime<Utc>, ts: DateTime<Utc>) -> i64 {
     (ts - start).num_milliseconds().max(0)
+}
+
+/// Build an [`Error::Parse`] from an underlying parser error, sharing the
+/// boilerplate every format's entry point would otherwise repeat. `err` is
+/// rendered via `ToString` (any `Display`/error type works).
+pub(crate) fn wrap_parse_error(
+    format: &'static str,
+    name: &str,
+    err: impl ToString,
+) -> Error {
+    Error::Parse {
+        format,
+        name: name.to_string(),
+        reason: err.to_string(),
+    }
+}
+
+/// Parse an RFC 3339 timestamp string to UTC. Shared by the GPX and TCX parsers
+/// (both read ISO-8601/RFC-3339 instants); returns `None` on any malformed
+/// input so a single bad point is skipped rather than aborting the import.
+pub(crate) fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// Strip an XML namespace prefix from a qualified name (`ns3:hr` → `hr`). Shared
+/// by the GPX and TCX parsers, which both walk namespaced Garmin XML.
+pub(crate) fn xml_local_name(qname: &[u8]) -> String {
+    let s = String::from_utf8_lossy(qname);
+    match s.rsplit_once(':') {
+        Some((_, local)) => local.to_string(),
+        None => s.into_owned(),
+    }
+}
+
+/// Record a skip/diagnostic message into `skipped`, de-duplicating verbatim
+/// repeats. Shared by the Zepp and Garmin export importers, which both surface a
+/// `skipped` list of categories/files they intentionally did not import.
+pub(crate) fn note(skipped: &mut Vec<String>, msg: &str) {
+    if !skipped.iter().any(|s| s == msg) {
+        skipped.push(msg.to_string());
+    }
 }
 
 /// Best-effort manufacturer label inferred from a free-form device/creator

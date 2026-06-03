@@ -10,7 +10,7 @@ use ofit_core::StreamKind;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::{builder::RecordingBuilder, sport_from_str, Error};
+use crate::{builder::RecordingBuilder, sport_from_str, wrap_parse_error, xml_local_name};
 
 /// Accumulator for the trackpoint currently being parsed.
 #[derive(Default)]
@@ -30,11 +30,7 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
     let mut b = RecordingBuilder::new(name);
     b.meta("parser", "quick-xml (tcx)");
 
-    parse_inner(&mut b, bytes).map_err(|e| Error::Parse {
-        format: "tcx",
-        name: name.to_string(),
-        reason: e.to_string(),
-    })?;
+    parse_inner(&mut b, bytes).map_err(|e| wrap_parse_error("tcx", name, e))?;
 
     Ok(b)
 }
@@ -55,7 +51,7 @@ fn parse_inner(b: &mut RecordingBuilder, bytes: &[u8]) -> Result<(), quick_xml::
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Start(e) => {
-                let local = local_name(e.name().as_ref());
+                let local = xml_local_name(e.name().as_ref());
                 match local.as_str() {
                     "Activity" => {
                         // Sport attribute on the Activity element.
@@ -91,9 +87,7 @@ fn parse_inner(b: &mut RecordingBuilder, bytes: &[u8]) -> Result<(), quick_xml::
                 let txt = txt.trim();
                 match active {
                     Leaf::Time => {
-                        tp.time = DateTime::parse_from_rfc3339(txt)
-                            .ok()
-                            .map(|d| d.with_timezone(&Utc));
+                        tp.time = crate::parse_rfc3339(txt);
                     }
                     Leaf::CreatorName => {
                         if creator.is_none() {
@@ -118,7 +112,7 @@ fn parse_inner(b: &mut RecordingBuilder, bytes: &[u8]) -> Result<(), quick_xml::
                 }
             }
             Event::End(e) => {
-                let local = local_name(e.name().as_ref());
+                let local = xml_local_name(e.name().as_ref());
                 match local.as_str() {
                     "Creator" => in_creator = false,
                     "Trackpoint" => {
@@ -191,19 +185,10 @@ fn flush(b: &mut RecordingBuilder, tp: &Tp) {
 
 fn attr(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
-        if local_name(a.key.as_ref()) == name {
+        if xml_local_name(a.key.as_ref()) == name {
             Some(String::from_utf8_lossy(&a.value).into_owned())
         } else {
             None
         }
     })
-}
-
-/// Strip an XML namespace prefix (`ns3:Speed` → `Speed`).
-fn local_name(qname: &[u8]) -> String {
-    let s = String::from_utf8_lossy(qname);
-    match s.rsplit_once(':') {
-        Some((_, local)) => local.to_string(),
-        None => s.to_string(),
-    }
 }

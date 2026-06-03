@@ -2,7 +2,7 @@
 // /api/analytics/status (WebSocket). Drives the "computing…" indicator: the
 // worker pushes a frame when it starts/finishes a recompute pass.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { API_BASE, getToken } from "../api/client";
 
 export interface AnalyticsStatus {
@@ -24,6 +24,7 @@ function wsUrl(): string {
 
 export function useAnalyticsStatus(): AnalyticsStatus {
   const [state, setState] = useState<AnalyticsStatus>({ working: false, queued: 0, current: [] });
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     let closed = false;
@@ -38,6 +39,7 @@ export function useAnalyticsStatus(): AnalyticsStatus {
         retry = setTimeout(connect, 3000);
         return;
       }
+      wsRef.current = ws;
       ws.onclose = () => {
         if (!closed) retry = setTimeout(connect, 3000);
       };
@@ -55,6 +57,7 @@ export function useAnalyticsStatus(): AnalyticsStatus {
     return () => {
       closed = true;
       if (retry) clearTimeout(retry);
+      wsRef.current?.close();
     };
   }, []);
 

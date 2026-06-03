@@ -781,6 +781,40 @@ impl Db {
         rows.into_iter().map(row_to_stream).collect()
     }
 
+    /// Batch-fetch streams for many recordings in one query per chunk (kills the
+    /// per-recording N+1 in the recompute hot path). Returns a map keyed by
+    /// `recording_id`; recordings with no streams are simply absent (callers
+    /// treat a missing key as empty). Empty input → empty map.
+    pub async fn streams_for_recordings(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, Vec<Stream>>> {
+        let mut map: std::collections::HashMap<Uuid, Vec<Stream>> =
+            std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(map);
+        }
+        // SQLite caps bound variables at 999; chunk the IN-list well under that.
+        for chunk in ids.chunks(900) {
+            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT id, recording_id, kind, samples FROM streams \
+                 WHERE recording_id IN ({placeholders}) ORDER BY recording_id, kind ASC"
+            );
+            let rewritten = self.p(&sql);
+            let mut q = sqlx::query(&rewritten);
+            for id in chunk {
+                q = q.bind(id.to_string());
+            }
+            let rows = q.fetch_all(&self.pool).await?;
+            for row in rows {
+                let stream = row_to_stream(row)?;
+                map.entry(stream.recording_id).or_default().push(stream);
+            }
+        }
+        Ok(map)
+    }
+
     /// Upsert an [`Activity`] row (header only; membership via
     /// [`Self::set_activity_recordings`]). Re-running clustering on import may
     /// widen an activity's window, so this updates in place when the id exists.
@@ -1082,13 +1116,11 @@ impl Db {
         recording_ids: &[Uuid],
     ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
         let mut window: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
-        for rid in recording_ids {
-            if let Some(rec) = self.get_recording(*rid).await? {
-                window = Some(match window {
-                    None => (rec.started_at, rec.ended_at),
-                    Some((s, e)) => (s.min(rec.started_at), e.max(rec.ended_at)),
-                });
-            }
+        for rec in self.get_recordings(recording_ids).await? {
+            window = Some(match window {
+                None => (rec.started_at, rec.ended_at),
+                Some((s, e)) => (s.min(rec.started_at), e.max(rec.ended_at)),
+            });
         }
         Ok(window)
     }

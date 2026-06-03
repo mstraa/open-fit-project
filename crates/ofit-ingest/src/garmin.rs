@@ -32,6 +32,7 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use ofit_core::{SleepStage, WellnessKind};
 use serde_json::Value;
 
+use crate::note;
 use crate::zepp::WellnessReading;
 
 /// Errors raised while reading a Garmin export.
@@ -607,12 +608,6 @@ fn pr_unit(record_type: &str) -> String {
 fn push(out: &mut Vec<WellnessReading>, kind: WellnessKind, value: Option<f64>, ts: DateTime<Utc>) {
     if let Some(value) = value {
         out.push(WellnessReading { kind, value, ts });
-    }
-}
-
-fn note(skipped: &mut Vec<String>, msg: &str) {
-    if !skipped.iter().any(|s| s == msg) {
-        skipped.push(msg.to_string());
     }
 }
 

@@ -21,12 +21,7 @@
 use chrono::{DateTime, Utc};
 use ofit_core::Sport;
 
-/// Seconds between the Unix epoch (1970-01-01) and the FIT epoch
-/// (1989-12-31 00:00:00 UTC). FIT `date_time` is seconds since the FIT epoch.
-const FIT_EPOCH_OFFSET: i64 = 631_065_600;
-
-/// degrees → semicircles: `semicircles = degrees * 2^31 / 180`.
-const DEGREES_TO_SEMICIRCLES: f64 = 2_147_483_648.0 / 180.0;
+use crate::fit_spec::{DEGREES_TO_SEMICIRCLES, FIT_EPOCH_OFFSET};
 
 // ---- FIT base type ids (high bit set = multi-byte, endian-aware) ----
 const T_ENUM: u8 = 0x00;

@@ -9,7 +9,7 @@
 // - `cursorMs` places a locator dot at the GPS position for that time (synced to
 //   the charts' hover cursor).
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -54,7 +54,7 @@ export interface TrackMapProps {
   height?: number;
 }
 
-export function TrackMap({ track, colorValues, cursorMs, height = 320 }: TrackMapProps) {
+function TrackMapImpl({ track, colorValues, cursorMs, height = 320 }: TrackMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const cursorMarkerRef = useRef<maplibregl.Marker | null>(null);
@@ -254,3 +254,13 @@ export function TrackMap({ track, colorValues, cursorMs, height = 320 }: TrackMa
     </div>
   );
 }
+
+/** Memoized so a parent re-render (e.g. chart hover) doesn't rebuild the
+ *  MapLibre instance unless the track/coloring/cursor/height actually change.
+ *  Callers must pass STABLE `track`/`colorValues` arrays (memoize at the source)
+ *  for the shallow prop comparison to hit. */
+export const TrackMap = memo(TrackMapImpl);
+
+// Default export so the heavy maplibre-gl dependency can be code-split via
+// React.lazy(() => import("./TrackMap")) — see TrackMapLazy.
+export default TrackMap;

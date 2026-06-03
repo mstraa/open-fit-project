@@ -13,6 +13,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -62,13 +63,27 @@ interface BleState {
   steps: string[];
 }
 
+/** Connection/status slice — everything EXCEPT the high-frequency live samples. */
+type BleConnState = Omit<BleState, "live">;
+
+/** Connection/status + actions (re-renders on connect/scan, NOT on every sample). */
+interface BleConnectionApi extends BleConnState {
+  scan: () => Promise<void>;
+  connect: (dev: Found) => Promise<void>;
+  disconnect: () => Promise<void>;
+}
+
+/** The combined surface kept for existing `useBle()` consumers. */
 interface BleApi extends BleState {
   scan: () => Promise<void>;
   connect: (dev: Found) => Promise<void>;
   disconnect: () => Promise<void>;
 }
 
-const Ctx = createContext<BleApi | null>(null);
+// Two contexts so live-sample subscribers re-render on samples while
+// status-only subscribers don't churn at the ~1Hz+ BLE notification rate.
+const ConnCtx = createContext<BleConnectionApi | null>(null);
+const LiveCtx = createContext<Live | null>(null);
 
 /** Heart Rate Measurement (0x2A37): flags byte, then uint8 or uint16 HR. */
 function parseHr(v: DataView): number {
@@ -93,7 +108,11 @@ function shortErr(e: unknown): string {
 }
 
 export function BleProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<BleState>({ status: "idle", found: [], live: {}, device: null, steps: [] });
+  // Connection/status slice (low-frequency). `live` is a SEPARATE state so that
+  // ~1Hz sample updates don't churn the connection context value (which would
+  // re-render status-only consumers on every heartbeat).
+  const [state, setState] = useState<BleConnState>({ status: "idle", found: [], device: null, steps: [] });
+  const [live, setLive] = useState<Live>({});
 
   // Long-lived handles. These live in the provider (mounted above the router),
   // so they are NOT recreated on navigation — the connection genuinely persists.
@@ -103,6 +122,12 @@ export function BleProvider({ children }: { children: ReactNode }) {
   const userDisconnectRef = useRef(false); // distinguish intentional vs dropped
   const scanningRef = useRef(false);
   const connectingRef = useRef(false);
+  // Pending reconnect timers — tracked so they can be cleared if the provider
+  // unmounts (or the user disconnects) before they fire, otherwise a queued
+  // open() would run against an unmounted provider.
+  const reconnectTimersRef = useRef<number[]>([]);
+  const statusRef = useRef<BleStatus>("idle");
+  statusRef.current = state.status;
 
   // Append a diagnostic step (also mirrored to the console). Surfaced in the UI
   // so a connection failure shows exactly which step failed and with what error.
@@ -132,7 +157,9 @@ export function BleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const emitLive = useCallback(() => {
-    setState((s) => (s.status === "connected" ? { ...s, live: { ...liveRef.current } } : s));
+    // Only the live context updates here — the connection context is untouched,
+    // so status-only consumers don't re-render on samples.
+    if (statusRef.current === "connected") setLive({ ...liveRef.current });
   }, []);
 
   // Subscribe to whatever standard measurement services the device exposes. We
@@ -204,11 +231,15 @@ export function BleProvider({ children }: { children: ReactNode }) {
           // Unexpected drop: try to heal up to 3 times with backoff.
           if (attempt < 3) {
             setState((s) => ({ ...s, status: "reconnecting", message: undefined }));
-            window.setTimeout(() => {
+            const timer = window.setTimeout(() => {
+              // Drop self from the pending list (we're firing now).
+              reconnectTimersRef.current = reconnectTimersRef.current.filter((t) => t !== timer);
+              if (userDisconnectRef.current) return; // disconnected while we waited
               void open(dev, attempt + 1).catch((e) => {
                 setState((s) => ({ ...s, status: "error", message: `Connection lost — tap to reconnect. (${shortErr(e)})` }));
               });
             }, 800 * (attempt + 1));
+            reconnectTimersRef.current.push(timer);
           } else {
             setState((s) => ({ ...s, status: "error", message: "Connection lost — tap to reconnect." }));
           }
@@ -224,13 +255,13 @@ export function BleProvider({ children }: { children: ReactNode }) {
         ...s,
         status: "connected",
         found: [],
-        live: { ...liveRef.current },
         device: dev,
         message:
           subscribed === 0
             ? `Connected — no standard HR/power/cadence data yet. If readings don't appear, this device (e.g. a full Garmin) may use a proprietary protocol; use the Zepp/Gadgetbridge export for it.`
             : undefined,
       }));
+      setLive({ ...liveRef.current });
     },
     [ble, subscribe],
   );
@@ -241,7 +272,8 @@ export function BleProvider({ children }: { children: ReactNode }) {
       connectingRef.current = true;
       userDisconnectRef.current = false;
       liveRef.current = {};
-      setState((s) => ({ ...s, status: "connecting", device: dev, live: {}, message: undefined, steps: [] }));
+      setState((s) => ({ ...s, status: "connecting", device: dev, message: undefined, steps: [] }));
+      setLive({});
       try {
         // Android can't connect while a scan is running — stop it first.
         if (scanningRef.current) {
@@ -316,6 +348,9 @@ export function BleProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(async () => {
     userDisconnectRef.current = true;
+    // Cancel any queued reconnect attempts so they don't re-open after disconnect.
+    reconnectTimersRef.current.forEach((t) => window.clearTimeout(t));
+    reconnectTimersRef.current = [];
     const client = clientRef.current;
     const id = state.device?.deviceId;
     if (client && id) {
@@ -326,21 +361,54 @@ export function BleProvider({ children }: { children: ReactNode }) {
       }
     }
     liveRef.current = {};
-    setState({ status: "idle", found: [], live: {}, device: null, steps: [] });
+    setState({ status: "idle", found: [], device: null, steps: [] });
+    setLive({});
   }, [state.device]);
 
-  const value = useMemo<BleApi>(
+  // On unmount, cancel any pending reconnect timers (the provider — and its
+  // open() closure — would otherwise be gone when they fire).
+  useEffect(() => {
+    const timers = reconnectTimersRef;
+    return () => {
+      timers.current.forEach((t) => window.clearTimeout(t));
+      timers.current = [];
+    };
+  }, []);
+
+  // Connection context: changes only on connect/scan/status transitions.
+  const connValue = useMemo<BleConnectionApi>(
     () => ({ ...state, scan, connect, disconnect }),
     [state, scan, connect, disconnect],
   );
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <ConnCtx.Provider value={connValue}>
+      <LiveCtx.Provider value={live}>{children}</LiveCtx.Provider>
+    </ConnCtx.Provider>
+  );
 }
 
-export function useBle(): BleApi {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useBle must be used within <BleProvider>");
+/** Connection/status + actions only — does NOT re-render on live samples. */
+export function useBleConnection(): BleConnectionApi {
+  const ctx = useContext(ConnCtx);
+  if (!ctx) throw new Error("useBleConnection must be used within <BleProvider>");
   return ctx;
+}
+
+/** Live samples only — re-renders on every BLE sample. */
+export function useBleLive(): Live {
+  const ctx = useContext(LiveCtx);
+  if (ctx == null) throw new Error("useBleLive must be used within <BleProvider>");
+  return ctx;
+}
+
+/** Convenience hook combining both contexts; kept for existing consumers.
+ *  Subscribes to BOTH, so it re-renders on samples — prefer the granular
+ *  useBleConnection()/useBleLive() where you only need one slice. */
+export function useBle(): BleApi {
+  const conn = useBleConnection();
+  const live = useBleLive();
+  return { ...conn, live };
 }
 
 export function serviceLabel(services: string[]): string[] {

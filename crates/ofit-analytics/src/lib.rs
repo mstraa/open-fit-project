@@ -42,6 +42,12 @@ use chrono::{DateTime, Utc};
 /// Each is a boxed [`RunnableAlgorithm`] carrying its [`ofit_core::AlgorithmSpec`].
 /// The API/registry list these and expose their specs; the orchestrator runs them.
 pub fn builtin_algorithms(p: &AnalyticsParams) -> Vec<Box<dyn RunnableAlgorithm>> {
+    // MANUAL REGISTRATION: this hand-written `vec!` is the ONE place a new built-in
+    // must be added — forgetting to list it here makes it invisible to the API,
+    // registry and recompute. The `tests` module derives every invariant from this
+    // list itself (no magic counts), and asserts each registered built-in only
+    // produces outputs it declares, so a forgotten or misdeclared entry fails loudly
+    // rather than silently. Keep this list and the `pub use` in `algorithms` in sync.
     vec![
         Box::new(TrainingLoad::configured(p)),
         Box::new(TrainingEffect::configured(p)),
@@ -73,7 +79,13 @@ pub fn run_for_subject(input: &AnalyticsInput) -> AlgorithmOutputs {
 pub fn run_for_subject_at(input: &AnalyticsInput, computed_at: DateTime<Utc>) -> AlgorithmOutputs {
     let mut out = AlgorithmOutputs::default();
     for algo in builtin_algorithms(&AnalyticsParams::default()) {
-        out.extend(algo.compute(input, computed_at));
+        let mut produced = algo.compute(input, computed_at);
+        // Honesty guard: a built-in must only emit outputs it declares in its spec
+        // (parity with the WASM host's `tag_validated`). Drop undeclared outputs so
+        // a misdeclared built-in can never persist a phantom metric/stream. No
+        // logger here (this crate has none); the API orchestration layer logs.
+        let _dropped = produced.retain_declared(algo.spec());
+        out.extend(produced);
     }
     out
 }
@@ -113,22 +125,108 @@ mod tests {
 
     #[test]
     fn builtin_registry_specs_are_versioned_and_well_formed() {
+        // Every invariant is derived from the registry itself — NO magic count — so a
+        // forgotten registration or a count bump can't pass silently (AUDIT #4).
         let specs = builtin_specs();
-        assert_eq!(specs.len(), 5);
+        assert!(!specs.is_empty(), "the built-in registry must not be empty");
+
+        // `builtin_specs()` is just the specs of `builtin_algorithms`, so the two
+        // must agree in length (catches a spec/algorithm list drift).
+        assert_eq!(
+            specs.len(),
+            builtin_algorithms(&AnalyticsParams::default()).len(),
+            "builtin_specs() and builtin_algorithms() disagree on count"
+        );
+
         for s in &specs {
             assert!(!s.id.is_empty());
             // version parses as semver-ish (three dot-separated numbers).
             let parts: Vec<_> = s.version.split('.').collect();
             assert_eq!(parts.len(), 3, "version {} not x.y.z", s.version);
             assert!(parts.iter().all(|p| p.parse::<u32>().is_ok()));
-            assert!(!s.outputs.is_empty());
+            assert!(!s.outputs.is_empty(), "{} declares no outputs", s.id);
             assert_eq!(s.kind, AlgorithmKind::BuiltIn);
         }
-        // ids are unique.
+        // ids are unique (count distinct ids == count specs).
         let mut ids: Vec<_> = specs.iter().map(|s| s.id.clone()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), specs.len(), "built-in ids are not unique");
+    }
+
+    /// AUDIT #4 / #11: every registered built-in must PRODUCE only outputs it
+    /// declares in its spec, over a representative synthetic input that exercises
+    /// each algorithm. Calls `compute` directly (NOT `run_for_subject_at`, which
+    /// filters undeclared outputs) so a registered-but-misdeclared algorithm — one
+    /// that emits a metric/stream it never listed — is caught here.
+    #[test]
+    fn every_builtin_produces_only_declared_outputs() {
+        let base = day(2024, 1, 1);
+        // Activity with HR + power so training_load + training_effect both run.
+        let act = activity(
+            base,
+            60,
+            Sport::Cycling,
+            vec![
+                series(StreamKind::Power, 3600, 220.0),
+                series(StreamKind::HeartRate, 3600, 150.0),
+            ],
+        );
+        // Wellness covering HRV/RHR (readiness, anomaly) and sleep stages (sleep).
+        let mut wellness = vec![];
+        for i in 0..7 {
+            let ts = base + Duration::days(i);
+            wellness.push(WellnessPoint { kind: WellnessKind::Hrv, value: 60.0, ts });
+            wellness.push(WellnessPoint { kind: WellnessKind::RestingHeartRate, value: 55.0, ts });
+        }
+        // ~8 h of staged sleep on one night so the Sleep algorithm emits a night
+        // (codes: 0=awake,1=light,2=deep,3=rem). Minute-spaced from 23:00.
+        let sleep_start = Utc.with_ymd_and_hms(2024, 1, 2, 23, 0, 0).unwrap();
+        for m in 0..480i64 {
+            let code = match m % 10 {
+                0 => 0.0,       // a little awake
+                1 | 2 => 2.0,   // deep
+                3 | 4 => 3.0,   // rem
+                _ => 1.0,       // light
+            };
+            wellness.push(WellnessPoint {
+                kind: WellnessKind::SleepStage,
+                value: code,
+                ts: sleep_start + Duration::minutes(m),
+            });
+        }
+        let input = AnalyticsInput { activities: vec![act], wellness };
+        let computed_at = base + Duration::days(7);
+
+        let mut total_outputs = 0usize;
+        for algo in builtin_algorithms(&AnalyticsParams::default()) {
+            let spec = algo.spec().clone();
+            let out = algo.compute(&input, computed_at);
+            total_outputs += out.len();
+            for m in &out.metrics {
+                assert!(
+                    spec.outputs
+                        .iter()
+                        .any(|o| matches!(o, ofit_core::AlgorithmOutput::Metric(n) if n == &m.name)),
+                    "{} emitted undeclared metric `{}`",
+                    spec.id,
+                    m.name
+                );
+            }
+            for s in &out.streams {
+                assert!(
+                    spec.outputs
+                        .iter()
+                        .any(|o| matches!(o, ofit_core::AlgorithmOutput::Stream(n) if n == &s.name)),
+                    "{} emitted undeclared stream `{}`",
+                    spec.id,
+                    s.name
+                );
+            }
+        }
+        // Sanity: the synthetic input actually drove the algorithms (otherwise the
+        // assertions above would be vacuously true).
+        assert!(total_outputs > 0, "synthetic input produced no outputs");
     }
 
     #[test]

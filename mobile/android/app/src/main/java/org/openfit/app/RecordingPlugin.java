@@ -30,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Controls the native workout {@link RecordingService} (Stage 1: GPS + IMU + HR
@@ -58,6 +59,20 @@ public class RecordingPlugin extends Plugin {
     public void load() {
         // Retry any workout .fit that didn't upload last time (offline on Stop).
         io.execute(this::flushPendingUploads);
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        // Shut down the upload worker so its thread (and the captured Context/File
+        // handles) doesn't outlive the plugin; drain briefly for an in-flight POST.
+        io.shutdown();
+        try {
+            if (!io.awaitTermination(5, TimeUnit.SECONDS)) io.shutdownNow();
+        } catch (InterruptedException e) {
+            io.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        super.handleOnDestroy();
     }
 
     @PluginMethod
