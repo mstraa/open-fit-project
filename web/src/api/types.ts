@@ -113,6 +113,8 @@ export interface ActivityDetail {
     calories_kcal: number;
     avg_pace_s_per_m: number;
   };
+  /** Total steps for the effort, if reported (e.g. phone step detector). */
+  total_steps?: number;
 }
 
 /**

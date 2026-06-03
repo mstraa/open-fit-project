@@ -220,6 +220,7 @@ function normalizeActivityDetail(raw: unknown, fallbackId: string): ActivityDeta
   if (!Number.isFinite(duration) && startedAt && endedAt) {
     duration = Math.max(0, (Date.parse(endedAt) - Date.parse(startedAt)) / 1000);
   }
+  const stepsN = num(pick(o, "total_steps"), NaN);
 
   return {
     id: str(pick(o, "id")) || fallbackId,
@@ -231,6 +232,7 @@ function normalizeActivityDetail(raw: unknown, fallbackId: string): ActivityDeta
     resolved,
     preferences,
     summary,
+    total_steps: Number.isFinite(stepsN) && stepsN > 0 ? stepsN : undefined,
   };
 }
 

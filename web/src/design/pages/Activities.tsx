@@ -994,7 +994,9 @@ function buildRealSummary(det: ActivityDetailVM): [string, string, string][] | n
   else if (det.avg.speed) tiles.push(["Avg speed", (det.avg.speed * 3.6).toFixed(1), "km/h"]);
   if (det.summary?.calories_kcal) tiles.push(["Calories", String(Math.round(det.summary.calories_kcal)), "kcal"]);
   if (det.avg.heart_rate) tiles.push(["Avg HR", String(Math.round(det.avg.heart_rate)), "bpm"]);
+  if (det.avg.cadence) tiles.push(["Avg cadence", String(Math.round(det.avg.cadence)), "spm"]);
   if (det.avg.power) tiles.push(["Avg power", String(Math.round(det.avg.power)), "W"]);
+  if (det.steps) tiles.push(["Steps", det.steps.toLocaleString(), ""]);
   return tiles.length > 1 ? tiles : null;
 }
 

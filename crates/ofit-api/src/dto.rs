@@ -182,6 +182,9 @@ pub struct ActivityDetail {
     pub track_source_id: Option<Uuid>,
     /// Totals for a summary-only activity (no streams); absent for normal ones.
     pub summary: Option<ActivitySummaryStats>,
+    /// Total steps for the effort, when a member recording reports them (e.g. a
+    /// phone recording's step detector). `None` if no recording carried steps.
+    pub total_steps: Option<i64>,
 }
 
 /// Response of `DELETE /api/activities/{id}/recordings/{recording_id}`.

@@ -42,6 +42,18 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
                     let end = field_timestamp(rec, "timestamp").unwrap_or(start);
                     b.set_summary_window(start, end);
                 }
+                // Total steps — a session-level summary (phone step-detector
+                // recordings; FIT names it total_cycles, or total_strides for
+                // walking/running). Surfaced in metadata; the API exposes it as
+                // the activity's total_steps.
+                if let Some(steps) = field_f64(rec, "total_cycles")
+                    .or_else(|| field_f64(rec, "total_strides"))
+                    .or_else(|| field_f64(rec, "total_steps"))
+                {
+                    if steps > 0.0 {
+                        b.meta("steps", steps.round() as i64);
+                    }
+                }
             }
             "Sport" if !sport_set => {
                 if let Some(s) = field_str(rec, "sport") {

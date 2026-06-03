@@ -265,6 +265,7 @@ async fn build_activity_detail(
     let mut all_streams: Vec<Stream> = Vec::new();
     let mut recordings: Vec<RecordingDto> = Vec::new();
     let mut summary: Option<ActivitySummaryStats> = None;
+    let mut total_steps: Option<i64> = None;
     for &rid in &activity.recording_ids {
         let streams = db.streams_for_recording(rid).await.map_err(internal)?;
         let rec = db.get_recording(rid).await.map_err(internal)?;
@@ -276,6 +277,11 @@ async fn build_activity_detail(
                     avg_pace_s_per_m: m.get("avg_pace_s_per_m").and_then(|v| v.as_f64()).unwrap_or(0.0),
                 });
             }
+        }
+        // Steps are a session-level total (e.g. a phone recording's step detector),
+        // carried in the recording metadata; take the max across member recordings.
+        if let Some(s) = rec.as_ref().and_then(|r| r.metadata.get("steps")).and_then(|v| v.as_i64()) {
+            total_steps = Some(total_steps.map_or(s, |cur| cur.max(s)));
         }
         let (source_id, format) = match &rec {
             Some(r) => (
@@ -366,6 +372,7 @@ async fn build_activity_detail(
         track,
         track_source_id,
         summary,
+        total_steps,
     })
 }
 
