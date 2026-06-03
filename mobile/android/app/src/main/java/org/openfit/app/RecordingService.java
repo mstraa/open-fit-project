@@ -31,8 +31,8 @@ import java.io.File;
 import java.io.FileWriter;
 
 /**
- * Foreground workout-recording engine. Samples GPS (1 Hz) + accelerometer &
- * gyroscope (25 Hz) on a dedicated HandlerThread and appends each reading to a
+ * Foreground workout-recording engine. Samples GPS (1 Hz) + the hardware step
+ * detector (steps + derived cadence) on a dedicated HandlerThread and appends each reading to a
  * crash-safe JSONL file under filesDir/recordings/&lt;sessionId&gt;/. Holds a
  * PARTIAL_WAKE_LOCK so sampling continues with the screen off (the foreground
  * service keeps the process alive but NOT the CPU). Heart rate is fed in from the
@@ -45,8 +45,8 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private static final String TAG = "RecordingService";
     static final String CHANNEL_ID = "openfit_recording";
     static final int NOTIF_ID = 1001;
-    private static final long IMU_PERIOD_NS = 40_000_000L; // 25 Hz throttle
-    private static final int IMU_PERIOD_US = 40_000;
+    // Rolling window for deriving live cadence (steps/min) from step-detector events.
+    private static final long CADENCE_WINDOW_MS = 10_000L;
     private static final String PREFS = "ofit_recording";
 
     static final String ACTION_START = "org.openfit.app.REC_START";
@@ -117,7 +117,11 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private long timerBaseMs = 0;
     private long segStartRtMs = 0;
 
-    private final long[] lastImuEmit = new long[64]; // per sensor.type throttle
+    // Step detector: cumulative count (read at stop) + recent step times for cadence.
+    // Touched on the recording HandlerThread (sensor cb + ticker); stepCount is also
+    // read once at stop on the main thread, hence volatile.
+    private volatile int stepCount = 0;
+    private final java.util.ArrayDeque<Long> stepTimes = new java.util.ArrayDeque<>();
     private double cumDistanceM = 0;
     private double lastSpeedMps = 0;
     private double lastLat = Double.NaN, lastLon = Double.NaN;
@@ -184,7 +188,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
         // Receive live device metrics (HR, and where available cadence/power) for the
         // duration of the session. Cleared on finish/destroy.
         setMetricsSink(this::ingestMetric);
-        startImu();
+        startStepSensor();
         if (!"calisthenics".equals(sport)) startGps();
         recording = true;
         handler.postDelayed(ticker, 1000);
@@ -198,8 +202,13 @@ public class RecordingService extends Service implements SensorEventListener, Lo
             // Record HR into the file at 1 Hz (it arrives from the Helio stream, not
             // a sensor callback, so the ticker is where we sample it).
             if (!paused) {
+                long t = nowMs();
                 int hr = snapHr();
-                if (hr > 0) writeLine("{\"k\":\"hr\",\"t\":" + nowMs() + ",\"v\":" + hr + "}");
+                if (hr > 0) writeLine("{\"k\":\"hr\",\"t\":" + t + ",\"v\":" + hr + "}");
+                // Cadence (spm) at 1 Hz → FitEncoder writes it to each FIT record →
+                // the server ingests it as a Cadence stream.
+                int cad = snapCadence();
+                if (cad > 0) writeLine("{\"k\":\"cad\",\"t\":" + t + ",\"v\":" + cad + "}");
             }
             LiveListener l = liveListener;
             if (l != null) {
@@ -213,7 +222,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private void startInForeground() {
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Recording " + sport)
-            .setContentText("GPS + motion sensors active")
+            .setContentText("GPS + step sensor active")
             .setSmallIcon(getApplicationInfo().icon)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -263,12 +272,21 @@ public class RecordingService extends Service implements SensorEventListener, Lo
         return Math.max(0, (eventNanos - startElapsedNs) / 1_000_000L);
     }
 
-    private void startImu() {
+    private void startStepSensor() {
         sm = (SensorManager) getSystemService(SENSOR_SERVICE);
-        Sensor a = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-        Sensor g = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
-        if (a != null) sm.registerListener(this, a, IMU_PERIOD_US, 0, handler);
-        if (g != null) sm.registerListener(this, g, IMU_PERIOD_US, 0, handler);
+        Sensor step = sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR);
+        if (step == null) {
+            Log.i(TAG, "no step detector on this device — steps/cadence unavailable");
+            return;
+        }
+        try {
+            // One event per step; SENSOR_DELAY_NORMAL is plenty and low-power. Needs
+            // ACTIVITY_RECOGNITION on API 29+ (requested by RecordingPlugin); without
+            // it this throws/yields nothing and we simply record without steps/cadence.
+            sm.registerListener(this, step, SensorManager.SENSOR_DELAY_NORMAL, handler);
+        } catch (SecurityException e) {
+            Log.w(TAG, "step detector needs ACTIVITY_RECOGNITION (denied?): " + e.getMessage());
+        }
     }
 
     @SuppressWarnings("MissingPermission")
@@ -287,14 +305,15 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     @Override
     public void onSensorChanged(SensorEvent e) {
         if (paused) return;
-        int t = e.sensor.getType();
-        if (t < lastImuEmit.length && e.timestamp - lastImuEmit[t] < IMU_PERIOD_NS) return;
-        if (t < lastImuEmit.length) lastImuEmit[t] = e.timestamp;
-        long ms = elapsedMsFromNanos(e.timestamp);
-        String k = t == Sensor.TYPE_ACCELEROMETER ? "acc" : t == Sensor.TYPE_GYROSCOPE ? "gyr" : null;
-        if (k == null) return;
-        writeLine("{\"k\":\"" + k + "\",\"t\":" + ms
-            + ",\"x\":" + f(e.values[0]) + ",\"y\":" + f(e.values[1]) + ",\"z\":" + f(e.values[2]) + "}");
+        if (e.sensor.getType() != Sensor.TYPE_STEP_DETECTOR) return;
+        // One detector event == one step. This callback and the ticker share the
+        // recording HandlerThread looper, so stepTimes needs no extra locking.
+        stepCount++;
+        long now = SystemClock.elapsedRealtime();
+        stepTimes.addLast(now);
+        while (!stepTimes.isEmpty() && now - stepTimes.peekFirst() > CADENCE_WINDOW_MS) {
+            stepTimes.removeFirst();
+        }
     }
 
     @Override
@@ -368,7 +387,8 @@ public class RecordingService extends Service implements SensorEventListener, Lo
         try (BufferedWriter mw = new BufferedWriter(new FileWriter(new File(sessionDir, "session.meta.json"), false))) {
             mw.write("{\"sessionId\":\"" + sessionId + "\",\"sport\":\"" + sport
                 + "\",\"startedAtUnixMs\":" + startWallMs + ",\"endedAtUnixMs\":" + System.currentTimeMillis()
-                + ",\"elapsedMs\":" + elapsed + ",\"distanceM\":" + f((float) cumDistanceM) + "}");
+                + ",\"elapsedMs\":" + elapsed + ",\"distanceM\":" + f((float) cumDistanceM)
+                + ",\"steps\":" + stepCount + "}");
         } catch (Exception ignored) {}
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply();
         LiveListener l = liveListener;
@@ -436,8 +456,19 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     long snapElapsedMs() { return timerMs(); }
     boolean snapPaused() { return paused; }
     int snapHr() { return (SystemClock.elapsedRealtime() - latestHrAt) < 8000 ? latestHr : 0; }
-    int snapCadence() { return lastCadence; }
+    /** Live cadence (spm): a BLE cadence sensor wins; else derive from the step detector. */
+    int snapCadence() { return lastCadence > 0 ? lastCadence : stepCadence(); }
     int snapPower() { return lastPower; }
+
+    /** Steps/min from recent step-detector events over a rolling window (0 if none). */
+    private int stepCadence() {
+        long now = SystemClock.elapsedRealtime();
+        while (!stepTimes.isEmpty() && now - stepTimes.peekFirst() > CADENCE_WINDOW_MS) {
+            stepTimes.removeFirst();
+        }
+        int n = stepTimes.size();
+        return n == 0 ? 0 : (int) Math.round(n * 60000.0 / CADENCE_WINDOW_MS);
+    }
     double snapAltitude() { return Double.isNaN(lastAltM) ? 0 : lastAltM; }
     double snapAscent() { return cumAscentM; }
 
