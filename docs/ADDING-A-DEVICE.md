@@ -149,6 +149,25 @@ data-driven). Add `"mydevice"` to:
 - **Auth keys**: if the device needs a secret (like Huami), collect it in the `System.tsx`
   add flow and thread it through `addAndConnect(dev, { type, authKey })` → `connect`.
 
+## Standard Heart Rate (0x2A37) — byte layout + shared test vectors
+
+The native parser (`BleGatt.parseHeartRate`) and the web parser (`parseHr` in
+`web/src/ble/BleProvider.tsx`) decode the **same** standard HR Measurement layout — keep them
+in sync. Byte 0 is flags; **bit 0 = 0** → HR is a `uint8` at byte 1; **bit 0 = 1** → HR is a
+little-endian `uint16` at bytes 1–2.
+
+| bytes (hex) | meaning | HR |
+|---|---|---|
+| `00 48` | flags=0, uint8 | 72 |
+| `00 C8` | flags=0, uint8 (unsigned) | 200 |
+| `01 2C 01` | flags bit0=1, uint16 LE `0x012C` | 300 |
+| `00` / `01 2C` | malformed / too short | (ignored) |
+
+These vectors are enforced natively by `BleGattTest`
+(`mobile/android/app/src/test/java/org/openfit/app/protocol/BleGattTest.java`, run via
+`./gradlew :app:testDebugUnitTest`). Mirror them on the web side once a JS test runner exists
+(the web project has none today).
+
 ## Testing
 
 There is **no BLE in CI** — everything is verified on-device.
