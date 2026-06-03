@@ -168,6 +168,20 @@ public class OpenFitBlePlugin extends Plugin {
                 String name = result.getScanRecord() != null ? result.getScanRecord().getDeviceName() : null;
                 ev.put("name", name != null ? name : (d.getName() != null ? d.getName() : "(unknown)"));
                 ev.put("rssi", result.getRssi());
+                // Advertised service UUIDs (if any) → let the add-device UI suggest a
+                // protocol instead of the user guessing. Many devices advertise none
+                // (services appear only post-connect); that's fine — no hint then.
+                java.util.List<UUID> services = new java.util.ArrayList<>();
+                if (result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null) {
+                    for (android.os.ParcelUuid pu : result.getScanRecord().getServiceUuids()) {
+                        services.add(pu.getUuid());
+                    }
+                }
+                com.getcapacitor.JSArray svcArr = new com.getcapacitor.JSArray();
+                for (UUID u : services) svcArr.put(u.toString());
+                ev.put("services", svcArr);
+                String suggested = org.openfit.app.protocol.ProtocolRegistry.detectFromServices(services);
+                if (suggested != null) ev.put("suggestedType", suggested);
                 notifyListeners("scanResult", ev);
             }
         };

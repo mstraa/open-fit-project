@@ -3,11 +3,16 @@
 // BluetoothGatt connection + a serialized GATT op queue and streams events back.
 
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import type { DeviceProtocolType } from "../protocols";
 
 export interface NativeScanResult {
   deviceId: string;
   name: string;
   rssi: number;
+  /** Advertised service UUIDs (lowercase), when the device advertises any. */
+  services?: string[];
+  /** Best-effort protocol hint derived natively from `services` (else absent). */
+  suggestedType?: DeviceProtocolType;
 }
 
 export interface NativeSample {
