@@ -120,6 +120,19 @@ else
   msg "warning: could not fetch the update script (re-run the installer to retry)"
 fi
 
+# ---- `update-main` command (build from source) ------------------------------
+# Like `update` but compiles ofit-api from a source branch (default: main) on the
+# box instead of downloading the latest tagged release. Installs its own toolchain
+# (Node + Rust) on first run.
+msg "installing the 'update-main' command…"
+if curl -fsSL "https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/lxc/openfit-update-main.sh" \
+     -o /usr/local/bin/update-main 2>/dev/null; then
+  chmod +x /usr/local/bin/update-main
+  sed -i "s#^REPO=.*#REPO=\"\${OFIT_REPO:-${REPO}}\"#" /usr/local/bin/update-main
+else
+  msg "warning: could not fetch update-main (re-run the installer to retry)"
+fi
+
 # ---- console auto-login as root ---------------------------------------------
 # `pct console` and the Proxmox web console attach to tty1, so the getty must run
 # on tty%I — NOT pts/%I, which systemd's default container-getty uses; that
