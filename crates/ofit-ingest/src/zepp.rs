@@ -30,6 +30,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ofit_core::{SleepStage, Sport, WellnessKind};
 
+use crate::note;
+
 /// A single timestamped wellness sample produced by an import adapter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WellnessReading {
@@ -216,12 +218,6 @@ pub fn map_sport(code: i64) -> Sport {
         6 => Sport::Walking,      // walking (~4 km/h)
         9 | 10 => Sport::Cycling, // outdoor / indoor cycling (~17 km/h)
         _ => Sport::Other,        // 16/52/59/111/130 etc. are no-GPS indoor efforts
-    }
-}
-
-fn note(skipped: &mut Vec<String>, msg: &str) {
-    if !skipped.iter().any(|s| s == msg) {
-        skipped.push(msg.to_string());
     }
 }
 

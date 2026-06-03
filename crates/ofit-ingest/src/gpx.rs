@@ -11,7 +11,7 @@ use ofit_core::{Sport, StreamKind};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::{builder::RecordingBuilder, sport_from_str, Error};
+use crate::{builder::RecordingBuilder, sport_from_str, wrap_parse_error, xml_local_name};
 
 /// gpxtpx extension values for one trackpoint (index-aligned to the spine).
 #[derive(Default, Clone, Copy)]
@@ -22,17 +22,10 @@ struct Ext {
 }
 
 pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder> {
-    let gpx = gpx::read(bytes).map_err(|e| Error::Parse {
-        format: "gpx",
-        name: name.to_string(),
-        reason: e.to_string(),
-    })?;
+    let gpx = gpx::read(bytes).map_err(|e| wrap_parse_error("gpx", name, e))?;
 
-    let exts = parse_extensions(bytes).map_err(|e| Error::Parse {
-        format: "gpx",
-        name: name.to_string(),
-        reason: format!("extension scan: {e}"),
-    })?;
+    let exts = parse_extensions(bytes)
+        .map_err(|e| wrap_parse_error("gpx", name, format!("extension scan: {e}")))?;
 
     let mut b = RecordingBuilder::new(name);
     b.meta("parser", "gpx + quick-xml (gpxtpx extensions)");
@@ -99,9 +92,7 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder>
 fn waypoint_time(wpt: &gpx::Waypoint) -> Option<DateTime<Utc>> {
     let t = wpt.time?;
     let s = t.format().ok()?;
-    DateTime::parse_from_rfc3339(&s)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+    crate::parse_rfc3339(&s)
 }
 
 /// Second pass: collect gpxtpx extension values per `<trkpt>` in document order.
@@ -119,7 +110,7 @@ fn parse_extensions(bytes: &[u8]) -> Result<Vec<Ext>, quick_xml::Error> {
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Start(e) => {
-                let local = local_name(e.name().as_ref());
+                let local = xml_local_name(e.name().as_ref());
                 match local.as_str() {
                     "trkpt" => {
                         in_trkpt = true;
@@ -143,7 +134,7 @@ fn parse_extensions(bytes: &[u8]) -> Result<Vec<Ext>, quick_xml::Error> {
                 }
             }
             Event::End(e) => {
-                let local = local_name(e.name().as_ref());
+                let local = xml_local_name(e.name().as_ref());
                 match local.as_str() {
                     "trkpt" => {
                         in_trkpt = false;
@@ -160,13 +151,4 @@ fn parse_extensions(bytes: &[u8]) -> Result<Vec<Ext>, quick_xml::Error> {
     }
 
     Ok(out)
-}
-
-/// Strip an XML namespace prefix (`ns3:hr` → `hr`).
-fn local_name(qname: &[u8]) -> String {
-    let s = String::from_utf8_lossy(qname);
-    match s.rsplit_once(':') {
-        Some((_, local)) => local.to_string(),
-        None => s.to_string(),
-    }
 }

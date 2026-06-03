@@ -6,21 +6,15 @@
    and falls back to these so the redesign always renders fully.
    Replace the mocks as the backend grows (see the report / memory).
    ============================================================ */
-import type { Sport } from "../api/types";
 import { mulberry32, smoothSeries, fmtDay, dayKey } from "./util";
 export { fmtDay, dayKey };
 
 const rnd = mulberry32(20260601);
 
-/** Sport → visual meta, keyed by the REAL Sport enum (lowercase). */
-export const SPORTS: Record<Sport, { color: string; icon: string; label: string }> = {
-  running: { color: "var(--run)", icon: "run", label: "Running" },
-  cycling: { color: "var(--cycle)", icon: "bike", label: "Cycling" },
-  swimming: { color: "var(--light)", icon: "swim", label: "Swimming" },
-  walking: { color: "var(--walk)", icon: "walk", label: "Walking" },
-  strength: { color: "var(--strength)", icon: "strength", label: "Strength" },
-  other: { color: "var(--activity)", icon: "pulse", label: "Activity" },
-};
+/** Sport → visual meta, keyed by the REAL Sport enum (lowercase).
+ *  Single source of truth lives in lib/metadata; re-exported here for the
+ *  redesign's existing `import { SPORTS } from "./data"` call sites. */
+export { SPORTS } from "../lib/metadata";
 
 export const TODAY = new Date(2026, 5, 1); // 1 June 2026 — anchors the mock series
 

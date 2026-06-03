@@ -15,6 +15,7 @@ import { useNativeBle } from "../ble/native/NativeBleProvider";
 import { getStepsGoal } from "../prefs";
 import * as D from "./data";
 import { fmtDur } from "./util";
+import { SPORTS, sportLabel } from "../lib/metadata";
 
 const MONTHS_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
 /** ISO → "27 mai 2026, 08:10" to match the design. */
@@ -23,7 +24,7 @@ export function formatWhen(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   return `${d.getDate()} ${MONTHS_FR[d.getMonth()]} ${d.getFullYear()}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
-export const sportLabel = (s: Sport): string => D.SPORTS[s]?.label ?? "Activity";
+export { sportLabel };
 export function readinessLabel(score: number): string {
   if (score >= 80) return "Primed";
   if (score >= 50) return "Balanced";
@@ -812,7 +813,7 @@ export function useTrainingSummary(period: SummaryPeriod, offset: number): Train
     }
     const bySport = [...bySportMin.entries()]
       .sort((x, y) => y[1] - x[1])
-      .map(([sport, m]) => ({ sport: D.SPORTS[sport]?.label ?? "Activity", color: D.SPORTS[sport]?.color ?? "var(--activity)", mins: m }));
+      .map(([sport, m]) => ({ sport: SPORTS[sport]?.label ?? "Activity", color: SPORTS[sport]?.color ?? "var(--activity)", mins: m }));
     // Real distance summed from the recompute cache; null when nothing in-window
     // carries a distance (→ "—") rather than a fabricated total.
     const dist = distM > 0 ? +(distM / 1000).toFixed(1) : null;

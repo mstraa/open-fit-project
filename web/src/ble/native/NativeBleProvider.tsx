@@ -90,6 +90,16 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
   const subs = useRef<PluginListenerHandle[]>([]);
   const devicesRef = useRef<SavedDevice[]>(devices);
   devicesRef.current = devices;
+  // Mirror the per-device maps into refs so the statusOf/messageOf/hrOf lookups
+  // can be STABLE (empty-dep) callbacks. Without this they'd be recreated on
+  // every status/HR event, churning the context value useMemo and re-rendering
+  // every consumer (even status-only ones) on each ~1Hz HR sample.
+  const statusesRef = useRef(statuses);
+  statusesRef.current = statuses;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const hrByIdRef = useRef(hrById);
+  hrByIdRef.current = hrById;
   // Devices the user explicitly disconnected — don't auto-reconnect these.
   const userDisconnect = useRef<Set<string>>(new Set());
   // True only while a user-tapped sync is in flight, so background/periodic syncs
@@ -129,7 +139,9 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     (async () => {
       const handles = await Promise.all([
         OpenFitBle.addListener("scanResult", (r) => {
-          setFound((f) => (f.some((x) => x.deviceId === r.deviceId) ? f : [...f, r].sort((a, b) => b.rssi - a.rssi)));
+          // Defensive cap: keep at most the 50 strongest results (sorted rssi
+          // desc) so a long-running scan can't grow the array unbounded.
+          setFound((f) => (f.some((x) => x.deviceId === r.deviceId) ? f : [...f, r].sort((a, b) => b.rssi - a.rssi).slice(0, 50)));
         }),
         OpenFitBle.addListener("status", (e: NativeStatus) => {
           const id = e.deviceId;
@@ -284,9 +296,10 @@ export function NativeBleProvider({ children }: { children: ReactNode }) {
     return "idle";
   }, [devices, statuses, scanning]);
 
-  const statusOf = useCallback((id: string): NativeConnStatus => statuses[id] ?? "idle", [statuses]);
-  const messageOf = useCallback((id: string) => messages[id], [messages]);
-  const hrOf = useCallback((id: string) => (hrById[id] ? hrById[id] : null), [hrById]);
+  // Stable lookups (read from refs) so their identity doesn't change per sample.
+  const statusOf = useCallback((id: string): NativeConnStatus => statusesRef.current[id] ?? "idle", []);
+  const messageOf = useCallback((id: string) => messagesRef.current[id], []);
+  const hrOf = useCallback((id: string) => (hrByIdRef.current[id] ? hrByIdRef.current[id] : null), []);
 
   const value = useMemo<NativeBleApi>(
     () => ({

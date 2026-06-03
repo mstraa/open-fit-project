@@ -17,7 +17,7 @@ import type {
   StreamKind,
 } from "../api/types";
 import { LineChart } from "../charts/LineChart";
-import { TrackMap } from "../charts/TrackMap";
+import { TrackMap } from "../charts/TrackMapLazy";
 import { CHART_METRICS, metricLabel } from "../ui/format";
 import { Banner, Button, Card, Spinner } from "../ui/primitives";
 import { SourcePicker } from "./SourcePicker";

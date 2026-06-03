@@ -11,7 +11,7 @@
    SIMULATED (no native plugin in the web shell):
      • RecordFlow live ticking
    ============================================================ */
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { Bars, CountUp, AreaChart } from "../charts";
 import { Card, SectionLabel, SegTabs, Chip, useNav, Icon, DetailHeader, SportBadge, useGear, NoData } from "../ui";
 import { RECORD_TYPES, SPORTS, type Gear } from "../data";
@@ -24,7 +24,7 @@ import {
   type SummaryPeriod,
 } from "../wiring";
 import { tint, fmtDur } from "../util";
-import { TrackMap } from "../../charts/TrackMap";
+import { TrackMap } from "../../charts/TrackMapLazy";
 import type { Sport, StreamKind, LatLngSample, RecordingInfo } from "../../api/types";
 import {
   deleteActivity,
@@ -525,6 +525,14 @@ function TEBar({ value }: { value: number }) {
  *  activity has no GPS. */
 function MapCard({ track, source }: { track?: { lat: number; lng: number }[] | null; source?: string }) {
   const pts = track && track.length > 1 ? track : null;
+  // TrackMap wants LatLngSample[]; the index stands in for t_offset_ms (only used
+  // for speed-coloring / cursor sync, neither of which the overview map uses).
+  // Memoized so a fresh inline array isn't passed to the (memoized) map on every
+  // ActivityDetail re-render — which would otherwise rebuild the MapLibre map.
+  const tmTrack: LatLngSample[] = useMemo(
+    () => (pts ? pts.map((p, i) => ({ t_offset_ms: i, lat: p.lat, lng: p.lng })) : []),
+    [pts],
+  );
   if (!pts) {
     return (
       <Card noPad>
@@ -547,9 +555,6 @@ function MapCard({ track, source }: { track?: { lat: number; lng: number }[] | n
       </Card>
     );
   }
-  // TrackMap wants LatLngSample[]; the index stands in for t_offset_ms (only used
-  // for speed-coloring / cursor sync, neither of which the overview map uses).
-  const tmTrack: LatLngSample[] = pts.map((p, i) => ({ t_offset_ms: i, lat: p.lat, lng: p.lng }));
   return (
     <Card noPad>
       <div style={{ position: "relative", borderRadius: "var(--r)", overflow: "hidden" }}>

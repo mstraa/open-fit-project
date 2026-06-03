@@ -276,7 +276,7 @@ export function LineChart({
           {showDots &&
             pts.map((p, i) => (
               <circle
-                key={i}
+                key={`${i}:${vals[i]}`}
                 cx={p[0]}
                 cy={p[1]}
                 r={active === i ? 4.5 : 3}
@@ -290,7 +290,7 @@ export function LineChart({
           {valueLabels &&
             pts.map((p, i) => (
               <text
-                key={i}
+                key={`${i}:${vals[i]}`}
                 x={p[0]}
                 y={p[1] - 11}
                 textAnchor="middle"
@@ -319,7 +319,7 @@ export function LineChart({
           {xLabels &&
             xLabels.map((lb, i) =>
               lb != null ? (
-                <text key={i} x={x(i)} y={H - 5} textAnchor="middle" className="lc-xlabel" fill="var(--text-faint)">
+                <text key={`${lb}:${i}`} x={x(i)} y={H - 5} textAnchor="middle" className="lc-xlabel" fill="var(--text-faint)">
                   {lb}
                 </text>
               ) : null,
@@ -457,9 +457,15 @@ export function Bars({
 }) {
   const [ref, w] = useWidth();
   const mounted = useMounted(60);
-  const vals = data.map((d) => d.v);
-  const lo = zeroBase ? Math.min(0, ...vals) : Math.min(...vals) * 0.9;
-  const hi = Math.max(...vals) * 1.12;
+  // Y-domain only depends on the data (+ zeroBase); memoize so it isn't
+  // recomputed on every render (e.g. resize / hover state changes elsewhere).
+  const { lo, hi } = useMemo(() => {
+    const vs = data.map((d) => d.v);
+    return {
+      lo: zeroBase ? Math.min(0, ...vs) : Math.min(...vs) * 0.9,
+      hi: Math.max(...vs) * 1.12,
+    };
+  }, [data, zeroBase]);
   const H = height,
     padT = 20,
     padB = 22;
@@ -478,7 +484,7 @@ export function Bars({
               y0 = y(Math.max(0, lo));
             const h = Math.abs(yy - y0);
             return (
-              <g key={i}>
+              <g key={d.d}>
                 <rect
                   x={x(i) - bw / 2}
                   y={mounted ? Math.min(yy, y0) : y0}
@@ -540,7 +546,7 @@ export function StackedBars<K extends string>({
           {data.map((d, i) => {
             let acc = 0;
             return (
-              <g key={i}>
+              <g key={d.d}>
                 {keys.map((k, ki) => {
                   const v = d[k];
                   const hSeg = (v / hi) * innerH;
@@ -618,7 +624,7 @@ export function RegularityBars({
             const top = Math.min(yWake, yBed);
             const bot = Math.max(yWake, yBed);
             return (
-              <g key={i} opacity={mounted ? 1 : 0} style={{ transition: `opacity .6s ease ${i * 0.05}s` }}>
+              <g key={d.d} opacity={mounted ? 1 : 0} style={{ transition: `opacity .6s ease ${i * 0.05}s` }}>
                 <text x={x(i)} y={top - 6} textAnchor="middle" className="lc-vlabel" fill="var(--light)">
                   {fmtClock(d.wake)}
                 </text>
@@ -677,7 +683,7 @@ export function Hypnogram({
             const yTop = li * lane + 3;
             return (
               <rect
-                key={i}
+                key={`${i}:${sg.stage}`}
                 x={x0}
                 y={yTop}
                 width={Math.max(1.2, wSeg - 1)}
@@ -709,7 +715,7 @@ export function SegBar({ parts, height = 12 }: { parts: { v: number; color: stri
     <div className="segbar" style={{ height }}>
       {parts.map((p, i) => (
         <div
-          key={i}
+          key={`${p.color}:${i}`}
           style={{
             width: mounted ? `${(p.v / total) * 100}%` : "0%",
             background: p.color,
@@ -926,8 +932,8 @@ export function AreaChart({
               <stop offset="100%" stopColor={color} stopOpacity="0.12" />
             </linearGradient>
           </defs>
-          {yticks.map((t, i) => (
-            <g key={i}>
+          {yticks.map((t) => (
+            <g key={t}>
               <line x1={padL} x2={w - padR} y1={y(t)} y2={y(t)} stroke="var(--line)" strokeWidth="1" />
               <text x={padL - 6} y={y(t) + 3} textAnchor="end" className="lc-xlabel" fill="var(--text-faint)">
                 {valueFmt(t)}
@@ -946,6 +952,7 @@ export function AreaChart({
             strokeDashoffset={mounted ? 0 : 1}
             style={{ transition: "stroke-dashoffset 1s ease" }}
           />
+          {/* Static literal array (fixed 5 ticks, never filtered) → index key is stable. */}
           {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
             <text
               key={i}

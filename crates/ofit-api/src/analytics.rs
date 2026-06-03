@@ -27,8 +27,9 @@ use ofit_analytics::{
     WellnessPoint as AnWellnessPoint,
 };
 use ofit_core::{
-    resolve_activity_view, AlgorithmInput, AlgorithmSpec, DerivedSubject, RawRecording, Sample,
-    SourceKind, StreamKind, WellnessKind, WellnessSample,
+    resolve_activity_view, Algorithm, AlgorithmInput, AlgorithmSpec, DerivedSubject,
+    MetricSourcePreference, PreferenceScope, RawRecording, Sample, SourceKind, StreamKind,
+    WellnessKind, WellnessSample,
 };
 use ofit_plugins::{PluginHost, SandboxLimits};
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,25 @@ pub fn load_algorithms(
         }
     }
     algos
+}
+
+/// Enforce the built-in output-name contract: drop any metric/stream a **built-in**
+/// emitted that it doesn't declare in `spec.outputs`, logging each dropped name so a
+/// misdeclared built-in is loud, never silently persisted. This mirrors the WASM
+/// host's `tag_validated`; WASM plugins are validated in the host, so we skip them
+/// here (`AlgorithmKind::Wasm`) to avoid changing plugin behavior.
+fn validate_builtin_outputs(spec: &AlgorithmSpec, out: &mut ofit_analytics::AlgorithmOutputs) {
+    if spec.kind != ofit_core::analytics::AlgorithmKind::BuiltIn {
+        return;
+    }
+    for name in out.retain_declared(spec) {
+        tracing::warn!(
+            plugin = %spec.id,
+            version = %spec.version,
+            output = %name,
+            "built-in emitted an undeclared output; dropping it (not in spec.outputs)"
+        );
+    }
 }
 
 /// The effective analytics parameters: the registry defaults overlaid with any
@@ -458,11 +478,12 @@ pub(crate) async fn run_full_recompute(
             .iter()
             .map(|algo| {
                 let spec = algo.spec();
-                (
-                    spec.id.clone(),
-                    spec.version.clone(),
-                    algo.compute(&input, computed_at),
-                )
+                let mut out = algo.compute(&input, computed_at);
+                // Built-ins get the same output-name honesty check the WASM host
+                // already enforces (tag_validated). WASM plugins are validated in
+                // the host, so leave their outputs untouched here.
+                validate_builtin_outputs(spec, &mut out);
+                (spec.id.clone(), spec.version.clone(), out)
             })
             .collect()
     };
@@ -547,6 +568,19 @@ async fn build_analytics_input(state: &AppState) -> Result<AnalyticsInput, ApiEr
         .map(|r| (r.id, r))
         .collect();
 
+    // Batch every member recording's streams once too (kills the per-activity N+1
+    // that previously did one streams_for_recording query per recording). Map is
+    // recording_id -> its streams (kind-ordered); a missing recording => empty.
+    let streams_by_rec = db
+        .streams_for_recordings(&all_rec_ids)
+        .await
+        .map_err(internal)?;
+
+    // And fetch ALL source preferences once, then filter in-memory per activity to
+    // the same slice `preferences_for_activity` returns (default-scope OR pinned to
+    // that activity) — killing the per-activity preference query.
+    let all_prefs = db.list_preferences().await.map_err(internal)?;
+
     let mut acts = Vec::with_capacity(activities.len());
     for activity in activities {
         // Resolve best-source-per-metric exactly like the detail view does.
@@ -555,14 +589,21 @@ async fn build_analytics_input(state: &AppState) -> Result<AnalyticsInput, ApiEr
             .iter()
             .filter_map(|rid| recs_by_id.get(rid).map(|r| (*rid, r.source_id)))
             .collect();
+        // Assemble this activity's streams from the prefetched map, preserving the
+        // per-recording kind order (recording order follows recording_ids).
         let mut all_streams = Vec::new();
-        for &rid in &activity.recording_ids {
-            all_streams.extend(db.streams_for_recording(rid).await.map_err(internal)?);
+        for rid in &activity.recording_ids {
+            if let Some(streams) = streams_by_rec.get(rid) {
+                all_streams.extend(streams.iter().cloned());
+            }
         }
-        let prefs = db
-            .preferences_for_activity(activity.id)
-            .await
-            .map_err(internal)?;
+        let prefs: Vec<MetricSourcePreference> = all_prefs
+            .iter()
+            .filter(|p| {
+                p.scope == PreferenceScope::Default || p.activity_id == Some(activity.id)
+            })
+            .cloned()
+            .collect();
         let view = resolve_activity_view(&activity, &all_streams, &sources, &rec_source, &prefs);
 
         let metrics: Vec<MetricSeries> = view
@@ -655,9 +696,14 @@ async fn resolve_one_activity(
         .iter()
         .filter_map(|rid| recs_by_id.get(rid).map(|r| (*rid, r.source_id)))
         .collect();
+    // Batch this activity's streams in one query (instead of one per recording),
+    // then assemble in recording order preserving each recording's kind ordering.
+    let streams_by_rec = db.streams_for_recordings(&activity.recording_ids).await?;
     let mut all_streams = Vec::new();
-    for &rid in &activity.recording_ids {
-        all_streams.extend(db.streams_for_recording(rid).await?);
+    for rid in &activity.recording_ids {
+        if let Some(streams) = streams_by_rec.get(rid) {
+            all_streams.extend(streams.iter().cloned());
+        }
     }
     let prefs = db.preferences_for_activity(activity.id).await?;
     let view = resolve_activity_view(activity, &all_streams, sources, &rec_source, &prefs);
@@ -759,7 +805,10 @@ pub async fn incremental_activities(state: &AppState, ids: &[uuid::Uuid]) -> any
         let algos = load_algorithms(state.plugins_dir.as_deref(), &params);
         let mut kept = Vec::new();
         for algo in &algos {
-            let out = algo.compute(&input, computed_at);
+            let mut out = algo.compute(&input, computed_at);
+            // Same output-name honesty check as the full recompute (built-ins only;
+            // WASM is validated in its host) so an undeclared metric can't persist.
+            validate_builtin_outputs(algo.spec(), &mut out);
             // Keep only per-activity metrics for the requested activities; drop the
             // partial-input day-streams (ctl/atl/tsb) and other-subject outputs.
             kept.extend(out.metrics.into_iter().filter(
@@ -916,8 +965,15 @@ pub async fn incremental_days(state: &AppState, days: &[String]) -> anyhow::Resu
             .collect();
         let input = AnalyticsInput { activities: Vec::new(), wellness };
         let mut kept = Vec::new();
-        kept.extend(Readiness::configured(&params).compute(&input, computed_at).metrics);
-        kept.extend(AnomalyFlag::configured(&params).compute(&input, computed_at).metrics);
+        // Output-name honesty check (built-ins) — parity with the full recompute.
+        let readiness = Readiness::configured(&params);
+        let mut rd_out = readiness.compute(&input, computed_at);
+        validate_builtin_outputs(readiness.spec(), &mut rd_out);
+        kept.extend(rd_out.metrics);
+        let anomaly = AnomalyFlag::configured(&params);
+        let mut an_out = anomaly.compute(&input, computed_at);
+        validate_builtin_outputs(anomaly.spec(), &mut an_out);
+        kept.extend(an_out.metrics);
         kept
     };
     finalize_variants(state, &mut metrics, &mut [], &params, computed_at).await;

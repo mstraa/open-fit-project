@@ -8,17 +8,12 @@ use chrono::{DateTime, Local, Utc};
 use fitparser::{FitDataRecord, Value};
 use ofit_core::StreamKind;
 
-use crate::{builder::RecordingBuilder, sport_from_str, Error};
-
-const SEMICIRCLES_TO_DEGREES: f64 = 180.0 / 2_147_483_648.0; // 180 / 2^31
+use crate::fit_spec::SEMICIRCLES_TO_DEGREES;
+use crate::{builder::RecordingBuilder, sport_from_str, wrap_parse_error};
 
 /// Parse FIT bytes into a [`RecordingBuilder`].
 pub(crate) fn parse(name: &str, bytes: &[u8]) -> crate::Result<RecordingBuilder> {
-    let records = fitparser::from_bytes(bytes).map_err(|e| Error::Parse {
-        format: "fit",
-        name: name.to_string(),
-        reason: e.to_string(),
-    })?;
+    let records = fitparser::from_bytes(bytes).map_err(|e| wrap_parse_error("fit", name, e))?;
 
     let mut b = RecordingBuilder::new(name);
     b.meta("parser", "fitparser");

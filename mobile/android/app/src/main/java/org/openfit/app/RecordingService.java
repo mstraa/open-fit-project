@@ -63,12 +63,35 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     private static volatile LiveListener liveListener;
     public static void setLiveListener(LiveListener l) { liveListener = l; }
 
+    /**
+     * Additive seam for device data to reach an in-progress recording. BLE
+     * protocols post live metrics here by kind ("heart_rate", "cadence", "power", …)
+     * instead of being hard-wired to HR. Mirrors the existing static feedHeartRate
+     * pattern; the recorder registers its sink while a session is active.
+     */
+    public interface MetricsSink {
+        void onMetric(String kind, double value, long ts);
+    }
+
+    public static final String KIND_HEART_RATE = "heart_rate";
+    public static final String KIND_CADENCE = "cadence";
+    public static final String KIND_POWER = "power";
+
+    private static volatile MetricsSink metricsSink;
+    public static void setMetricsSink(MetricsSink sink) { metricsSink = sink; }
+
+    /** Route a live metric into the recording, if a sink is registered. */
+    public static void feedMetric(String kind, double value, long ts) {
+        MetricsSink s = metricsSink;
+        if (s != null) s.onMetric(kind, value, ts);
+    }
+
     /** Most-recent live HR from the Helio stream, written into the recording. */
     private static volatile int latestHr = 0;
     private static volatile long latestHrAt = 0;
+    /** Kept for compatibility: HR feed delegates to the metrics sink. */
     public static void feedHeartRate(int bpm) {
-        latestHr = bpm;
-        latestHrAt = SystemClock.elapsedRealtime();
+        feedMetric(KIND_HEART_RATE, bpm, SystemClock.elapsedRealtime());
     }
 
     /** Whether a session is active (so the BLE plugin only feeds HR when recording). */
@@ -158,6 +181,9 @@ public class RecordingService extends Service implements SensorEventListener, Lo
 
         openWriter();
         writeLine("{\"k\":\"ev\",\"v\":\"start\",\"t\":0,\"sport\":\"" + sport + "\"}");
+        // Receive live device metrics (HR, and where available cadence/power) for the
+        // duration of the session. Cleared on finish/destroy.
+        setMetricsSink(this::ingestMetric);
         startImu();
         if (!"calisthenics".equals(sport)) startGps();
         recording = true;
@@ -326,6 +352,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
 
     private void finishSession() {
         recording = false;
+        setMetricsSink(null);       // stop receiving device metrics
         long elapsed = timerMs();   // moving time = the workout duration shown/saved
         long totalMs = nowMs();     // monotonic file timestamp for the stop event
         writeLine("{\"k\":\"ev\",\"v\":\"stop\",\"t\":" + totalMs + "}");
@@ -355,6 +382,7 @@ public class RecordingService extends Service implements SensorEventListener, Lo
     @Override
     public void onDestroy() {
         recording = false;
+        setMetricsSink(null);
         try { if (sm != null) sm.unregisterListener(this); } catch (Exception ignored) {}
         try { if (lm != null) lm.removeUpdates(this); } catch (Exception ignored) {}
         synchronized (this) {
@@ -383,6 +411,22 @@ public class RecordingService extends Service implements SensorEventListener, Lo
                 c.setDescription("Records GPS + motion while a workout is in progress.");
                 nm.createNotificationChannel(c);
             }
+        }
+    }
+
+    /** Sink target: fold a live device metric into the recorder's latest-value state.
+     *  HR keeps its existing freshness-gated path (latestHr/latestHrAt); cadence/power
+     *  update their snapshot fields. Unknown kinds are ignored.
+     *  <p>HR freshness ({@link #snapHr()}) is measured against {@code elapsedRealtime},
+     *  so latestHrAt is stamped from that clock here regardless of the source ts. */
+    private void ingestMetric(String kind, double value, long ts) {
+        if (KIND_HEART_RATE.equals(kind)) {
+            latestHr = (int) Math.round(value);
+            latestHrAt = SystemClock.elapsedRealtime();
+        } else if (KIND_CADENCE.equals(kind)) {
+            lastCadence = (int) Math.round(value);
+        } else if (KIND_POWER.equals(kind)) {
+            lastPower = (int) Math.round(value);
         }
     }
 

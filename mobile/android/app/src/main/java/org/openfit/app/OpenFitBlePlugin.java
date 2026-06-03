@@ -48,6 +48,7 @@ import java.util.ArrayDeque;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * OpenFit native BLE plugin. Two modes:
@@ -274,6 +275,9 @@ public class OpenFitBlePlugin extends Plugin {
                 if (link == null) return;
                 if (state == BluetoothDevice.BOND_BONDED) {
                     Log.i(TAG, "bond complete → connecting GATT");
+                    // Bonding is done; stop processing further broadcasts (it's only
+                    // needed during the one-time pairing handshake).
+                    unregisterBondReceiver();
                     emitStatus(d.getAddress(), "connecting", "paired — connecting…");
                     main.post(() -> link.proceedConnect(d));
                 } else if (state == BluetoothDevice.BOND_NONE) {
@@ -284,16 +288,33 @@ public class OpenFitBlePlugin extends Plugin {
         getContext().registerReceiver(bondReceiver, new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
     }
 
+    /** Tear down the bond receiver once pairing is done (idempotent: guards against
+     *  double-unregister, which throws IllegalArgumentException). */
+    private void unregisterBondReceiver() {
+        BroadcastReceiver r = bondReceiver;
+        if (r == null) return;
+        bondReceiver = null;
+        try {
+            getContext().unregisterReceiver(r);
+        } catch (IllegalArgumentException ignored) {
+        }
+    }
+
     @PluginMethod
     public void disconnect(PluginCall call) {
         String id = call.getString("deviceId");
-        if (id != null) {
-            DeviceLink link = links.remove(id);
-            if (link != null) link.teardown();
-        } else {
-            disconnectAll();
+        try {
+            if (id != null) {
+                DeviceLink link = links.remove(id);
+                if (link != null) link.teardown();
+            } else {
+                disconnectAll();
+            }
+        } finally {
+            // Always stop the foreground service once the last link is gone, even if
+            // teardown()/GATT close threw — otherwise the service leaks (battery + notif).
+            if (links.isEmpty()) stopForegroundService();
         }
-        if (links.isEmpty()) stopForegroundService();
         call.resolve();
     }
 
@@ -325,9 +346,11 @@ public class OpenFitBlePlugin extends Plugin {
         ev.put("ts", System.currentTimeMillis());
         notifyListeners("sample", ev);
         nativeIngest(kind, value); // POST natively so it keeps flowing when locked
-        // Feed live HR into an in-progress workout recording.
-        if ("heart_rate".equals(kind) && RecordingService.isRecording()) {
-            RecordingService.feedHeartRate((int) Math.round(value));
+        // Feed live device metrics (HR, and where available cadence/power) into an
+        // in-progress workout recording via the metrics sink. The recorder ignores
+        // kinds it doesn't track, so it's safe to forward all of them.
+        if (RecordingService.isRecording()) {
+            RecordingService.feedMetric(kind, value, System.currentTimeMillis());
         }
     }
 
@@ -716,11 +739,18 @@ public class OpenFitBlePlugin extends Plugin {
             return wm <= 0 ? floor : Math.max(floor, wm - SYNC_OVERLAP_MS);
         }
 
+        /** True while this link is still the one registered for its deviceId. A
+         *  torn-down/replaced link's pending main-thread runnables (auto/periodic
+         *  sync) must no-op so they don't touch a stale/null session. */
+        private boolean isCurrentLink() {
+            return links.get(deviceId) == this;
+        }
+
         private void maybeAutoSync() {
             long now = System.currentTimeMillis();
             if (now - prefs().getLong("last_autosync_" + deviceId, 0L) < AUTO_SYNC_MIN_INTERVAL_MS) return;
             main.postDelayed(() -> {
-                if (huami == null || fetchInProgress) return;
+                if (!isCurrentLink() || huami == null || fetchInProgress) return;
                 prefs().edit().putLong("last_autosync_" + deviceId, System.currentTimeMillis()).apply();
                 emitStatus(deviceId, "connected", "auto-syncing stored data…");
                 beginSync(computeSince());
@@ -730,6 +760,9 @@ public class OpenFitBlePlugin extends Plugin {
         private final Runnable periodicSync = new Runnable() {
             @Override
             public void run() {
+                // After an unexpected disconnect this can fire on a stale link; bail
+                // (and don't reschedule) if we're no longer the current link.
+                if (!isCurrentLink()) return;
                 if (huami != null && !fetchInProgress) {
                     beginSync(computeSince());
                 }
@@ -934,12 +967,14 @@ public class OpenFitBlePlugin extends Plugin {
         private void setupStandardHr(BluetoothGatt g) {
             BluetoothGattService svc = g.getService(HR_SERVICE);
             if (svc == null) {
-                emitStatus(deviceId, "ready", "no standard Heart Rate service");
+                // Consistent with the Garmin/Huami setup paths: a missing required
+                // service/char is an error, not a "ready" state.
+                emitStatus(deviceId, "error", "no standard Heart Rate service");
                 return;
             }
             BluetoothGattCharacteristic hr = svc.getCharacteristic(HR_MEASUREMENT);
             if (hr == null) {
-                emitStatus(deviceId, "ready", "no HR measurement characteristic");
+                emitStatus(deviceId, "error", "no HR measurement characteristic");
                 return;
             }
             enqueueNotify(hr);
@@ -1109,12 +1144,15 @@ public class OpenFitBlePlugin extends Plugin {
         stopScanInternal();
         disconnectAll();
         stopForegroundService();
-        if (bondReceiver != null) {
-            try {
-                getContext().unregisterReceiver(bondReceiver);
-            } catch (Exception ignored) {
-            }
-            bondReceiver = null;
+        unregisterBondReceiver();
+        // Stop the ingest worker so its thread (and the Context/HTTP state it
+        // captures) doesn't outlive the plugin; drain briefly for an in-flight POST.
+        ingestExec.shutdown();
+        try {
+            if (!ingestExec.awaitTermination(2, TimeUnit.SECONDS)) ingestExec.shutdownNow();
+        } catch (InterruptedException e) {
+            ingestExec.shutdownNow();
+            Thread.currentThread().interrupt();
         }
         super.handleOnDestroy();
     }

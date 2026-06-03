@@ -358,10 +358,12 @@ impl PluginHost {
 
 /// SHA-256 of `bytes` as lowercase hex.
 fn hex_sha256(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
     let digest = Sha256::digest(bytes);
     let mut s = String::with_capacity(64);
     for b in digest {
-        s.push_str(&format!("{b:02x}"));
+        // Single pre-allocated String, no per-byte temporary allocation.
+        let _ = write!(s, "{b:02x}");
     }
     s
 }
