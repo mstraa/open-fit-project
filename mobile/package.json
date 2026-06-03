@@ -1,6 +1,6 @@
 {
   "name": "openfit-mobile",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "private": true,
   "description": "Open Fit Android app — Capacitor wrapper around the React web UI, plus the Gadgetbridge bridge (reads Gadgetbridge's exported SQLite DB → relays wellness/activities to the self-hosted ofit-api).",
   "license": "GPL-3.0-or-later",
