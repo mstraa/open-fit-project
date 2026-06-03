@@ -7,12 +7,13 @@
      via useActivitiesList(); row distance is real (a.dist km, "—").
    • Activity rows open a full-page ActivityDetail overlay.
    ============================================================ */
-import { useState } from "react";
-import { Card, Chip, SportBadge, useNav } from "../ui";
+import { useRef, useState } from "react";
+import { Card, Chip, Icon, SportBadge, useNav } from "../ui";
 import { CountUp, Bars } from "../charts";
 import { MetricDetail } from "../shared";
 import { useActivitiesList, useTrainingSummary, type ActivityRow } from "../wiring";
 import { fmtDur } from "../util";
+import { importFiles } from "../../api/endpoints";
 import { ActivityDetail } from "../pages/Activities";
 
 const FILTERS = ["All", "Running", "Cycling", "Walking", "Strength", "Activity"] as const;
@@ -28,6 +29,27 @@ export function DActivities() {
   // By-sport breakdown = this week's training VOLUME (minutes) per sport, from
   // the same useTrainingSummary hook that feeds the "This week" hero.
   const maxSportMins = Math.max(1, ...week.bySport.map((s) => s.mins));
+
+  // Manual file import (.fit/.gpx/.tcx → POST /api/import). Re-imports are
+  // idempotent via the dedup/fusion pipeline. (Desktop has no live recorder.)
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const onImportFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const res = await importFiles(files);
+      reload();
+      window.dispatchEvent(new Event("ofit:data-updated"));
+      setImportMsg(`Imported ${res.length} file${res.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setImportMsg(`Import failed — ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <div className="dgrid">
@@ -125,7 +147,31 @@ export function DActivities() {
             </Chip>
           );
         })}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept=".fit,.gpx,.tcx"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files ? Array.from(e.target.files) : [];
+            e.target.value = "";
+            void onImportFiles(f);
+          }}
+        />
+        <button
+          className="btn"
+          disabled={importing}
+          onClick={() => fileRef.current?.click()}
+          style={{ marginLeft: "auto" }}
+        >
+          <Icon name="upload" size={16} />
+          {importing ? "Importing…" : "Import .fit / .gpx / .tcx"}
+        </button>
       </div>
+      {importMsg && (
+        <div className="c12 faint" style={{ fontSize: 13, marginTop: -4 }}>{importMsg}</div>
+      )}
 
       <Card className="c12" noPad>
         <div
