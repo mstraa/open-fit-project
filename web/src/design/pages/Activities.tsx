@@ -32,6 +32,7 @@ import {
   exportActivityFit,
   getDerived,
   getVariants,
+  importFiles,
   setSelection,
   type DerivationVariant,
 } from "../../api/endpoints";
@@ -1458,6 +1459,27 @@ export function Activities() {
   const filters = ["All", "Running", "Cycling", "Walking", "Strength", "Activity"];
   const list = filter === "All" ? rows : rows.filter((a) => a.sportLabel === filter);
 
+  // Manual file import (.fit/.gpx/.tcx → POST /api/import). The dedup/fusion
+  // pipeline handles re-imports idempotently, so a stray duplicate is harmless.
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const onImportFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const res = await importFiles(files);
+      reload();
+      window.dispatchEvent(new Event("ofit:data-updated"));
+      setImportMsg(`Imported ${res.length} file${res.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setImportMsg(`Import failed — ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="stack fade-up">
       {/* HERO — this week (REAL) */}
@@ -1492,6 +1514,27 @@ export function Activities() {
         <Icon name="play" size={18} fill="currentColor" stroke={0} />
         Record workout
       </button>
+
+      {/* IMPORT — upload a recorded .fit / .gpx / .tcx file */}
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept=".fit,.gpx,.tcx"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files ? Array.from(e.target.files) : [];
+          e.target.value = "";
+          void onImportFiles(f);
+        }}
+      />
+      <button className="btn" disabled={importing} onClick={() => fileRef.current?.click()}>
+        <Icon name="upload" size={17} />
+        {importing ? "Importing…" : "Import .fit / .gpx / .tcx"}
+      </button>
+      {importMsg && (
+        <div className="faint" style={{ fontSize: 13, marginTop: -6, textAlign: "center" }}>{importMsg}</div>
+      )}
 
       {/* FILTERS */}
       <div className="chiprow">
