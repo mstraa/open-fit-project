@@ -641,6 +641,8 @@ export interface ActivityDetailVM {
   track: { lat: number; lng: number }[] | null;
   durationSec: number;
   summary?: { distance_m: number; calories_kcal: number; avg_pace_s_per_m: number };
+  /** Total steps for the effort, if reported (phone step detector). */
+  steps?: number;
   /** Derived per-activity metrics by name (training_effect_aerobic, exercise_load…). */
   derived: Record<string, number>;
   /** The contributing recordings (one per source) — drives the Edit tab. */
@@ -707,6 +709,7 @@ export function useActivityDetailData(id: string, fallbackDur: number): Activity
           track,
           durationSec: d.duration_secs ?? fallbackDur,
           summary: d.summary,
+          steps: d.total_steps,
           derived,
           recordings: d.recordings ?? [],
           hasReal: anyStream || !!track || !!d.summary,

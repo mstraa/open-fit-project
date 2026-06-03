@@ -42,6 +42,7 @@ public final class FitEncoder {
         String sport = meta.optString("sport", "running");
         long startUnixSec = meta.optLong("startedAtUnixMs", System.currentTimeMillis()) / 1000L;
         long timerMs = meta.optLong("elapsedMs", 0);
+        int steps = meta.optInt("steps", -1); // total step count (step detector), -1 = unknown
 
         TreeMap<Integer, Rec> bySec = new TreeMap<>();
         double maxSpeed = 0, finalDist = 0;
@@ -153,7 +154,7 @@ public final class FitEncoder {
         int[] sp = sportCodes(sport);
         defn(b, LT_SESSION, 18, new int[][]{
             {253, 4, U32}, {254, 2, U16}, {2, 4, U32}, {5, 1, ENUM}, {6, 1, ENUM},
-            {7, 4, U32}, {8, 4, U32}, {9, 4, U32}, {16, 1, U8}, {17, 1, U8},
+            {7, 4, U32}, {8, 4, U32}, {9, 4, U32}, {16, 1, U8}, {17, 1, U8}, {10, 4, U32},
         });
         b.put((byte) LT_SESSION);
         b.putInt((int) endTs);
@@ -166,6 +167,7 @@ public final class FitEncoder {
         b.putInt((int) Math.round(finalDist * 100));
         b.put((byte) (avgHr > 0 ? avgHr : 0xFF));
         b.put((byte) (hrMax > 0 ? hrMax : 0xFF));
+        b.putInt(steps >= 0 ? steps : 0xFFFFFFFF);   // total_cycles = total steps (0xFFFFFFFF = unset)
 
         // --- activity (last) ---
         defn(b, LT_ACTIVITY, 34, new int[][]{

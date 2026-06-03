@@ -47,6 +47,7 @@ import java.util.concurrent.TimeUnit;
     permissions = {
         @Permission(strings = { Manifest.permission.ACCESS_FINE_LOCATION }, alias = "location"),
         @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications"),
+        @Permission(strings = { Manifest.permission.ACTIVITY_RECOGNITION }, alias = "activity"),
     }
 )
 public class RecordingPlugin extends Plugin {
@@ -82,8 +83,13 @@ public class RecordingPlugin extends Plugin {
         boolean haveLoc = getPermissionState("location") == PermissionState.GRANTED;
         boolean haveNotif = Build.VERSION.SDK_INT < 33
             || getPermissionState("notifications") == PermissionState.GRANTED;
-        if ((needLoc && !haveLoc) || !haveNotif) {
-            requestPermissionForAliases(new String[]{ "location", "notifications" }, call, "afterPerms");
+        // ACTIVITY_RECOGNITION (steps/cadence via the step detector) is a runtime
+        // permission on API 29+. We request it but DON'T require it — recording
+        // proceeds without it; only steps/cadence are unavailable if it's denied.
+        boolean haveActivity = Build.VERSION.SDK_INT < 29
+            || getPermissionState("activity") == PermissionState.GRANTED;
+        if ((needLoc && !haveLoc) || !haveNotif || !haveActivity) {
+            requestPermissionForAliases(new String[]{ "location", "notifications", "activity" }, call, "afterPerms");
             return;
         }
         startInternal(call, sport);
