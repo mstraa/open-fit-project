@@ -7,11 +7,22 @@ import java.util.UUID;
  * Maps a BLE device to the protocol that drives it. Stage 0 of the DeviceProtocol
  * refactor (see DEVICE_REFACTOR_PLAN.md): for now this only does best-effort
  * protocol DETECTION from a device's advertised service UUIDs, so the add-device
- * UI can pre-select the right type instead of the user guessing. The protocol
- * implementations + a {@code create()} factory land with Stages 1-2.
+ * UI can pre-select the right type instead of the user guessing, plus the
+ * {@link #create} factory that maps a device-type string to its implementation.
  */
 public final class ProtocolRegistry {
     private ProtocolRegistry() {}
+
+    /**
+     * Build the {@link DeviceProtocol} for a device-type string, bound to its link.
+     * Adding a new device = add one case here (+ its protocol/session classes).
+     * Unknown types fall back to standard GATT heart rate.
+     */
+    public static DeviceProtocol create(String mode, String authKey, LinkContext ctx) {
+        if ("huami".equals(mode)) return new HuamiProtocol(authKey, ctx);
+        if ("garmin".equals(mode)) return new GarminProtocol(ctx);
+        return new StandardHrProtocol(ctx);
+    }
 
     /** Standard Heart Rate service (0x180D). */
     public static final UUID HR_SERVICE =
