@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-analytics"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "ofit-core",
@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-api"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1973,7 +1973,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-db"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-ingest"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "fitparser",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-mcp"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2029,7 +2029,7 @@ dependencies = [
 
 [[package]]
 name = "ofit-plugins"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
