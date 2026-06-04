@@ -43,8 +43,13 @@ perl -pi -e 's/(versionCode\s+)[0-9]+/${1}'"$NEXT_CODE"'/' "$GRADLE"
 
 echo "✓ version $VERSION  (Cargo / web / mobile);  Android versionCode $CURRENT_CODE → $NEXT_CODE"
 
+# Cargo.lock is committed and release builds run `cargo build --locked`, so the
+# lock must record the new workspace version or the release build fails.
+cargo update --workspace --quiet
+echo "✓ Cargo.lock refreshed"
+
 if [ "$TAG_IT" = "--tag" ]; then
-  git add Cargo.toml web/package.json mobile/package.json "$GRADLE"
+  git add Cargo.toml Cargo.lock web/package.json mobile/package.json "$GRADLE"
   git commit -m "chore(release): v$VERSION"
   git tag -a "v$VERSION" -m "Open Fit v$VERSION"
   echo
