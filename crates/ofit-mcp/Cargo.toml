@@ -5,6 +5,23 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ofit-db.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+sqlx.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+# The in-process dispatch target is an `axum::Router` handed over by ofit-api;
+# `util` gives us tower::ServiceExt::oneshot to drive it request-by-request.
+axum.workspace = true
+tower = { workspace = true, features = ["util"] }
+
+[dev-dependencies]
+# Only for the mirror-enum drift tests (WellnessKindArg/StreamKindArg must
+# round-trip into the core serde enums).
 ofit-core.workspace = true
-anyhow.workspace = true
-tokio.workspace = true

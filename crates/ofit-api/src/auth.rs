@@ -228,28 +228,56 @@ pub async fn require_auth(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    // 1) Session via cookie OR bearer token (the mobile app uses bearer).
-    if resolve_user(&state, req.headers()).await.is_some() {
+    if authenticated(&state, req.headers(), req.uri().query()).await {
         return next.run(req).await;
     }
-    // 1b) Session token in the query string — WebSocket handshakes can't carry an
-    //     Authorization header, so `/api/wellness/live?token=<session>` uses this.
-    if let Some(tok) = req.uri().query().and_then(query_token) {
-        if matches!(state.db.session_user(&tok).await, Ok(Some(_)))
-            || state.token.as_deref() == Some(tok.as_str())
-        {
-            return next.run(req).await;
-        }
-    }
-    // 2) Static service token (optional, for curl/automation).
-    if let Some(expected) = state.token.as_deref() {
-        if bearer_token(req.headers()) == Some(expected) {
-            return next.run(req).await;
-        }
-    }
-    // 3) Fresh install with no account yet → stay open so data + wizard work.
+    // Fresh install with no account yet → stay open so data + wizard work.
     if matches!(state.db.user_count().await, Ok(0)) {
         return next.run(req).await;
     }
     (StatusCode::UNAUTHORIZED, "authentication required").into_response()
+}
+
+/// Gate `/mcp` — like [`require_auth`] but **never** honors the first-run-open
+/// branch. The setup wizard only needs the public `/api/auth/*` routes, and
+/// the MCP surface includes the read-only SQL escape hatch over the whole
+/// database: it must not be reachable anonymously, even on a fresh install.
+pub async fn require_auth_strict(
+    State(state): State<AppState>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if authenticated(&state, req.headers(), req.uri().query()).await {
+        return next.run(req).await;
+    }
+    (StatusCode::UNAUTHORIZED, "authentication required").into_response()
+}
+
+/// Shared credential check: session cookie/bearer → query-string token
+/// (WebSocket handshakes) → static `OFIT_TOKEN` bearer.
+///
+/// Takes the `Sync` request parts rather than `&Request` — `axum::body::Body`
+/// is `!Sync`, so borrowing the whole request across an await would make the
+/// middleware future `!Send` and fail `route_layer`'s bounds.
+async fn authenticated(state: &AppState, headers: &HeaderMap, query: Option<&str>) -> bool {
+    // 1) Session via cookie OR bearer token (the mobile app uses bearer).
+    if resolve_user(state, headers).await.is_some() {
+        return true;
+    }
+    // 1b) Session token in the query string — WebSocket handshakes can't carry an
+    //     Authorization header, so `/api/wellness/live?token=<session>` uses this.
+    if let Some(tok) = query.and_then(query_token) {
+        if matches!(state.db.session_user(&tok).await, Ok(Some(_)))
+            || state.token.as_deref() == Some(tok.as_str())
+        {
+            return true;
+        }
+    }
+    // 2) Static service token (optional, for curl/automation).
+    if let Some(expected) = state.token.as_deref() {
+        if bearer_token(headers) == Some(expected) {
+            return true;
+        }
+    }
+    false
 }

@@ -38,6 +38,8 @@ pub(crate) async fn handler(uri: Uri) -> Response {
         || path.starts_with("api-docs/")
         || path == "swagger-ui"
         || path.starts_with("swagger-ui/")
+        || path == "mcp"
+        || path.starts_with("mcp/")
     {
         return StatusCode::NOT_FOUND.into_response();
     }

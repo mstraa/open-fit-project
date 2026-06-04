@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "openfit": {
+      "type": "http",
+      "url": "http://localhost:8087/mcp",
+      "headers": {
+        "Authorization": "Bearer ${OFIT_TOKEN}"
+      }
+    }
+  }
+}

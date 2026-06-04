@@ -47,11 +47,18 @@ if ! need node || [ "$(node_major)" -lt 18 ] 2>/dev/null; then
 fi
 
 # Rust (rustup) — the workspace needs a recent stable; Debian's cargo is too old.
+# rmcp (edition 2024) sets the floor at rustc 1.85, so existing containers must be
+# advanced too: rustup pins a snapshot of stable at install time and never moves on
+# its own, so a box provisioned on an older stable would otherwise reuse it forever.
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 if ! need cargo; then
   msg "installing Rust (rustup, minimal profile)…"
   curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
   . "$HOME/.cargo/env"
+elif need rustup; then
+  msg "updating Rust toolchain (stable)…"
+  rustup update stable >/dev/null
+  rustup default stable >/dev/null
 fi
 
 # ---- fetch source -----------------------------------------------------------
@@ -79,7 +86,7 @@ npm --prefix "$SRC/web" run build
 
 # ---- build the release binary (web/dist must exist first → real UI embedded) -
 msg "building ofit-api (release — this can take several minutes)…"
-( cd "$SRC" && cargo build --release -p ofit-api )
+( cd "$SRC" && cargo build --locked --release -p ofit-api )
 [ -x "$SRC/target/release/ofit-api" ] || err "build produced no ofit-api binary"
 
 # ---- install + restart ------------------------------------------------------

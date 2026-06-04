@@ -22,7 +22,8 @@ COPY web/ ./
 RUN npm run build
 
 # ---------- builder ----------
-FROM rust:1.83-bookworm AS builder
+# Keep >= workspace rust-version (1.85): rmcp (MCP server SDK) is edition 2024.
+FROM rust:1.87-bookworm AS builder
 WORKDIR /build
 
 # Copy the whole workspace so path-dependencies resolve. The release profile
@@ -34,9 +35,11 @@ COPY . .
 COPY --from=web /web/dist ./web/dist
 
 # Build only the API binary; the rest of the workspace is brought in as needed.
+# --locked: build exactly the committed Cargo.lock — fail loudly on drift
+# instead of silently re-resolving (the MSRV of transitives can move).
 RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release -p ofit-api && \
+    cargo build --locked --release -p ofit-api && \
     cp target/release/ofit-api /usr/local/bin/ofit-api
 
 # ---------- runtime ----------

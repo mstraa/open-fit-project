@@ -89,7 +89,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build release binary
-        run: cargo build --release -p ofit-api
+        run: cargo build --locked --release -p ofit-api
       - name: Stage artifacts
         run: |
           mkdir -p dist

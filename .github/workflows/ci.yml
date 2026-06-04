@@ -23,9 +23,9 @@ jobs:
       # No Node here: build.rs drops a placeholder web/dist so the rust-embed
       # crate (src/static_assets.rs) compiles without a web build.
       - name: cargo check
-        run: cargo check --workspace
+        run: cargo check --locked --workspace
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
   web:
     name: Web — typecheck + build

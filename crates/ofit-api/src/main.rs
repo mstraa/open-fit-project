@@ -171,6 +171,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("OFIT_TOKEN unset — /api auth is DISABLED (first-run/dev mode)");
     }
     let bind = std::env::var("OFIT_BIND").unwrap_or_else(|_| "0.0.0.0:8087".to_string());
+    // Optional browser-CORS allowlist (comma-separated origins). Unset keeps
+    // the historical reflect-any-origin behavior (safe today only because the
+    // session cookie is SameSite=Lax); set it to pin explicit origins, e.g.
+    // OFIT_CORS_ORIGINS="http://localhost:5173,https://fit.example.org".
+    let cors_origins: Option<Vec<axum::http::HeaderValue>> = std::env::var("OFIT_CORS_ORIGINS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.split(',').filter_map(|o| o.trim().parse().ok()).collect());
     // Optional sandboxed-plugins directory (Phase 3). Absent ⇒ built-ins only.
     let plugins_dir: Option<Arc<std::path::Path>> = std::env::var("OFIT_PLUGINS_DIR")
         .ok()
@@ -290,7 +298,22 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/activities/:id/gear",
             axum::routing::put(handlers::set_activity_gear),
+        );
+
+    // MCP (Phase 8): tools self-dispatch in-process into this pre-auth clone —
+    // same handlers, same state, zero duplication. Auth for MCP traffic is
+    // enforced once at the /mcp ingress below, so the clone deliberately
+    // skips the per-route gate. STRICT auth: unlike /api, /mcp never falls
+    // open on a fresh install (it carries the SQL escape hatch).
+    let mcp_dispatch = protected_api.clone().with_state(state.clone());
+    let mcp = Router::new()
+        .nest_service(
+            "/mcp",
+            ofit_mcp::streamable_service(mcp_dispatch, state.db.clone()),
         )
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth_strict));
+
+    let protected_api = protected_api
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     let api = public_api.merge(protected_api);
@@ -298,6 +321,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .nest("/api", api)
+        .merge(mcp)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         // Anything not matched above is the embedded web SPA (web/dist): serve
         // the static file if present, else index.html so client-side routes
@@ -309,7 +333,10 @@ async fn main() -> anyhow::Result<()> {
         // no CORS; this is for the dev split (vite :5173 → api :8087).
         .layer(
             CorsLayer::new()
-                .allow_origin(AllowOrigin::mirror_request())
+                .allow_origin(match cors_origins {
+                    Some(origins) => AllowOrigin::list(origins),
+                    None => AllowOrigin::mirror_request(),
+                })
                 .allow_credentials(true)
                 .allow_methods([
                     Method::GET,
@@ -318,7 +345,17 @@ async fn main() -> anyhow::Result<()> {
                     Method::DELETE,
                     Method::OPTIONS,
                 ])
-                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
+                // MCP streamable-HTTP headers, so browser-based MCP clients
+                // can negotiate sessions through the global CORS layer too
+                // (server-to-server clients ignore CORS entirely).
+                .allow_headers([
+                    header::CONTENT_TYPE,
+                    header::AUTHORIZATION,
+                    axum::http::HeaderName::from_static("mcp-session-id"),
+                    axum::http::HeaderName::from_static("mcp-protocol-version"),
+                    axum::http::HeaderName::from_static("last-event-id"),
+                ])
+                .expose_headers([axum::http::HeaderName::from_static("mcp-session-id")]),
         )
         .with_state(state);
 

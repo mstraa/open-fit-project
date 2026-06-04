@@ -15,7 +15,8 @@ version = "0.5.2"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/openfit/open-fit"
-rust-version = "1.80"
+# rmcp (the MCP server SDK) is edition 2024 → de-facto floor is rustc 1.85.
+rust-version = "1.85"
 
 [workspace.dependencies]
 # async runtime
@@ -57,6 +58,16 @@ sha2 = "0.10"
 # auth
 argon2 = "0.5"
 rand = "0.8"
+# mcp server (Phase 8): official Rust SDK, streamable-HTTP server transport.
+# Transitives (http 1.x, http-body 1.x, tower-service 0.3, bytes, tokio-util)
+# all match the existing lock — rmcp does NOT pull axum or hyper.
+rmcp = { version = "1.7", features = ["server", "macros", "schemars", "transport-streamable-http-server", "tower"] }
+# tool parameter JSON-schemas (rmcp requires schemars 1.x, NOT 0.8)
+schemars = "1.0"
+# query-string building for the MCP→API self-dispatch (same crate axum uses to parse)
+serde_urlencoded = "0.7"
+# row-streaming for the read-only SQL tool (cap rows without materializing all)
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # internal crates
 ofit-core = { path = "crates/ofit-core" }
@@ -64,6 +75,7 @@ ofit-db = { path = "crates/ofit-db" }
 ofit-ingest = { path = "crates/ofit-ingest" }
 ofit-analytics = { path = "crates/ofit-analytics" }
 ofit-plugins = { path = "crates/ofit-plugins" }
+ofit-mcp = { path = "crates/ofit-mcp" }
 
 [profile.release]
 opt-level = 3
